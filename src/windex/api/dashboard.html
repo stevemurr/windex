@@ -12,6 +12,11 @@
     /* chart marks — side-by-side pair is CVD-validated; full-width download
        chart wears a deliberate neutral (identity carried by its title) */
     --chart-index: #c15f3c; --chart-embed: #3d6ea5; --chart-bw: #8a8272;
+    /* composition donut slices — six-check validated (dataviz validator,
+       --pairs all) against the light panel #ffffff; docs slice is sub-3:1 by
+       design, relieved by the always-visible legend counts + direct labels */
+    --comp-news: #c15f3c; --comp-repos: #8f6ad9; --comp-wiki: #2a5a91;
+    --comp-arxiv: #8f2049; --comp-smallweb: #04a58b; --comp-docs: #d2a74b;
     --serif: ui-serif, "Iowan Old Style", "Palatino", Georgia, serif;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -20,7 +25,11 @@
     :root { --bg:#201f1b; --panel:#2a2925; --ink:#e8e5dd; --muted:#a19b8d;
             --accent:#d97757; --accent-soft:#d9775726; --line:#3a3831; --line-strong:#4a4740;
             --ok:#8fbc8f;
-            --chart-index:#d06b47; --chart-embed:#5a8ed2; --chart-bw:#98917f; }
+            --chart-index:#d06b47; --chart-embed:#5a8ed2; --chart-bw:#98917f;
+            /* donut slices re-stepped for the dark panel #2a2925 (same hue
+               families, validated as their own set — not a flip) */
+            --comp-news:#db7431; --comp-repos:#7f5fc3; --comp-wiki:#319ae9;
+            --comp-arxiv:#b85075; --comp-smallweb:#37ac78; --comp-docs:#856515; }
   }
   * { box-sizing: border-box; }
   html, body { margin:0; }
@@ -48,7 +57,7 @@
   .charts { display:grid; grid-template-columns:1fr 1fr; gap:.65rem; margin-top:1.6rem; }
   @media (max-width:560px) { .charts { grid-template-columns:1fr; } }
   .chart { background:var(--panel); border:1px solid var(--line); border-radius:12px;
-           padding:.7rem .9rem .5rem; position:relative; }
+           padding:.7rem .9rem .5rem; position:relative; min-width:0; }
   .chart .head { display:flex; justify-content:space-between; align-items:baseline; }
   .chart .head .k { color:var(--muted); font-size:.72rem; }
   .chart .head .v { font:600 1.05rem var(--serif); font-variant-numeric:tabular-nums; }
@@ -57,6 +66,26 @@
   .chart .tip { position:absolute; pointer-events:none; background:var(--ink); color:var(--bg);
                 font:.7rem var(--sans); padding:.2rem .45rem; border-radius:6px;
                 transform:translate(-50%,-130%); white-space:nowrap; display:none; }
+  /* index-composition donut */
+  .comp .head { flex-wrap:wrap; gap:0 .6rem; }
+  .comp .body { display:flex; align-items:center; gap:1.1rem; margin-top:.25rem; }
+  .chart.comp svg { height:auto; flex:1 1 55%; min-width:0; max-width:340px; }
+  .chart.comp .slice { cursor:default; }
+  .chart.comp .slice.hot { filter:brightness(1.09); }
+  .chart.comp .slice:focus-visible { filter:brightness(1.09); outline:none;
+                                     stroke:var(--ink); stroke-width:1.5; }
+  .chart.comp svg .cnum-big { font:600 21px var(--serif); fill:var(--ink); letter-spacing:-.01em; }
+  .clegend { flex:1 1 45%; display:flex; flex-direction:column; gap:.3rem;
+             font-size:.78rem; min-width:0; }
+  .clegend .crow { display:flex; align-items:center; gap:.5rem; }
+  .clegend .crow i { width:.6rem; height:.6rem; border-radius:3px; flex-shrink:0; }
+  .clegend .crow .cname { color:var(--ink); }
+  .clegend .crow .cnum { margin-left:auto; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .clegend .crow .cpct { color:var(--muted); font-variant-numeric:tabular-nums;
+                         width:3.1rem; text-align:right; }
+  .comp .empty { padding:1.6rem 0 1.9rem; }
+  @media (max-width:560px) { .comp .body { flex-direction:column; align-items:center; }
+    .chart.comp svg { width:100%; max-width:300px; } .clegend { width:100%; } }
   @keyframes pulse { 50% { opacity:.35; } }
   @media (prefers-reduced-motion: reduce) { #liveDot.busy i { animation:none; } }
 
@@ -324,6 +353,15 @@
     <h2 style="margin-top:1.6rem">Metrics</h2>
     <div class="rows" id="stats"></div>
     <div class="charts">
+      <div class="chart comp" id="chartComp" style="grid-column:1 / -1">
+        <div class="head"><span class="k">index composition · docs by source</span><span class="v" id="compSrcs">—</span></div>
+        <div class="body">
+          <svg viewBox="0 0 300 184" role="group" aria-label="Share of the index held by each source"></svg>
+          <div class="clegend" id="compLegend"></div>
+        </div>
+        <div class="empty comp-empty" style="display:none">index empty</div>
+        <div class="tip"></div>
+      </div>
       <div class="chart" id="chartDocs">
         <div class="head"><span class="k">indexed per minute · last hour</span><span class="v" id="rateDocs">—</span></div>
         <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Documents entering the index per minute, trailing hour"></svg>
@@ -433,10 +471,115 @@ async function refresh() {
   }
 }
 
+// --- index composition: donut of searchable vectors per source, fed by the
+//     same stats payload as the tiles. Adding a source = one entry here plus a
+//     --comp-<name> hex per theme block (colors are fixed per source, never cycled).
+const COMP_SOURCES = [
+  { alias: "news_current", label: "news" },
+  { alias: "repos_current", label: "github" },
+  { alias: "wiki_current", label: "wiki" },
+  { alias: "arxiv_current", label: "arxiv" },
+  { alias: "smallweb_current", label: "small web" },
+  { alias: "docs_current", label: "docs" },  // planned source — lights up when its alias appears
+];
+let compKey = null;
+
+function renderComposition(vectors) {
+  try {
+    const root = $("chartComp"), svg = root.querySelector("svg"),
+          tip = root.querySelector(".tip"), body = root.querySelector(".body");
+    const parts = COMP_SOURCES
+      .map(s => ({ ...s, css: s.alias.replace(/_current$/, ""), n: Number(vectors?.[s.alias]) || 0 }))
+      .filter(p => p.n > 0);   // zero-count sources are omitted entirely
+    const total = parts.reduce((sum, p) => sum + p.n, 0);
+    const key = parts.map(p => `${p.alias}:${p.n}`).join(",");
+    if (key === compKey) return;             // unchanged → keep DOM (and hover) stable
+    compKey = key;
+    $("compSrcs").textContent = total ? `${parts.length} source${parts.length === 1 ? "" : "s"}` : "—";
+    root.querySelector(".comp-empty").style.display = total ? "none" : "";
+    body.style.display = total ? "" : "none";
+    if (!total) { svg.innerHTML = ""; $("compLegend").innerHTML = ""; return; }
+
+    const CX = 150, CY = 92, R0 = 40, R1 = 63, TAU = 2 * Math.PI;
+    const pt = (r, a) => `${(CX + r * Math.cos(a)).toFixed(2)} ${(CY + r * Math.sin(a)).toFixed(2)}`;
+    const pctText = p => p >= 0.095 ? `${Math.round(p * 100)}%` : p >= 0.01 ? `${(p * 100).toFixed(1)}%` : "<1%";
+    let a = -TAU / 4, paths = "";
+    for (const p of parts) {
+      const span = p.n / total * TAU;
+      // 2px surface gap between slices, as angular padding at the ring's mid-radius
+      const pad = parts.length > 1 ? Math.min(1 / ((R0 + R1) / 2), span / 6) : 0;
+      const a0 = a + pad, a1 = a + span - pad, large = a1 - a0 > Math.PI ? 1 : 0;
+      p.a0 = a; p.a1 = a + span; p.mid = a + span / 2;
+      const d = span >= TAU - 1e-4
+        ? `M${pt(R1, 0)} A${R1} ${R1} 0 1 1 ${pt(R1, Math.PI)} A${R1} ${R1} 0 1 1 ${pt(R1, 0)}` +
+          ` M${pt(R0, 0)} A${R0} ${R0} 0 1 0 ${pt(R0, Math.PI)} A${R0} ${R0} 0 1 0 ${pt(R0, 0)} Z`
+        : `M${pt(R1, a0)} A${R1} ${R1} 0 ${large} 1 ${pt(R1, a1)} L${pt(R0, a1)}` +
+          ` A${R0} ${R0} 0 ${large} 0 ${pt(R0, a0)} Z`;
+      paths += `<path class="slice" d="${d}" fill="var(--comp-${p.css})" fill-rule="evenodd"
+        role="img" tabindex="0" aria-label="${p.label}: ${num(p.n)} docs, ${pctText(p.n / total)}"></path>`;
+      a += span;
+    }
+    // direct labels for the big slices (≥10%); legend + tooltip carry the rest.
+    // Skip a label that would land on the previous one — it stays in the legend.
+    let labels = "", placed = [];
+    for (const p of parts) {
+      const share = p.n / total;
+      if (share < 0.1) continue;
+      const c = Math.cos(p.mid), x = CX + (R1 + 11) * c, y = CY + (R1 + 11) * Math.sin(p.mid);
+      if (placed.some(([px, py]) => Math.hypot(px - x, py - y) < 18)) continue;
+      placed.push([x, y]);
+      const anchor = c > 0.35 ? "start" : c < -0.35 ? "end" : "middle";
+      labels += `<text x="${x.toFixed(1)}" y="${(y + 3).toFixed(1)}" text-anchor="${anchor}">` +
+        `${p.label} <tspan fill="var(--ink)">${pctText(share)}</tspan></text>`;
+    }
+    // compact ≥1M so the total always fits the hole; the legend keeps exact counts
+    const totalFmt = total >= 1e6 ? `${(total / 1e6).toFixed(total >= 1e7 ? 1 : 2)}M` : num(total);
+    svg.innerHTML = paths + labels +
+      `<text class="cnum-big" x="${CX}" y="${CY + 1}" text-anchor="middle">${totalFmt}</text>` +
+      `<text x="${CX}" y="${CY + 16}" text-anchor="middle">docs</text>`;
+    $("compLegend").innerHTML = parts.map(p =>
+      `<div class="crow"><i style="background:var(--comp-${p.css})"></i>` +
+      `<span class="cname">${p.label}</span><span class="cnum">${num(p.n)}</span>` +
+      `<span class="cpct">${pctText(p.n / total)}</span></div>`).join("");
+
+    // hover/focus: angular hit-testing over the whole ring band, so thin
+    // slices still have a comfortable target; tooltip mirrors the legend row
+    const hot = (p, cx, cy) => {
+      svg.querySelectorAll(".slice").forEach((el, i) => el.classList.toggle("hot", parts[i] === p));
+      if (!p) { tip.style.display = "none"; return; }
+      tip.textContent = `${p.label} · ${num(p.n)} docs · ${pctText(p.n / total)}`;
+      tip.style.display = "block";
+      tip.style.left = `${cx}px`; tip.style.top = `${cy}px`;
+    };
+    svg.onmousemove = e => {
+      const r = svg.getBoundingClientRect(), s = 300 / r.width;
+      const dx = (e.clientX - r.left) * s - CX, dy = (e.clientY - r.top) * s - CY;
+      const rad = Math.hypot(dx, dy);
+      if (rad < R0 - 8 || rad > R1 + 12) { hot(null); return; }
+      let t = Math.atan2(dy, dx) + TAU / 4;
+      if (t < 0) t += TAU;
+      const p = parts.find(q => t >= q.a0 + TAU / 4 && t < q.a1 + TAU / 4) || parts[parts.length - 1];
+      const rect = root.getBoundingClientRect();
+      hot(p, e.clientX - rect.left, e.clientY - rect.top);
+    };
+    svg.onmouseleave = () => hot(null);
+    svg.querySelectorAll(".slice").forEach((el, i) => {
+      el.onfocus = () => {
+        const p = parts[i], rect = root.getBoundingClientRect(), r = svg.getBoundingClientRect();
+        const rm = (R0 + R1) / 2, k = r.width / 300;
+        hot(p, r.left - rect.left + (CX + Math.cos(p.mid) * rm) * k,
+               r.top - rect.top + (CY + Math.sin(p.mid) * rm) * k);
+      };
+      el.onblur = () => hot(null);
+    });
+  } catch (e) { /* composition is best-effort */ }
+}
+
 function renderStats(s) {
   try {
     const w = s.warc_files || {}, d = (s.documents || {}).news || {}, r = s.repos || {},
           g = s.gharchive_files || {}, v = s.vectors || {};
+    renderComposition(v);
     const wDone = w.done || 0,
           wTotal = wDone + (w.pending || 0) + (w.processing || 0) + (w.failed || 0);
     const backlog = d.deduped || 0;
