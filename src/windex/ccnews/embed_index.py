@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 from qdrant_client import QdrantClient
 from qdrant_client import models as qm
 
+from windex import db
 from windex.config import Settings
 from windex.embed import build_embedder
 from windex.index import qdrant as qidx
@@ -113,7 +114,7 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 50_
             ]
             # psycopg connections aren't thread-safe: commit progress here as
             # each worker finishes, so a crash loses at most the in-flight work
-            for fut in cf.as_completed(futures):
+            for i, fut in enumerate(cf.as_completed(futures)):
                 done_ids = fut.result()
                 with conn.cursor() as cur:
                     cur.execute(
@@ -126,4 +127,10 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 50_
                     )
                 conn.commit()
                 total += len(done_ids)
+                # a pass can span 50k docs — honor pause within seconds, not
+                # at pass boundaries (checked every few completions)
+                if i % 5 == 4 and db.get_control(conn, "indexing", "running") == "paused":
+                    for f in futures:
+                        f.cancel()
+                    return total
     return total
