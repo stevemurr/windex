@@ -53,6 +53,7 @@
   .chart .head .k { color:var(--muted); font-size:.72rem; }
   .chart .head .v { font:600 1.05rem var(--serif); font-variant-numeric:tabular-nums; }
   .chart svg { display:block; width:100%; height:88px; margin-top:.3rem; }
+  .chart svg text { font:500 9.5px var(--sans); fill:var(--muted); letter-spacing:.02em; }
   .chart .tip { position:absolute; pointer-events:none; background:var(--ink); color:var(--bg);
                 font:.7rem var(--sans); padding:.2rem .45rem; border-radius:6px;
                 transform:translate(-50%,-130%); white-space:nowrap; display:none; }
@@ -504,8 +505,7 @@ function drawChart(rootId, series, field, color, fmt) {
            fill="${color}" opacity="0.13"/>` +
     `<path d="M${pts.join(" L")}" fill="none" stroke="${color}" stroke-width="2"
            stroke-linejoin="round" vector-effect="non-scaling-stroke"/>` +
-    `<text x="${PAD + 2}" y="10" font-size="9.5" fill="var(--muted)"
-           font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">max ${fmt(max)}</text>` +
+    `<text x="${PAD + 2}" y="10">max ${fmt(max)}</text>` +
     `<line class="xh" x1="0" x2="0" y1="${PAD}" y2="${H - PAD}" stroke="var(--muted)"
            stroke-width="1" stroke-dasharray="2,2" visibility="hidden"/>`;
   svg.onmousemove = e => {

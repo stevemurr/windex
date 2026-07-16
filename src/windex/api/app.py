@@ -19,7 +19,10 @@ app = FastAPI(title="windex", version="0.1.0",
 
 @app.get("/", include_in_schema=False)
 def dashboard() -> HTMLResponse:
-    return HTMLResponse(files("windex.api").joinpath("dashboard.html").read_text())
+    return HTMLResponse(
+        files("windex.api").joinpath("dashboard.html").read_text(),
+        headers={"Cache-Control": "no-cache"},  # single-file app; stale caches hide fixes
+    )
 
 
 @app.get("/v1/search")
