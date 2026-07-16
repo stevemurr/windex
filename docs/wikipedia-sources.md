@@ -10,10 +10,13 @@ All facts verified against live listings on 2026-07-16, not memory.
   **~39.2GB total**; `_SUCCESS` marker gates completeness.
 - **Weekly** (Saturdays), only ~4 weeks retained → always re-baseline from the newest
   complete snapshot; each snapshot is a full index, so re-ingest is idempotent.
-- Elasticsearch bulk pairs: action line (`_id` = page id) + document line with
-  **pre-extracted plaintext** (`text`), `opening_text` (lead), `title`, `timestamp`
-  (revision ts), `version` (revision id), `incoming_links` (popularity signal —
-  `popularity_score` no longer exists), `category`, `namespace`, `wikibase_item`.
+- Elasticsearch bulk pairs: action line (`{"index": {"_id": <int page id>}}` — no
+  `_type`; readers should tolerate string/int and an optional `_type`) + document
+  line with **pre-extracted plaintext** (`text`), `opening_text` (lead), `title`,
+  `timestamp` (revision ts), `version` (revision id), `category`, `namespace`,
+  `wikibase_item`, and two ranking signals verified against live shard bytes:
+  `incoming_links` (int — what windex uses in the payload) and `popularity_score`
+  (precomputed float, available if a normalized signal is ever preferred).
 - Change detection: text_hash ledger (same pattern as news) → only deltas re-embed.
 
 ## Rejected / fallback
