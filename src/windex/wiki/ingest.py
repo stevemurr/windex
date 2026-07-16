@@ -13,6 +13,8 @@ import time
 from datetime import datetime
 
 import httpx
+
+from windex.wiki import USER_AGENT
 import psycopg
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -187,7 +189,8 @@ def ingest(
     consecutive_failures = 0
     try:
         with httpx.Client(
-            timeout=httpx.Timeout(30, read=300), follow_redirects=True
+            timeout=httpx.Timeout(30, read=300), follow_redirects=True,
+            headers={"User-Agent": USER_AGENT},
         ) as client:
             while max_files is None or totals["files"] < max_files:
                 pending = wsync.pending_shards(conn, 1)

@@ -11,6 +11,8 @@ date; the documents.text_hash ledger keeps a weekly re-ingest to the delta.
 import re
 
 import httpx
+
+from windex.wiki import USER_AGENT
 import psycopg
 
 ROOT_URL = "https://dumps.wikimedia.org/other/cirrus_search_index/"
@@ -65,7 +67,7 @@ def sync(conn: psycopg.Connection, wiki: str, client: httpx.Client | None = None
     number of new shard rows inserted (0 when the newest snapshot is already
     recorded, or nothing complete is available)."""
     own = client is None
-    client = client or httpx.Client(timeout=60, follow_redirects=True)
+    client = client or httpx.Client(timeout=60, follow_redirects=True, headers={"User-Agent": USER_AGENT})
     try:
         date, files = latest_complete(client, wiki)
         if not date:
