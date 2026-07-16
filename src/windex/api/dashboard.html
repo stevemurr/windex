@@ -201,7 +201,9 @@
   .feedrow .badge { flex-shrink:0; }
   .feed-empty { color:var(--muted); text-align:center; padding:1.2rem;
                 font-family:var(--serif); font-style:italic; font-size:.9rem; }
-  .rows { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.65rem; }
+  /* two tiles per row — consistent with the charts grid below */
+  .rows { display:grid; grid-template-columns:1fr 1fr; gap:.65rem; }
+  @media (max-width:420px) { .rows { grid-template-columns:1fr; } }
   .stat { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:.75rem .9rem; }
   .stat .k { color:var(--muted); font-size:.72rem; letter-spacing:.02em; }
   .stat .v { font:600 1.35rem/1.3 var(--serif); font-variant-numeric:tabular-nums; margin-top:.1rem; }
