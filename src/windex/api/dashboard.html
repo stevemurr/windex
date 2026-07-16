@@ -54,7 +54,7 @@
          background:var(--panel); border:1px solid var(--line-strong); border-radius:8px;
          cursor:pointer; }
   #ctl:hover { border-color:var(--accent); color:var(--accent); }
-  .charts { display:grid; grid-template-columns:1fr 1fr; gap:.65rem; margin-top:1.6rem; }
+  .charts { display:grid; grid-template-columns:1fr 1fr; gap:.65rem; margin:0 0 .65rem; }
   @media (max-width:560px) { .charts { grid-template-columns:1fr; } }
   .chart { background:var(--panel); border:1px solid var(--line); border-radius:12px;
            padding:.7rem .9rem .5rem; position:relative; min-width:0; }
@@ -313,8 +313,34 @@
 
   <section id="tab-console" class="tabpane">
   <section id="status">
-    <h2>Index</h2>
-    <div id="totals"></div>
+    <h2>Metrics</h2>
+    <div class="charts">
+      <div class="chart comp" id="chartComp" style="grid-column:1 / -1">
+        <div class="head"><span class="k">index composition · docs by source</span><span class="v" id="compSrcs">—</span></div>
+        <div class="body">
+          <svg viewBox="0 0 300 184" role="group" aria-label="Share of the index held by each source"></svg>
+          <div class="clegend" id="compLegend"></div>
+        </div>
+        <div class="empty comp-empty" style="display:none">index empty</div>
+        <div class="tip"></div>
+      </div>
+      <div class="chart" id="chartDocs">
+        <div class="head"><span class="k">indexed per minute · last hour</span><span class="v" id="rateDocs">—</span></div>
+        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Documents entering the index per minute, trailing hour"></svg>
+        <div class="tip"></div>
+      </div>
+      <div class="chart" id="chartEmbeds">
+        <div class="head"><span class="k">embeds per minute · last hour</span><span class="v" id="rateEmbeds">—</span></div>
+        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Documents embedded per minute, trailing hour"></svg>
+        <div class="tip"></div>
+      </div>
+      <div class="chart" id="chartBw" style="grid-column:1 / -1">
+        <div class="head"><span class="k">download MB per minute · last hour</span><span class="v" id="rateBw">—</span></div>
+        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Download megabytes per minute, trailing hour"></svg>
+        <div class="tip"></div>
+      </div>
+    </div>
+    <div class="rows" id="stats"></div>
     <h2>Logs</h2>
     <div id="logpanel">
       <div class="lbar">
@@ -353,34 +379,6 @@
     </div>
     <h2 style="margin-top:1.6rem">Recently indexed</h2>
     <div id="feed"><div class="feed-empty">nothing indexed yet</div></div>
-    <h2 style="margin-top:1.6rem">Metrics</h2>
-    <div class="rows" id="stats"></div>
-    <div class="charts">
-      <div class="chart comp" id="chartComp" style="grid-column:1 / -1">
-        <div class="head"><span class="k">index composition · docs by source</span><span class="v" id="compSrcs">—</span></div>
-        <div class="body">
-          <svg viewBox="0 0 300 184" role="group" aria-label="Share of the index held by each source"></svg>
-          <div class="clegend" id="compLegend"></div>
-        </div>
-        <div class="empty comp-empty" style="display:none">index empty</div>
-        <div class="tip"></div>
-      </div>
-      <div class="chart" id="chartDocs">
-        <div class="head"><span class="k">indexed per minute · last hour</span><span class="v" id="rateDocs">—</span></div>
-        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Documents entering the index per minute, trailing hour"></svg>
-        <div class="tip"></div>
-      </div>
-      <div class="chart" id="chartEmbeds">
-        <div class="head"><span class="k">embeds per minute · last hour</span><span class="v" id="rateEmbeds">—</span></div>
-        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Documents embedded per minute, trailing hour"></svg>
-        <div class="tip"></div>
-      </div>
-      <div class="chart" id="chartBw" style="grid-column:1 / -1">
-        <div class="head"><span class="k">download MB per minute · last hour</span><span class="v" id="rateBw">—</span></div>
-        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Download megabytes per minute, trailing hour"></svg>
-        <div class="tip"></div>
-      </div>
-    </div>
     <h2 style="margin-top:1.6rem">Operations</h2>
     <div class="ops" id="ops"></div>
   </section>
@@ -628,17 +626,6 @@ function renderStats(s) {
     const t = s.totals || {};
     const dlTotal = act.bytes_downloaded_total || 0;
     const [covA, covB] = t.news_coverage || [];
-    $("totals").innerHTML =
-      `<div class="total"><div class="v">${num(t.indexed_pages)}</div><div class="k">pages indexed</div></div>` +
-      `<div class="total"><div class="v">${num(t.news_articles)}</div><div class="k">news articles</div></div>` +
-      `<div class="total"><div class="v">${num(t.github_projects)}</div><div class="k">GitHub projects</div></div>` +
-      `<div class="total"><div class="v">${num(t.wiki_articles)}</div><div class="k">Wikipedia articles</div></div>` +
-      `<div class="total"><div class="v">${num(t.arxiv_papers)}</div><div class="k">arXiv papers</div></div>` +
-      `<div class="total"><div class="v">${num(t.smallweb_posts)}</div><div class="k">Small Web posts</div></div>` +
-      `<div class="total"><div class="v">${num(t.docs_pages)}</div><div class="k">docs pages</div></div>` +
-      `<div class="total"><div class="v">${num(t.news_outlets)}</div><div class="k">news outlets</div></div>` +
-      `<div class="total"><div class="v">${num(t.duplicates_collapsed)}</div><div class="k">duplicates collapsed</div></div>` +
-      (covA ? `<div id="coverage">news coverage ${covA} → ${covB}</div>` : "");
     const through = (s.freshness.news_indexed_through || "").split("CC-NEWS-").pop()?.slice(0, 8);
     const throughFmt = through ? `${through.slice(0,4)}-${through.slice(4,6)}-${through.slice(6,8)}` : "—";
     $("stats").innerHTML =
@@ -654,7 +641,9 @@ function renderStats(s) {
            g.pending ? `${num(g.pending)} queued` : "caught up",
            (g.done || g.pending) ? Math.round(100 * (g.done || 0) / ((g.done || 0) + (g.pending || 0))) : null) +
       stat("Downloaded", dlTotal >= 1e9 ? `${(dlTotal / 1e9).toFixed(1)} GB` : `${Math.round(dlTotal / 1e6)} MB`,
-           "total, all sources");
+           "total, all sources") +
+      stat("News outlets", num(t.news_outlets), covA ? `coverage ${covA} → ${covB}` : "") +
+      stat("Duplicates collapsed", num(t.duplicates_collapsed), "syndication + re-crawls");
   } catch (e) {
     document.getElementById("liveLabel").textContent = "stats unavailable";
   }
