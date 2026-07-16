@@ -189,7 +189,7 @@
   .opcat { grid-column:1 / -1; color:var(--muted); font-size:.72rem;
            letter-spacing:.06em; text-transform:uppercase; margin-top:.4rem; }
   #feed { border:1px solid var(--line); border-radius:12px; background:var(--panel);
-          margin-top:1.6rem; max-height:340px; overflow-y:auto; }
+          max-height:340px; overflow-y:auto; }
   .feedrow { display:flex; gap:.7rem; align-items:baseline; padding:.5rem .9rem;
              border-bottom:1px solid var(--line); font-size:.84rem; }
   .feedrow:last-child { border-bottom:none; }
@@ -266,6 +266,9 @@
       <div class="bar"><div id="wbar" style="width:0%"></div></div>
       <div id="wrows" style="margin-top:.5rem"></div>
     </div>
+    <h2 style="margin-top:1.6rem">Recently indexed</h2>
+    <div id="feed"><div class="feed-empty">nothing indexed yet</div></div>
+    <h2 style="margin-top:1.6rem">Metrics</h2>
     <div class="rows" id="stats"></div>
     <div class="charts">
       <div class="chart" id="chartDocs">
@@ -281,8 +284,6 @@
     </div>
     <h2 style="margin-top:1.6rem">Operations</h2>
     <div class="ops" id="ops"></div>
-    <h2 style="margin-top:1.6rem">Recently indexed</h2>
-    <div id="feed"><div class="feed-empty">nothing indexed yet</div></div>
   </section>
   </section>
 </main>
