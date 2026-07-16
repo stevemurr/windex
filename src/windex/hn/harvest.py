@@ -241,14 +241,26 @@ def fetch_window_stories(
     returns 200 with truncated hits, so nbHits is the split signal). on_request
     runs before every HTTP call — the pacing + pause hook. Returns
     (hits, queries_issued)."""
-    if on_request:
-        on_request()
-    resp = client.get(url, params={
+    params = {
         "tags": "story",
         "numericFilters": f"created_at_i>={from_ts},created_at_i<{until_ts}",
         "hitsPerPage": max_hits,
-    })
-    resp.raise_for_status()
+    }
+    # rate-limit aware: pacing keeps us ~9k req/hr (under Algolia's ~10k/hr),
+    # but a 429 (shared IP, upstream change) backs off per Retry-After instead
+    # of failing the window
+    for attempt in range(5):
+        if on_request:
+            on_request()
+        resp = client.get(url, params=params)
+        if resp.status_code == 429 or resp.status_code >= 500:
+            wait = int(resp.headers.get("Retry-After", 0)) or min(2**attempt * 5, 120)
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        break
+    else:
+        resp.raise_for_status()  # exhausted retries: surface the last error
     body = resp.json()
     nb_hits = int(body.get("nbHits") or 0)
     if nb_hits > max_hits and until_ts - from_ts > 1:

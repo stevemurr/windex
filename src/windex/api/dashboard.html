@@ -19,7 +19,7 @@
        family and is PENDING validation with the full seven-slice set. */
     --comp-news: #c15f3c; --comp-repos: #8f6ad9; --comp-wiki: #2a5a91;
     --comp-arxiv: #8f2049; --comp-smallweb: #04a58b; --comp-docs: #d2a74b;
-    --comp-hn: #6b7c1f;
+    --comp-hn: #6222c3;  /* validated ALL PASS (all-pairs, light) */
     --serif: ui-serif, "Iowan Old Style", "Palatino", Georgia, serif;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -34,7 +34,7 @@
                is pending validation alongside its light twin) */
             --comp-news:#db7431; --comp-repos:#7f5fc3; --comp-wiki:#319ae9;
             --comp-arxiv:#b85075; --comp-smallweb:#37ac78; --comp-docs:#856515;
-            --comp-hn:#9aad3d; }
+            --comp-hn:#4736e2; }  /* dark: CVD 8.2 ≥ target; normal 14.1 vs 15 floor — waiver: labels+legend+gaps carry identity */
   }
   * { box-sizing: border-box; }
   html, body { margin:0; }
@@ -178,11 +178,11 @@
   .badge.src-arxiv { color:#b31b1b; border-color:#b31b1b33; background:#b31b1b14; }
   .badge.src-smallweb { color:#2f8f5b; border-color:#2f8f5b33; background:#2f8f5b1a; }
   .badge.src-docs { color:#6d4fc2; border-color:#6d4fc233; background:#6d4fc214; }
-  .badge.src-hn { color:#6b7c1f; border-color:#6b7c1f33; background:#6b7c1f14; }
+  .badge.src-hn { color:#6222c3; border-color:#6222c333; background:#6222c314; }
   @media (prefers-color-scheme:dark) { .badge.src-arxiv { color:#e06b6b; border-color:#e06b6b33; background:#e06b6b14; }
     .badge.src-smallweb { color:#57c98a; border-color:#57c98a33; background:#57c98a14; }
     .badge.src-docs { color:#a68bf0; border-color:#a68bf033; background:#a68bf014; }
-    .badge.src-hn { color:#b3c65a; border-color:#b3c65a33; background:#b3c65a14; } }
+    .badge.src-hn { color:#8a7bf0; border-color:#8a7bf033; background:#8a7bf014; } }
   .url { font-family:var(--mono); font-size:.72rem; overflow:hidden; text-overflow:ellipsis;
          white-space:nowrap; max-width:100%; }
   .snippet { margin:.55rem 0 0; font-size:.88rem; color:var(--ink);

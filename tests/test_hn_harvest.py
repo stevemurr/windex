@@ -29,8 +29,10 @@ def _hit(item_id, ts, title=None, url="https://example.com/x", story_text=None,
 
 
 class _FakeResp:
-    def __init__(self, body):
+    def __init__(self, body, status_code=200):
         self.body = body
+        self.status_code = status_code
+        self.headers = {}
 
     def json(self):
         return self.body

@@ -131,7 +131,8 @@ recovering from index corruption is a re-embed and an alias flip — never a re-
 
 ## Quickstart
 
-Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/), a container runtime
+Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/), `libmagic` for WARC
+processing (`brew install libmagic` on macOS), a container runtime
 (scripts target Apple's `container` CLI; the services are stock `postgres:16` and
 `qdrant/qdrant` images), and an embedding endpoint you control.
 
@@ -245,8 +246,16 @@ uv run windex hn embed                 # embed staged stories into the hn collec
 
 ### Keep it fresh
 
-```sh
-uv run windex daily                     # idempotent; cron it once a day
+Every job is idempotent — a rerun is a no-op, a crashed run resumes from its watermark.
+`windex daily` covers news + GitHub; the other sources run on their own cadence:
+
+```cron
+15 2 * * *  windex daily                                      # news + github tail
+30 3 * * *  windex arxiv harvest --days 7 && windex arxiv embed
+0  4 * * *  windex smallweb sync && windex smallweb poll && windex smallweb embed
+30 4 * * *  windex hn harvest --days 2 && windex hn embed     # trailing window also refreshes points
+0  5 * * 0  windex wiki sync && windex wiki ingest && windex wiki embed    # weekly dumps
+30 5 * * *  windex docs sync && windex docs ingest && windex docs embed    # devdocs mtime-gated
 ```
 
 ## Search API
@@ -313,6 +322,22 @@ Each layer derives from the one beneath it. The pipeline *is* the recovery proce
 
 Battle-tested: an external-drive failure corrupted the vector store mid-backfill; the index
 was rebuilt from parquet staging with zero re-crawling.
+
+## Operations
+
+- **Job control** — every pipeline job can be started/stopped from the dashboard's
+  Operations cards or the CLI; job logs live under `~/.windex/logs/<job>.log`, viewable
+  in the dashboard's Logs panel (level + grep filters).
+- **Watchdog** — `nohup scripts/watchdog.sh &` supervises the containers: TCP-path
+  health probes, debounced restarts, mount-loss protection for external-drive setups,
+  hourly heartbeat in `~/.windex/watchdog.log`.
+- **Log rotation** — the server log self-rotates; for belt-and-braces on everything:
+  `sudo cp deploy/newsyslog-windex.conf /etc/newsyslog.d/windex.conf` (macOS-native).
+- **Pause/throttle** — the dashboard header pauses all indexing between batches; the
+  Activity throttle select trades embed throughput against live-search latency at
+  runtime (`env` / `polite` / `full`).
+- **Store tuning** — applied Postgres/Qdrant settings and their rationale are in
+  [`docs/store-tuning.md`](docs/store-tuning.md); schema.sql carries the durable parts.
 
 ## Development
 
