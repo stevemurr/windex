@@ -124,9 +124,10 @@ def test_poll_feed_inline_and_summary_paths(sw_settings):
     client = _mock_client(handler)
     fetcher = swpoll.PageFetcher(client, sw_settings)
     res = swpoll.poll_feed(("https://blog.example/feed", "blog.example", None, None),
-                           client, fetcher, LIGHT, sw_settings)
+                           client, fetcher, sw_settings)
     assert res["outcome"] == "ok"
-    by_url = {it["url"]: it for it in res["items"]}
+    items = swpoll.extract_items(res["raw_items"], LIGHT)
+    by_url = {it["url"]: it for it in items}
     assert set(by_url) == {"https://blog.example/inline", "https://blog.example/summary"}
     assert by_url["https://blog.example/inline"]["title"] == "Inline"  # feed title wins
     assert by_url["https://blog.example/inline"]["outlet"] == "blog.example"
@@ -144,9 +145,11 @@ def test_poll_feed_atom_inline(sw_settings):
     client = _mock_client(handler)
     fetcher = swpoll.PageFetcher(client, sw_settings)
     res = swpoll.poll_feed(("https://atom.example/feed", "atom.example", None, None),
-                           client, fetcher, LIGHT, sw_settings)
-    assert res["outcome"] == "ok" and len(res["items"]) == 1
-    assert res["items"][0]["title"] == "Atom Post" and POST_A in res["items"][0]["text"]
+                           client, fetcher, sw_settings)
+    assert res["outcome"] == "ok"
+    items = swpoll.extract_items(res["raw_items"], LIGHT)
+    assert len(items) == 1
+    assert items[0]["title"] == "Atom Post" and POST_A in items[0]["text"]
 
 
 # --- conditional GET (304) -------------------------------------------------
@@ -163,7 +166,7 @@ def test_poll_feed_conditional_get_304(sw_settings):
     fetcher = swpoll.PageFetcher(client, sw_settings)
     res = swpoll.poll_feed(
         ("https://blog.example/feed", "blog.example", '"etag-v1"', "Tue, 14 Jul 2026 08:00:00 GMT"),
-        client, fetcher, LIGHT, sw_settings,
+        client, fetcher, sw_settings,
     )
     assert res == {"url": "https://blog.example/feed", "outcome": "not_modified", "status_code": 304}
     # the stored validators were sent back
@@ -174,7 +177,7 @@ def test_poll_feed_http_error_is_reported(sw_settings):
     client = _mock_client(lambda req: httpx.Response(500))
     fetcher = swpoll.PageFetcher(client, sw_settings)
     res = swpoll.poll_feed(("https://blog.example/feed", "blog.example", None, None),
-                           client, fetcher, LIGHT, sw_settings)
+                           client, fetcher, sw_settings)
     assert res["outcome"] == "error" and res["status_code"] == 500
 
 

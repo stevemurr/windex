@@ -395,7 +395,7 @@ def stage_batch(conn: psycopg.Connection, settings: Settings, items: list[dict],
 # --- polling ---------------------------------------------------------------
 
 def poll_feed(feed: tuple[str, str, str | None, str | None], client: httpx.Client,
-              fetcher: PageFetcher, filters, settings: Settings) -> dict:
+              fetcher: PageFetcher, settings: Settings) -> dict:
     """Poll one feed. Never raises: any error is reported as outcome='error'
     so a bad feed can't abort a batch. Runs in a worker thread; touches no DB."""
     import feedparser
@@ -420,7 +420,10 @@ def poll_feed(feed: tuple[str, str, str | None, str | None], client: httpx.Clien
     except Exception as exc:
         return {"url": url, "outcome": "error", "status_code": resp.status_code, "error": str(exc)}
 
-    items: list[dict] = []
+    # network only in this (worker-thread) function: extraction runs on the
+    # caller's thread — the quality filters share a spaCy tokenizer that is NOT
+    # thread-safe (vocab corruption crashed the first production poll, E064)
+    raw_items: list[dict] = []
     for entry in entries:
         link = entry_link(entry)
         if not link:
@@ -430,30 +433,42 @@ def poll_feed(feed: tuple[str, str, str | None, str | None], client: httpx.Clien
             body = fetcher.fetch(link)
             if body is None:
                 continue
+        raw_items.append({
+            "link": link, "host": host, "body": body, "inline": inline,
+            "feed_title": entry_title(entry), "feed_published": entry_published(entry),
+        })
+    return {"url": url, "outcome": "ok", "status_code": resp.status_code,
+            "etag": resp.headers.get("ETag"), "last_modified": resp.headers.get("Last-Modified"),
+            "raw_items": raw_items}
+
+
+def extract_items(raw_items: list[dict], filters) -> list[dict]:
+    """Main-thread extraction over fetched bodies (single-threaded on purpose —
+    see the thread-safety note in poll_feed)."""
+    items = []
+    for raw in raw_items:
         extracted = extract.extract_post(
-            body, link, feed_title=entry_title(entry),
-            feed_published=entry_published(entry), filters=filters, wrap=inline,
+            raw["body"], raw["link"], feed_title=raw["feed_title"],
+            feed_published=raw["feed_published"], filters=filters, wrap=raw["inline"],
         )
         if extracted is None:
             continue
         items.append({
-            "url": link, "outlet": host, "title": extracted["title"],
+            "url": raw["link"], "outlet": raw["host"], "title": extracted["title"],
             "date": extracted["date"], "lang": extracted["lang"], "text": extracted["text"],
         })
-    return {"url": url, "outcome": "ok", "status_code": resp.status_code,
-            "etag": resp.headers.get("ETag"), "last_modified": resp.headers.get("Last-Modified"),
-            "items": items}
+    return items
 
 
-def _poll_feeds(feeds, client, fetcher, filters, settings) -> list[dict]:
+def _poll_feeds(feeds, client, fetcher, settings) -> list[dict]:
     """Poll a batch of feeds, up to the global concurrency cap. Distinct hosts
     run in parallel; same-host page fetches serialize on the per-host interval."""
     workers = max(settings.smallweb_concurrency, 1)
     if workers == 1 or len(feeds) <= 1:
-        return [poll_feed(f, client, fetcher, filters, settings) for f in feeds]
+        return [poll_feed(f, client, fetcher, settings) for f in feeds]
     with cf.ThreadPoolExecutor(min(workers, len(feeds))) as pool:
         return list(pool.map(
-            lambda f: poll_feed(f, client, fetcher, filters, settings), feeds
+            lambda f: poll_feed(f, client, fetcher, settings), feeds
         ))
 
 
@@ -470,7 +485,7 @@ def _apply_feed_result(conn: psycopg.Connection, settings: Settings, res: dict,
         totals["dead"] += int(went_dead)
     else:
         mark_feed_ok(conn, url, res.get("etag"), res.get("last_modified"),
-                     res.get("status_code", 200), len(res.get("items", [])))
+                     res.get("status_code", 200), len(res.get("raw_items", [])))
 
 
 def poll(conn: psycopg.Connection, settings: Settings, max_feeds: int | None = None,
@@ -505,12 +520,12 @@ def poll(conn: psycopg.Connection, settings: Settings, max_feeds: int | None = N
             if not feeds:
                 break
             db.set_control(conn, "smallweb_stage", f"polling {len(feeds)} feeds")
-            results = _poll_feeds(feeds, client, fetcher, filters, settings)
+            results = _poll_feeds(feeds, client, fetcher, settings)
 
             items: list[dict] = []
             for res in results:
                 _apply_feed_result(conn, settings, res, totals)
-                items.extend(res.get("items", []))
+                items.extend(extract_items(res.get("raw_items", []), filters))
             totals["feeds"] += len(feeds)
             totals["items"] += len(items)
             if items:
