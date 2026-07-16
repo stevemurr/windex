@@ -27,6 +27,17 @@ themselves: Common Crawl's news feed, GH Archive's event stream, and the GitHub 
   chunked into independently restartable per-year date windows, `deletedRecord`
   tombstone handling, and the same text-hash ledger for changed-paper deltas. Full
   text is never harvested. See [`docs/arxiv-source.md`](docs/arxiv-source.md).
+- **Small Web** — personal blogs from Kagi's curated
+  [smallweb](https://github.com/kagisearch/smallweb) list (MIT; ~38k RSS/Atom feeds,
+  one blog per host). windex's first *fetch*-based source: a **polite** poller —
+  conditional GET (ETag/304), robots.txt honored per host, a per-host minimum
+  interval, a global concurrency cap, and an honest descriptive User-Agent.
+  Full-text feeds are indexed straight from the feed body; summary-only items have
+  their post page fetched (size/content-type bounded). The quality gate is
+  deliberately *lighter* than news — language + length + repetition only, no
+  C4/FineWeb — so legitimately short, idiosyncratic blog posts aren't over-rejected.
+  windex links out to the blogs (traffic to the small web); it doesn't republish them.
+  See [`docs/smallweb-source.md`](docs/smallweb-source.md).
 - **Hybrid search** — dense vectors from *your* embedding model (any OpenAI/TEI-compatible
   endpoint, or in-process sentence-transformers) fused with BM25 sparse vectors via RRF in
   [Qdrant](https://qdrant.tech). Semantic queries and exact-name lookups both work.
@@ -47,6 +58,7 @@ flowchart LR
         GH[GitHub GraphQL]
         WK[Wikipedia dumps]
         AX[arXiv OAI-PMH]
+        SW[Small Web feeds]
     end
     subgraph pipeline [Pipeline]
         EX[extract + filter<br/>datatrove/FineWeb]
@@ -67,6 +79,7 @@ flowchart LR
     GHA --> GH --> PQ
     WK --> PQ
     AX --> PQ
+    SW --> EX
     DD <--> PG
     EM <--> PG
     QD --> API --> DASH
@@ -139,6 +152,22 @@ uv run windex arxiv embed                      # embed staged papers into the ar
 > watermark); the text-hash ledger keeps re-harvests to the changed-paper delta.
 > See [`docs/arxiv-source.md`](docs/arxiv-source.md) for the verified source facts.
 
+### Ingest the Small Web
+
+```sh
+uv run windex smallweb sync                    # reconcile the feeds table against Kagi's smallweb.txt
+uv run windex smallweb poll --max-feeds 1000   # conditional-GET feeds → fetch + stage new posts (polite)
+uv run windex smallweb embed                   # embed staged posts into the smallweb collection
+```
+
+> **Politeness is the design.** This is windex's only fetch-based source, so the
+> poller honors robots.txt per host, throttles to a per-host minimum interval, caps
+> global concurrency, sends an honest descriptive User-Agent (a default UA drew 403s
+> in sampling), and skips a dead feed after N consecutive failures. Most feeds carry
+> full post text inline, so the common case fetches nothing beyond the feed itself.
+> The list is MIT-licensed; windex links out to the blogs. See
+> [`docs/smallweb-source.md`](docs/smallweb-source.md) for the verified source facts.
+
 ### Keep it fresh
 
 ```sh
@@ -151,12 +180,13 @@ uv run windex daily                     # idempotent; cron it once a day
 curl "http://127.0.0.1:8100/v1/search?q=vector+database&source=github&min_stars=100"
 curl "http://127.0.0.1:8100/v1/search?q=fed+rate+cut&source=news&published_after=2026-07-01"
 curl "http://127.0.0.1:8100/v1/search?q=diffusion+models&source=arxiv&category=cs.LG"
+curl "http://127.0.0.1:8100/v1/search?q=vim+config&source=smallweb&outlet=example.com"
 curl "http://127.0.0.1:8100/v1/docs/arxiv:2401.00001"     # stored abstract by stable id
 curl "http://127.0.0.1:8100/v1/stats"                     # totals + freshness watermarks
 ```
 
 Responses carry stable ids (`news:<hash>`, `gh:owner/repo`, `wiki:<page_id>`,
-`arxiv:<paper_id>`), snippets, per-source metadata,
+`arxiv:<paper_id>`, `smallweb:<hash>`), snippets, per-source metadata,
 and timing breakdowns (`embed_query_ms` / `search_ms`). Under heavy indexing load, hybrid
 queries degrade gracefully to keyword search after a deadline rather than stalling — the
 response says so explicitly. Full OpenAPI docs at `/docs`.
@@ -198,6 +228,7 @@ Each layer derives from the one beneath it. The pipeline *is* the recovery proce
 | Embedding model swap | same operation into a new aliased collection |
 | Postgres | restore a dump, or re-run sync + processing (dedup makes re-runs idempotent) |
 | arXiv metadata | re-run `windex arxiv harvest` — the per-year windows are restartable and the text-hash ledger dedupes |
+| Small Web posts | re-run `windex smallweb poll` — the feeds watermark + text-hash ledger keep re-polls to genuinely new posts |
 | Everything | run the ingestion flow from the top |
 
 Battle-tested: an external-drive failure corrupted the vector store mid-backfill; the index

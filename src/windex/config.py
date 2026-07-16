@@ -51,6 +51,22 @@ class Settings(BaseSettings):
     arxiv_request_interval: float = 3.0
     arxiv_incremental_days: int = 7
     arxiv_earliest_year: int = 2005  # earliestDatestamp is 2005-09-16
+    # Small Web (Kagi smallweb.txt: RSS/Atom feeds of personal blogs). windex's
+    # only FETCH-based source — a polite feed + HTML fetcher. Attribution: the
+    # list is MIT (github.com/kagisearch/smallweb); windex links out to the
+    # blogs, honoring robots.txt with an honest, descriptive User-Agent. The
+    # quality gate is deliberately light (see smallweb/extract.py).
+    smallweb_list_url: str = "https://raw.githubusercontent.com/kagisearch/smallweb/main/smallweb.txt"
+    smallweb_max_items: int = 15            # newest items polled per feed
+    smallweb_poll_batch: int = 200          # feeds per pause-checked batch
+    smallweb_concurrency: int = 12          # global in-flight feed/page fetches
+    smallweb_host_interval: float = 10.0    # min seconds between hits to one host
+    smallweb_robots_ttl: float = 3600.0     # per-host robots.txt cache TTL
+    smallweb_max_page_bytes: int = 2_000_000  # skip a post page larger than ~2MB
+    smallweb_request_timeout: float = 15.0
+    smallweb_max_fail: int = 5              # consecutive failures → status 'dead'
+    smallweb_min_chars: int = 200           # light quality gate: minimum post length
+    smallweb_inline_summary_min: int = 600  # a description this long is a full-text feed (no page fetch)
 
     github_tokens: str = ""  # comma-separated PATs for hydration
 
@@ -90,6 +106,10 @@ class Settings(BaseSettings):
     def arxiv_staging_dir(self) -> Path:
         return self.staging_dir / "arxiv"
 
+    @property
+    def smallweb_staging_dir(self) -> Path:
+        return self.staging_dir / "smallweb"
+
     def all_dirs(self) -> list[Path]:
         return [
             self.ccnews_downloads_dir,
@@ -98,6 +118,7 @@ class Settings(BaseSettings):
             self.repos_staging_dir,
             self.wiki_staging_dir,
             self.arxiv_staging_dir,
+            self.smallweb_staging_dir,
         ]
 
     def github_token_list(self) -> list[str]:

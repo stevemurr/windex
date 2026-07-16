@@ -349,9 +349,69 @@ def arxiv_status() -> None:
         console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
 
 
+smallweb_app = typer.Typer(no_args_is_help=True, help="Small Web ingestion (Kagi RSS/Atom blog feeds)")
+app.add_typer(smallweb_app, name="smallweb")
+
+
+@smallweb_app.command("sync")
+def smallweb_sync() -> None:
+    """Reconcile the feeds table against Kagi's smallweb.txt (idempotent)."""
+    from windex.smallweb import sync as swsync
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        stats = swsync.sync(conn, url=settings.smallweb_list_url)
+    console.print(stats)
+
+
+@smallweb_app.command("poll")
+def smallweb_poll(
+    max_feeds: int = typer.Option(None, help="Stop after N feeds (default: all active)"),
+) -> None:
+    """Conditional-GET active feeds, fetch + extract new posts → clean parquet +
+    ledger. Polite: honors robots.txt, a per-host interval, and the pause flag."""
+    from windex.smallweb import poll as swpoll
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        if db.get_control(conn, "indexing", "running") == "paused":
+            console.print("[yellow]paused — skipping poll[/yellow]")
+            raise typer.Exit(0)
+        stats = swpoll.poll(conn, settings, max_feeds=max_feeds)
+    console.print(stats)
+
+
+@smallweb_app.command("embed")
+def smallweb_embed(limit: int = 100_000) -> None:
+    """Embed staged Small Web posts into Qdrant. Respects the dashboard pause flag."""
+    from windex.smallweb.embed_index import embed_pending
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        if db.get_control(conn, "indexing", "running") == "paused":
+            console.print("[yellow]paused — skipping embed[/yellow]")
+            raise typer.Exit(0)
+        n = embed_pending(conn, settings, limit=limit)
+    console.print(f"[green]embedded {n} posts[/green]")
+
+
+@smallweb_app.command("status")
+def smallweb_status() -> None:
+    """Feed registry + document pipeline counts."""
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT status, count(*) FROM feeds GROUP BY status ORDER BY status")
+        console.print({r[0]: r[1] for r in cur.fetchall()}, "feeds")
+        cur.execute(
+            "SELECT status, count(*) FROM documents WHERE source='smallweb' "
+            "GROUP BY status ORDER BY status"
+        )
+        console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
+
+
 @app.command()
 def reindex(
-    source: str = typer.Argument("all", help="news | repos | wiki | arxiv | all"),
+    source: str = typer.Argument("all", help="news | repos | wiki | arxiv | smallweb | all"),
     drop_collections: bool = typer.Option(True, help="Recreate Qdrant collections from scratch"),
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation"),
 ) -> None:
@@ -408,10 +468,21 @@ def reindex(
                    WHERE source='arxiv' AND status='embedded'"""
             )
             console.print(f"[green]arxiv: {cur.rowcount} docs queued for re-embed[/green]")
+        if source in ("smallweb", "all"):
+            if drop_collections:
+                name = qidx.collection_name("smallweb", settings.embed_model)
+                if client.collection_exists(name):
+                    client.delete_collection(name)
+                qidx.ensure_collection(client, "smallweb", settings.embed_model, settings.embed_dim)
+            cur.execute(
+                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
+                   WHERE source='smallweb' AND status='embedded'"""
+            )
+            console.print(f"[green]smallweb: {cur.rowcount} docs queued for re-embed[/green]")
         conn.commit()
     console.print(
         "run `windex ccnews embed-loop`, `windex gh embed`, `windex wiki embed`, "
-        "`windex arxiv embed` to repopulate"
+        "`windex arxiv embed`, `windex smallweb embed` to repopulate"
     )
 
 

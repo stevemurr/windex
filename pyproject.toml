@@ -24,6 +24,7 @@ pipeline = [
     "spacy>=3.7",  # datatrove's en word tokenizer backend, not covered by its extras
     "warcio>=1.7",
     "zstandard>=0.23",
+    "feedparser>=6.0",  # Small Web RSS/Atom parsing (feed poller)
 ]
 # Serving layer
 api = [

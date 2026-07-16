@@ -35,7 +35,7 @@ def test_cli_ensure_collections(settings, qclient, monkeypatch):
     _use_test_settings(monkeypatch, settings)
     r = runner.invoke(app, ["ensure-collections"])
     assert r.exit_code == 0 and "news_current" in r.output and "wiki_current" in r.output
-    assert "arxiv_current" in r.output
+    assert "arxiv_current" in r.output and "smallweb_current" in r.output
 
 
 def test_cli_wiki_status(settings, pg, monkeypatch):
@@ -60,6 +60,19 @@ def test_cli_arxiv_status(settings, pg, monkeypatch):
     pg.commit()
     r = runner.invoke(app, ["arxiv", "status"])
     assert r.exit_code == 0 and "done" in r.output
+
+
+def test_cli_smallweb_status(settings, pg, monkeypatch):
+    _use_test_settings(monkeypatch, settings)
+    with pg.cursor() as cur:
+        cur.execute(
+            "INSERT INTO feeds (url, host, status) VALUES "
+            "('https://a.example/feed', 'a.example', 'active'),"
+            "('https://b.example/feed', 'b.example', 'dead')"
+        )
+    pg.commit()
+    r = runner.invoke(app, ["smallweb", "status"])
+    assert r.exit_code == 0 and "active" in r.output and "dead" in r.output
 
 
 def test_reindex_resets_statuses_and_recreates_collections(settings, pg, qclient, monkeypatch):

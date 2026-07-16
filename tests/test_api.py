@@ -66,6 +66,33 @@ def test_search_arxiv_source_and_category_passthrough(client, monkeypatch):
     assert captured["source"] == "arxiv" and captured["category"] == "cs.LG"
 
 
+def test_search_smallweb_source_and_outlet_passthrough(client, monkeypatch):
+    captured = {}
+
+    def fake_search(settings, q, **kw):
+        captured.update(kw)
+        return {"results": [], "degraded": False, "timings": {"embed_query_ms": 0, "search_ms": 0}}
+
+    monkeypatch.setattr(service_mod, "index_search", fake_search)
+    r = client.get("/v1/search",
+                   params={"q": "chickens", "source": "smallweb", "outlet": "blog.example"})
+    assert r.status_code == 200
+    assert captured["source"] == "smallweb" and captured["outlet"] == "blog.example"
+
+
+def test_search_surfaces_smallweb_result_fields(client, monkeypatch):
+    canned = {
+        "results": [{"doc_id": "smallweb:abc", "score": 0.7,
+                     "url": "https://blog.example/post", "title": "Coop latch",
+                     "snippet": "Rewired the coop latch", "source": "smallweb",
+                     "outlet": "blog.example", "published_at": "2026-07-14T08:00:00+00:00"}],
+        "degraded": False, "timings": {"embed_query_ms": 1, "search_ms": 1},
+    }
+    monkeypatch.setattr(service_mod, "index_search", lambda *a, **k: canned)
+    res = client.get("/v1/search", params={"q": "x", "source": "smallweb"}).json()["results"][0]
+    assert res["id"] == "smallweb:abc" and res["outlet"] == "blog.example"
+
+
 def test_search_surfaces_arxiv_result_fields(client, monkeypatch):
     canned = {
         "results": [{"doc_id": "arxiv:2401.1", "score": 0.9,
