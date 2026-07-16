@@ -117,6 +117,28 @@
   .total .k { color:var(--muted); font-size:.74rem; margin-top:.2rem; }
   #coverage { grid-column:1 / -1; text-align:center; color:var(--muted);
               font-size:.78rem; padding:.1rem 0 0; }
+  .ops { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:.65rem; }
+  .op { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+        padding:.75rem .9rem; display:flex; flex-direction:column; gap:.4rem; }
+  .op .t { display:flex; align-items:center; gap:.5rem; font-weight:600; font-size:.9rem; }
+  .op .t i { width:.45rem; height:.45rem; border-radius:99px; background:var(--line-strong); flex-shrink:0; }
+  .op.running .t i { background:var(--ok); animation:pulse 1.6s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .op.running .t i { animation:none; } }
+  .op .d { color:var(--muted); font-size:.75rem; flex:1; }
+  .op .p { display:flex; gap:.4rem; flex-wrap:wrap; }
+  .op .p label { color:var(--muted); font-size:.7rem; display:flex; align-items:center; gap:.25rem; }
+  .op input[type=number], .op input[type=date], .op select {
+    width:5.5rem; font:.75rem var(--mono); color:var(--ink); background:var(--bg);
+    border:1px solid var(--line); border-radius:6px; padding:.15rem .3rem; }
+  .op input[type=date] { width:8rem; }
+  .op .row { display:flex; align-items:center; gap:.5rem; }
+  .op button { padding:.3rem .8rem; font:600 .75rem var(--sans); border:none;
+               border-radius:8px; cursor:pointer; background:var(--ink); color:var(--bg); }
+  .op button.stop { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  .op .log { color:var(--muted); font:.66rem var(--mono); white-space:nowrap;
+             overflow:hidden; text-overflow:ellipsis; }
+  .opcat { grid-column:1 / -1; color:var(--muted); font-size:.72rem;
+           letter-spacing:.06em; text-transform:uppercase; margin-top:.4rem; }
   #feed { border:1px solid var(--line); border-radius:12px; background:var(--panel);
           margin-top:1.6rem; max-height:340px; overflow-y:auto; }
   .feedrow { display:flex; gap:.7rem; align-items:baseline; padding:.5rem .9rem;
@@ -189,6 +211,8 @@
         <div class="tip"></div>
       </div>
     </div>
+    <h2 style="margin-top:1.6rem">Operations</h2>
+    <div class="ops" id="ops"></div>
     <h2 style="margin-top:1.6rem">Recently indexed</h2>
     <div id="feed"><div class="feed-empty">nothing indexed yet</div></div>
   </section>
@@ -405,6 +429,65 @@ function renderCharts(series) {
   } catch (e) { /* charts are best-effort */ }
 }
 
+// --- operations: whitelisted CLI jobs, start/stop from the page ---
+const CATS = { news: "News pipeline", github: "GitHub pipeline", maintenance: "Maintenance" };
+
+function paramInput(job, key, spec) {
+  const id = `p-${job.name}-${key}`;
+  if (spec.kind === "choice")
+    return `<label>${key} <select id="${id}">${spec.choices.map(c =>
+      `<option ${c === spec.default ? "selected" : ""}>${c}</option>`).join("")}</select></label>`;
+  const type = spec.kind === "date" ? "date" : "number";
+  return `<label>${key} <input type="${type}" id="${id}" value="${spec.default ?? ""}"></label>`;
+}
+
+function renderJobs(jobs) {
+  try {
+    let html = "", cat = "";
+    for (const j of jobs) {
+      if (j.category !== cat) { cat = j.category; html += `<div class="opcat">${CATS[cat] || cat}</div>`; }
+      const params = Object.entries(j.params).map(([k, s]) => paramInput(j, k, s)).join("");
+      html += `<div class="op ${j.running ? "running" : ""}" id="op-${j.name}">
+        <div class="t"><i></i>${esc(j.title)}</div>
+        <div class="d">${esc(j.description)}</div>
+        ${params ? `<div class="p">${params}</div>` : ""}
+        <div class="row">
+          ${j.running
+            ? `<button class="stop" onclick="jobStop('${j.name}')">Stop</button>`
+            : `<button onclick="jobStart('${j.name}', ${j.confirm})">Start</button>`}
+        </div>
+        ${j.last_log ? `<div class="log" title="${esc(j.last_log)}">${esc(j.last_log)}</div>` : ""}
+      </div>`;
+    }
+    document.getElementById("ops").innerHTML = html;
+  } catch (e) { /* ops are best-effort */ }
+}
+
+async function refreshJobs() {
+  try { renderJobs(await (await fetch("/v1/jobs")).json()); } catch (e) {}
+}
+
+window.jobStart = async (name, confirmFirst) => {
+  if (confirmFirst && !confirm(`Really run "${name}"? This drops and rebuilds vectors.`)) return;
+  const card = document.getElementById(`op-${name}`);
+  const params = {};
+  card.querySelectorAll("input, select").forEach(el => {
+    const key = el.id.replace(`p-${name}-`, "");
+    if (el.value !== "") params[key] = el.value;
+  });
+  const r = await fetch(`/v1/jobs/${name}/start`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!r.ok) alert((await r.json()).detail || "failed to start");
+  refreshJobs();
+};
+
+window.jobStop = async (name) => {
+  await fetch(`/v1/jobs/${name}/stop`, { method: "POST" });
+  refreshJobs();
+};
+
 // SSE keeps the page realtime; EventSource auto-reconnects on drops, and a
 // dropped connection also triggers one manual refresh as a bridge.
 function connectEvents() {
@@ -412,12 +495,14 @@ function connectEvents() {
   es.addEventListener("stats", e => renderStats(JSON.parse(e.data)));
   es.addEventListener("recent", e => renderFeed(JSON.parse(e.data)));
   es.addEventListener("timeseries", e => renderCharts(JSON.parse(e.data)));
+  es.addEventListener("jobs", e => renderJobs(JSON.parse(e.data)));
   es.onerror = () => refresh();
 }
 
 refresh();
 refreshFeed();
 refreshCharts();
+refreshJobs();
 connectEvents();
 </script>
 </body>

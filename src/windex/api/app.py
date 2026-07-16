@@ -8,7 +8,9 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from windex.api import service
+from fastapi import Body
+
+from windex.api import jobs, service
 from windex.config import get_settings
 
 app = FastAPI(title="windex", version="0.1.0",
@@ -67,6 +69,31 @@ def control(action: Literal["start", "pause"]) -> dict:
     return {"indexing": service.set_control(get_settings(), value)}
 
 
+@app.get("/v1/jobs")
+def jobs_list() -> list[dict]:
+    return jobs.list_jobs()
+
+
+@app.post("/v1/jobs/{name}/start")
+def jobs_start(name: str, params: dict = Body(default={})) -> dict:
+    try:
+        return jobs.start(name, params)
+    except KeyError:
+        raise HTTPException(404, f"unknown job: {name}")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@app.post("/v1/jobs/{name}/stop")
+def jobs_stop(name: str) -> dict:
+    try:
+        return jobs.stop(name)
+    except KeyError:
+        raise HTTPException(404, f"unknown job: {name}")
+
+
 @app.get("/v1/events")
 async def events(ticks: int | None = Query(None, ge=1, le=100)) -> StreamingResponse:
     """SSE stream for the dashboard: `stats` every ~2s, `recent` only when it
@@ -88,6 +115,9 @@ async def events(ticks: int | None = Query(None, ge=1, le=100)) -> StreamingResp
             if n % 8 == 0:
                 series = await run_in_threadpool(service.get_timeseries, settings, 60)
                 yield f"event: timeseries\ndata: {json.dumps(series)}\n\n"
+            if n % 3 == 0:
+                job_state = await run_in_threadpool(jobs.list_jobs)
+                yield f"event: jobs\ndata: {json.dumps(job_state)}\n\n"
             n += 1
             if ticks is not None and n >= ticks:
                 return
