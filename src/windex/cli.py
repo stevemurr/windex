@@ -298,6 +298,17 @@ def daily(embed: bool = True) -> None:
         tail.sync_hours(conn, days=2)
         stats = tail.scan(conn, settings.gharchive_downloads_dir)
         console.print(f"gh tail: {stats}")
+
+        # retention: datatrove per-batch logs accumulate one dir per batch forever
+        import shutil
+        import time as time_mod
+
+        batch_logs = settings.news_staging_dir / "logs"
+        if batch_logs.exists():
+            cutoff = time_mod.time() - 14 * 86400
+            for d in batch_logs.iterdir():
+                if d.is_dir() and d.stat().st_mtime < cutoff:
+                    shutil.rmtree(d, ignore_errors=True)
         if settings.github_token_list():
             from windex.github import hydrate as gh_hydrate_mod
 
@@ -317,10 +328,36 @@ def daily(embed: bool = True) -> None:
 
 @app.command()
 def serve(host: str = "127.0.0.1", port: int = 8100) -> None:
-    """Run the REST API (/v1/search, /v1/docs/{id}, /v1/stats)."""
+    """Run the REST API + dashboard. Logs rotate at ~/.windex/logs/serve.log;
+    dashboard-polling access lines are filtered out."""
+    from pathlib import Path
+
     import uvicorn
 
-    uvicorn.run("windex.api.app:app", host=host, port=port)
+    log_dir = Path.home() / ".windex" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "filters": {"quiet": {"()": "windex.api.logs.QuietAccess"}},
+        "formatters": {"std": {"format": "%(asctime)s %(levelname)s %(message)s"}},
+        "handlers": {
+            "file": {
+                "class": "logging.handlers.RotatingFileHandler",
+                "filename": str(log_dir / "serve.log"),
+                "maxBytes": 10_485_760,
+                "backupCount": 5,
+                "formatter": "std",
+            }
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["file"], "level": "INFO"},
+            "uvicorn.error": {"handlers": ["file"], "level": "INFO", "propagate": False},
+            "uvicorn.access": {"handlers": ["file"], "level": "INFO",
+                               "filters": ["quiet"], "propagate": False},
+        },
+    }
+    uvicorn.run("windex.api.app:app", host=host, port=port, log_config=log_config)
 
 
 @app.command("serve-mcp")

@@ -190,6 +190,17 @@
              overflow:hidden; text-overflow:ellipsis; }
   .opcat { grid-column:1 / -1; color:var(--muted); font-size:.72rem;
            letter-spacing:.06em; text-transform:uppercase; margin-top:.4rem; }
+  #logpanel .lbar { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-bottom:.55rem; }
+  #logpanel select, #logpanel input[type=search] {
+    font:.8rem var(--sans); color:var(--ink); background:var(--panel);
+    border:1px solid var(--line); border-radius:8px; padding:.3rem .6rem; }
+  #logpanel input[type=search] { flex:1; min-width:8rem; box-shadow:none; }
+  #logmeta { color:var(--muted); font-size:.72rem; margin-left:auto; white-space:nowrap;
+             font-variant-numeric:tabular-nums; }
+  #logbody { font:.72rem/1.5 var(--mono); background:var(--bg); color:var(--ink);
+             border:1px solid var(--line); border-radius:12px; padding:.7rem .9rem;
+             max-height:360px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
+  #logbody .errline { color:var(--accent); }
   #feed { border:1px solid var(--line); border-radius:12px; background:var(--panel);
           max-height:340px; overflow-y:auto; }
   .feedrow { display:flex; gap:.7rem; align-items:baseline; padding:.5rem .9rem;
@@ -291,6 +302,18 @@
     </div>
     <h2 style="margin-top:1.6rem">Operations</h2>
     <div class="ops" id="ops"></div>
+    <h2 style="margin-top:1.6rem">Logs</h2>
+    <div id="logpanel">
+      <div class="lbar">
+        <select id="logsel" aria-label="Log source"></select>
+        <select id="loglines" aria-label="Lines">
+          <option>100</option><option selected>300</option><option>1000</option>
+        </select>
+        <input id="loggrep" type="search" placeholder="filter lines…">
+        <span id="logmeta"></span>
+      </div>
+      <pre id="logbody">select a log…</pre>
+    </div>
   </section>
   </section>
 </main>
@@ -625,6 +648,53 @@ window.jobStop = async (name) => {
   refreshJobs();
 };
 
+// --- log viewer: whitelisted sources, tail-follow, grep ---
+const fmtSize = b => b == null ? "" : b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1e3)} KB`;
+let logListLoaded = false;
+
+function renderLogList(sources) {
+  const sel = $("logsel");
+  const current = sel.value;
+  const cats = {};
+  for (const s of sources) (cats[s.category] ??= []).push(s);
+  sel.innerHTML = Object.entries(cats).map(([cat, ss]) =>
+    `<optgroup label="${esc(CATS[cat] || cat)}">` + ss.map(s =>
+      `<option value="${esc(s.name)}" ${!s.available && s.kind === "file" ? "disabled" : ""}>` +
+      `${esc(s.title)}${s.size != null ? ` · ${fmtSize(s.size)}` : ""}</option>`).join("") +
+    `</optgroup>`).join("");
+  if (current) sel.value = current;
+  else sel.value = "server";
+  logListLoaded = true;
+}
+
+async function refreshLogBody() {
+  if (!logListLoaded || !document.getElementById("tab-console").classList.contains("active")) return;
+  const name = $("logsel").value;
+  if (!name) return;
+  const params = new URLSearchParams({ lines: $("loglines").value });
+  const grep = $("loggrep").value.trim();
+  if (grep) params.set("grep", grep);
+  try {
+    const d = await (await fetch(`/v1/logs/${encodeURIComponent(name)}?${params}`)).json();
+    const body = $("logbody");
+    const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+    if (!d.available) { body.textContent = "log unavailable (source offline or drive detached)"; return; }
+    body.innerHTML = d.lines.map(ln =>
+      `<div class="${/error|traceback|fail/i.test(ln) ? "errline" : ""}">${esc(ln)}</div>`).join("")
+      || "(empty)";
+    $("logmeta").textContent = `${d.lines.length} lines${d.truncated ? " · truncated window" : ""}`;
+    if (atBottom) body.scrollTop = body.scrollHeight;  // follow tail unless user scrolled up
+  } catch (e) { /* best-effort */ }
+}
+
+async function initLogs() {
+  try { renderLogList(await (await fetch("/v1/logs")).json()); refreshLogBody(); } catch (e) {}
+}
+$("logsel").addEventListener("change", refreshLogBody);
+$("loglines").addEventListener("change", refreshLogBody);
+$("loggrep").addEventListener("input", () => { clearTimeout(window._lgt); window._lgt = setTimeout(refreshLogBody, 350); });
+setInterval(refreshLogBody, 3000);
+
 // SSE keeps the page realtime; EventSource auto-reconnects on drops, and a
 // dropped connection also triggers one manual refresh as a bridge.
 function connectEvents() {
@@ -634,6 +704,7 @@ function connectEvents() {
   es.addEventListener("timeseries", e => renderCharts(JSON.parse(e.data)));
   es.addEventListener("jobs", e => renderJobs(JSON.parse(e.data)));
   es.addEventListener("workers", e => renderWorkers(JSON.parse(e.data)));
+  es.addEventListener("logsizes", e => renderLogList(JSON.parse(e.data)));
   es.onerror = () => refresh();
 }
 
@@ -642,6 +713,7 @@ refreshFeed();
 refreshCharts();
 refreshJobs();
 refreshWorkers();
+initLogs();
 connectEvents();
 </script>
 </body>

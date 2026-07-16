@@ -142,7 +142,12 @@ def start(name: str, params: dict) -> dict:
         raise RuntimeError(f"{name} is already running")
     argv = build_argv(job, params or {})
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log = open(LOG_DIR / f"{job.name}.log", "ab")
+    log_path = LOG_DIR / f"{job.name}.log"
+    # rotate-on-start guard: detached children write raw stdout no logging
+    # handler can cap, so bound growth here (newsyslog covers the interval)
+    if log_path.exists() and log_path.stat().st_size > 10_485_760:
+        log_path.replace(log_path.with_suffix(".log.1"))
+    log = open(log_path, "ab")
     proc = subprocess.Popen(
         argv, stdout=log, stderr=log, cwd=PROJECT_ROOT, start_new_session=True
     )

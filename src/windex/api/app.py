@@ -10,7 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from fastapi import Body
 
-from windex.api import jobs, service
+from windex.api import jobs, logs, service
 from windex.config import get_settings
 
 app = FastAPI(title="windex", version="0.1.0",
@@ -77,6 +77,23 @@ def workers() -> dict:
     return service.get_worker_activity(get_settings())
 
 
+@app.get("/v1/logs")
+def logs_list() -> list[dict]:
+    return logs.list_logs()
+
+
+@app.get("/v1/logs/{name}")
+def logs_tail(
+    name: str,
+    lines: int = Query(200, ge=1, le=2000),
+    grep: str | None = Query(None, max_length=200),
+) -> dict:
+    try:
+        return logs.tail(name, lines=lines, grep=grep)
+    except KeyError:
+        raise HTTPException(404, f"unknown log: {name}")
+
+
 @app.get("/v1/jobs")
 def jobs_list() -> list[dict]:
     return jobs.list_jobs()
@@ -126,6 +143,8 @@ async def events(ticks: int | None = Query(None, ge=1, le=100)) -> StreamingResp
             if n % 3 == 0:
                 job_state = await run_in_threadpool(jobs.list_jobs)
                 yield f"event: jobs\ndata: {json.dumps(job_state)}\n\n"
+                log_sizes = await run_in_threadpool(logs.list_logs)
+                yield f"event: logsizes\ndata: {json.dumps(log_sizes)}\n\n"
             worker_state = await run_in_threadpool(service.get_worker_activity, settings)
             yield f"event: workers\ndata: {json.dumps(worker_state)}\n\n"
             n += 1
