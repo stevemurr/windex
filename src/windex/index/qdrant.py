@@ -1,0 +1,94 @@
+import re
+
+from qdrant_client import QdrantClient
+from qdrant_client import models as qm
+
+DENSE = "dense"
+SPARSE = "bm25"
+SOURCES = ("news", "repos")
+
+# payload fields that search filters on, indexed at collection creation
+PAYLOAD_INDEXES = {
+    "news": {"doc_id": qm.PayloadSchemaType.KEYWORD,
+             "published_at": qm.PayloadSchemaType.DATETIME,
+             "lang": qm.PayloadSchemaType.KEYWORD},
+    "repos": {"doc_id": qm.PayloadSchemaType.KEYWORD,
+              "stars": qm.PayloadSchemaType.INTEGER,
+              "language": qm.PayloadSchemaType.KEYWORD,
+              "pushed_at": qm.PayloadSchemaType.DATETIME},
+}
+
+
+def slug(model_id: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", model_id.lower()).strip("-")
+
+
+def collection_name(source: str, model_id: str) -> str:
+    return f"{source}__{slug(model_id)}"
+
+
+def alias_name(source: str) -> str:
+    return f"{source}_current"
+
+
+def client_from_url(url: str) -> QdrantClient:
+    return QdrantClient(url=url)
+
+
+def ensure_collection(client: QdrantClient, source: str, model_id: str, dim: int) -> str:
+    """Create the per-model collection if missing and point the `<source>_current`
+    alias at it if no alias exists yet. Model swap = create new collection,
+    re-upsert from parquet, flip alias."""
+    if dim <= 0:
+        raise ValueError("embed_dim must be configured before creating collections")
+    name = collection_name(source, model_id)
+    if not client.collection_exists(name):
+        client.create_collection(
+            collection_name=name,
+            vectors_config={
+                DENSE: qm.VectorParams(size=dim, distance=qm.Distance.COSINE, on_disk=True)
+            },
+            sparse_vectors_config={
+                SPARSE: qm.SparseVectorParams(modifier=qm.Modifier.IDF)
+            },
+            # always_ram=False: at backfill scale (~5.5M docs × 4096d) the int8
+            # copies are ~22GB — mmap them from disk instead of fighting the
+            # container's memory cap. Revisit (binary quant / MRL truncation)
+            # if query latency matters more later.
+            quantization_config=qm.ScalarQuantization(
+                scalar=qm.ScalarQuantizationConfig(type=qm.ScalarType.INT8, always_ram=False)
+            ),
+        )
+    for field, schema in PAYLOAD_INDEXES.get(source, {}).items():
+        client.create_payload_index(name, field_name=field, field_schema=schema)
+    if not _alias_target(client, alias_name(source)):
+        flip_alias(client, source, name)
+    return name
+
+
+def flip_alias(client: QdrantClient, source: str, target_collection: str) -> None:
+    client.update_collection_aliases(
+        change_aliases_operations=[
+            qm.CreateAliasOperation(
+                create_alias=qm.CreateAlias(
+                    collection_name=target_collection, alias_name=alias_name(source)
+                )
+            )
+        ]
+    )
+
+
+def _alias_target(client: QdrantClient, alias: str) -> str | None:
+    for a in client.get_aliases().aliases:
+        if a.alias_name == alias:
+            return a.collection_name
+    return None
+
+
+def status(client: QdrantClient) -> dict:
+    aliases = {a.alias_name: a.collection_name for a in client.get_aliases().aliases}
+    out = {}
+    for c in client.get_collections().collections:
+        info = client.get_collection(c.name)
+        out[c.name] = {"points": info.points_count, "status": str(info.status)}
+    return {"collections": out, "aliases": aliases}

@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>windex</title>
+<style>
+  :root {
+    --bg: #faf9f5; --panel: #ffffff; --ink: #29261f; --muted: #7a7568;
+    --accent: #c15f3c; --accent-soft: #c15f3c22; --line: #e8e4da; --line-strong: #d9d4c7;
+    --ok: #4f7a4f;
+    /* chart marks — CVD-validated pair per mode */
+    --chart-index: #c15f3c; --chart-bw: #3d6ea5;
+    --serif: ui-serif, "Iowan Old Style", "Palatino", Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#201f1b; --panel:#2a2925; --ink:#e8e5dd; --muted:#a19b8d;
+            --accent:#d97757; --accent-soft:#d9775726; --line:#3a3831; --line-strong:#4a4740;
+            --ok:#8fbc8f;
+            --chart-index:#d06b47; --chart-bw:#5a8ed2; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; }
+  body { background:var(--bg); color:var(--ink); font:15px/1.55 var(--sans);
+         -webkit-font-smoothing: antialiased; }
+  main { max-width: 720px; margin: 0 auto; padding: 3.5rem 1.25rem 5rem; }
+
+  header { display:flex; align-items:baseline; gap:.75rem; margin-bottom:2.25rem; }
+  .wordmark { font-family:var(--serif); font-size:1.6rem; font-weight:600; letter-spacing:-.01em; }
+  .tagline { color:var(--muted); font-size:.85rem; }
+  #liveDot { margin-left:auto; font-size:.8rem; color:var(--muted); display:flex; align-items:center; gap:.45rem; white-space:nowrap; }
+  #liveDot i { width:.5rem; height:.5rem; border-radius:99px; background:var(--ok); display:inline-block; }
+  #liveDot.busy i { background:var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+  #liveDot.paused i { background:var(--muted); }
+  #ctl { padding:.3rem .8rem; font:600 .78rem var(--sans); color:var(--ink);
+         background:var(--panel); border:1px solid var(--line-strong); border-radius:8px;
+         cursor:pointer; }
+  #ctl:hover { border-color:var(--accent); color:var(--accent); }
+  .charts { display:grid; grid-template-columns:1fr 1fr; gap:.65rem; margin-top:1.6rem; }
+  @media (max-width:560px) { .charts { grid-template-columns:1fr; } }
+  .chart { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+           padding:.7rem .9rem .5rem; position:relative; }
+  .chart .head { display:flex; justify-content:space-between; align-items:baseline; }
+  .chart .head .k { color:var(--muted); font-size:.72rem; }
+  .chart .head .v { font:600 1.05rem var(--serif); font-variant-numeric:tabular-nums; }
+  .chart svg { display:block; width:100%; height:88px; margin-top:.3rem; }
+  .chart .tip { position:absolute; pointer-events:none; background:var(--ink); color:var(--bg);
+                font:.7rem var(--sans); padding:.2rem .45rem; border-radius:6px;
+                transform:translate(-50%,-130%); white-space:nowrap; display:none; }
+  @keyframes pulse { 50% { opacity:.35; } }
+  @media (prefers-reduced-motion: reduce) { #liveDot.busy i { animation:none; } }
+
+  form { position:relative; margin-bottom:.9rem; }
+  input[type=search] {
+    width:100%; padding:1rem 6.4rem 1rem 1.15rem; font:1.02rem var(--sans); color:var(--ink);
+    background:var(--panel); border:1px solid var(--line-strong); border-radius:14px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.03);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  input[type=search]:focus { outline:none; border-color:var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft); }
+  form button {
+    position:absolute; right:.5rem; top:50%; transform:translateY(-50%);
+    padding:.5rem 1rem; font:600 .9rem var(--sans); color:#fff;
+    background:var(--accent); border:none; border-radius:10px; cursor:pointer;
+  }
+  form button:hover { filter:brightness(1.06); }
+  form button:focus-visible, .seg label:has(input:focus-visible), select:focus-visible {
+    outline:2px solid var(--accent); outline-offset:2px; }
+
+  .controls { display:flex; align-items:center; gap:1rem; margin-bottom:2rem; flex-wrap:wrap; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:99px; padding:.15rem; background:var(--panel); }
+  .seg label { padding:.28rem .85rem; border-radius:99px; font-size:.82rem; color:var(--muted); cursor:pointer; }
+  .seg input { position:absolute; opacity:0; pointer-events:none; }
+  .seg label:has(input:checked) { background:var(--ink); color:var(--bg); }
+  .mode { margin-left:auto; color:var(--muted); font-size:.82rem; display:flex; gap:.4rem; align-items:center; }
+  select { font:.85rem var(--sans); color:var(--ink); background:var(--panel);
+           border:1px solid var(--line); border-radius:8px; padding:.25rem .5rem; }
+
+  #took { color:var(--muted); font-size:.8rem; margin-bottom:1rem; min-height:1.2em; font-variant-numeric:tabular-nums; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+          padding:1rem 1.15rem; margin-bottom:.65rem; }
+  .card h3 { margin:0; font:600 1.06rem/1.35 var(--serif); letter-spacing:-.005em; }
+  .card h3 a { color:var(--ink); text-decoration:none; }
+  .card h3 a:hover { color:var(--accent); }
+  .meta { display:flex; flex-wrap:wrap; gap:.4rem .6rem; align-items:center;
+          color:var(--muted); font-size:.78rem; margin-top:.4rem; }
+  .badge { border:1px solid var(--line); border-radius:99px; padding:.02rem .5rem; }
+  .badge.src-news { color:var(--accent); border-color:var(--accent-soft); background:var(--accent-soft); }
+  .url { font-family:var(--mono); font-size:.72rem; overflow:hidden; text-overflow:ellipsis;
+         white-space:nowrap; max-width:100%; }
+  .snippet { margin:.55rem 0 0; font-size:.88rem; color:var(--ink);
+             display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+  .empty { color:var(--muted); text-align:center; padding:2.5rem 0; font-family:var(--serif); font-style:italic; }
+
+  #status { margin-top:3.25rem; }
+  #status h2 { font:600 .78rem var(--sans); letter-spacing:.08em; text-transform:uppercase;
+               color:var(--muted); margin:0 0 .8rem; }
+  #totals { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+            gap:.65rem; margin-bottom:1.6rem; }
+  .total { padding:.9rem 1rem; border:1px solid var(--line); border-radius:12px;
+           background:var(--panel); text-align:center; }
+  .total .v { font:600 1.8rem/1.2 var(--serif); letter-spacing:-.01em;
+              font-variant-numeric:tabular-nums; }
+  .total .k { color:var(--muted); font-size:.74rem; margin-top:.2rem; }
+  #coverage { grid-column:1 / -1; text-align:center; color:var(--muted);
+              font-size:.78rem; padding:.1rem 0 0; }
+  #feed { border:1px solid var(--line); border-radius:12px; background:var(--panel);
+          margin-top:1.6rem; max-height:340px; overflow-y:auto; }
+  .feedrow { display:flex; gap:.7rem; align-items:baseline; padding:.5rem .9rem;
+             border-bottom:1px solid var(--line); font-size:.84rem; }
+  .feedrow:last-child { border-bottom:none; }
+  .feedrow .t { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
+  .feedrow .t a { color:var(--ink); text-decoration:none; }
+  .feedrow .t a:hover { color:var(--accent); }
+  .feedrow .when { color:var(--muted); font-size:.72rem; white-space:nowrap;
+                   font-variant-numeric:tabular-nums; }
+  .feedrow .badge { flex-shrink:0; }
+  .feed-empty { color:var(--muted); text-align:center; padding:1.2rem;
+                font-family:var(--serif); font-style:italic; font-size:.9rem; }
+  .rows { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.65rem; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:.75rem .9rem; }
+  .stat .k { color:var(--muted); font-size:.72rem; letter-spacing:.02em; }
+  .stat .v { font:600 1.35rem/1.3 var(--serif); font-variant-numeric:tabular-nums; margin-top:.1rem; }
+  .stat .sub { color:var(--muted); font-size:.72rem; margin-top:.15rem; font-variant-numeric:tabular-nums; }
+  .bar { height:4px; background:var(--line); border-radius:99px; overflow:hidden; margin-top:.55rem; }
+  .bar > div { height:100%; background:var(--accent); border-radius:99px; transition:width .6s ease; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="wordmark">windex</span>
+    <span class="tagline">self-hosted web index</span>
+    <span id="liveDot"><i></i><span id="liveLabel">checking…</span></span>
+    <button id="ctl" style="display:none">Pause</button>
+  </header>
+
+  <form id="f">
+    <input id="q" type="search" placeholder="Search news and GitHub projects…"
+           autocomplete="off" autofocus>
+    <button type="submit">Search</button>
+  </form>
+  <div class="controls">
+    <div class="seg" role="radiogroup" aria-label="Source">
+      <label><input type="radio" name="source" value="all" checked>Everything</label>
+      <label><input type="radio" name="source" value="news">News</label>
+      <label><input type="radio" name="source" value="github">GitHub</label>
+    </div>
+    <label class="mode">retrieval
+      <select id="mode" aria-label="Retrieval mode">
+        <option value="hybrid">hybrid</option>
+        <option value="dense">semantic</option>
+        <option value="lexical">keyword</option>
+      </select>
+    </label>
+  </div>
+
+  <div id="took" aria-live="polite"></div>
+  <div id="results"></div>
+
+  <section id="status">
+    <h2>Index</h2>
+    <div id="totals"></div>
+    <h2>Activity</h2>
+    <div class="rows" id="stats"></div>
+    <div class="charts">
+      <div class="chart" id="chartDocs">
+        <div class="head"><span class="k">indexed per minute · last hour</span><span class="v" id="rateDocs">—</span></div>
+        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Documents indexed per minute, trailing hour"></svg>
+        <div class="tip"></div>
+      </div>
+      <div class="chart" id="chartBw">
+        <div class="head"><span class="k">download MB per minute · last hour</span><span class="v" id="rateBw">—</span></div>
+        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Download megabytes per minute, trailing hour"></svg>
+        <div class="tip"></div>
+      </div>
+    </div>
+    <h2 style="margin-top:1.6rem">Recently indexed</h2>
+    <div id="feed"><div class="feed-empty">nothing indexed yet</div></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
+const num = n => (n ?? 0).toLocaleString();
+
+$("f").addEventListener("submit", async e => {
+  e.preventDefault();
+  const q = $("q").value.trim();
+  if (!q) return;
+  $("results").innerHTML = "<div class='empty'>searching…</div>";
+  $("took").textContent = "";
+  const source = document.querySelector("input[name=source]:checked").value;
+  const params = new URLSearchParams({ q, source, mode: $("mode").value, limit: 10 });
+  try {
+    const r = await fetch(`/v1/search?${params}`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(JSON.stringify(data.detail || data));
+    $("took").textContent = `${data.results.length} result${data.results.length === 1 ? "" : "s"} · ${data.took_ms} ms`;
+    $("results").innerHTML = data.results.map(res => `
+      <article class="card">
+        <h3><a href="${esc(res.url)}" target="_blank" rel="noopener">${esc(res.title || res.url)}</a></h3>
+        <div class="meta">
+          <span class="badge src-${res.source}">${res.source}</span>
+          ${res.stars != null ? `<span class="badge">★ ${num(res.stars)}</span>` : ""}
+          ${res.language ? `<span class="badge">${esc(res.language)}</span>` : ""}
+          ${res.published_at ? `<span class="badge">${esc(res.published_at.slice(0, 10))}</span>` : ""}
+          <span class="url">${esc(res.url)}</span>
+        </div>
+        ${res.snippet ? `<p class="snippet">${esc(res.snippet)}</p>` : ""}
+      </article>`).join("") || "<div class='empty'>Nothing matched. Try fewer or different words.</div>";
+  } catch (err) {
+    $("results").innerHTML = `<div class="empty">Search failed: ${esc(String(err.message || err))}</div>`;
+  }
+});
+
+function stat(k, v, sub, barPct) {
+  return `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>
+    ${sub ? `<div class="sub">${sub}</div>` : ""}
+    ${barPct != null ? `<div class="bar"><div style="width:${barPct}%"></div></div>` : ""}</div>`;
+}
+
+async function refresh() {
+  try {
+    const s = await (await fetch("/v1/stats")).json();
+    const w = s.warc_files || {}, d = (s.documents || {}).news || {}, r = s.repos || {},
+          g = s.gharchive_files || {}, v = s.vectors || {};
+    const wDone = w.done || 0,
+          wTotal = wDone + (w.pending || 0) + (w.processing || 0) + (w.failed || 0);
+    const backlog = d.deduped || 0;
+    // busy = work actually happening, not merely queued
+    const act = s.activity || {};
+    const busy = (act.warcs_processing || 0) > 0 || (act.indexed_last_2m || 0) > 0;
+    const queued = (w.pending || 0) + (g.pending || 0) + backlog;
+    $("liveDot").className = busy ? "busy" : "";
+    document.getElementById("liveLabel").textContent =
+      busy ? "indexing" : queued ? `idle — ${num(queued)} queued` : "up to date";
+    const ctl = document.getElementById("ctl");
+    ctl.style.display = "";
+    if (act.control === "paused") {
+      $("liveDot").className = "paused";
+      document.getElementById("liveLabel").textContent = "paused";
+      ctl.textContent = "Resume indexing";
+    } else {
+      ctl.textContent = "Pause indexing";
+    }
+    const dpm = act.docs_per_min || 0;
+    document.getElementById("rateDocs").textContent = dpm ? `${num(Math.round(dpm))}/min` : "idle";
+    const mbps = act.download_mb_per_s || 0;
+    document.getElementById("rateBw").textContent = mbps ? `${mbps} MB/s avg` : "idle";
+    const t = s.totals || {};
+    const dlTotal = act.bytes_downloaded_total || 0;
+    const [covA, covB] = t.news_coverage || [];
+    $("totals").innerHTML =
+      `<div class="total"><div class="v">${num(t.indexed_pages)}</div><div class="k">pages indexed</div></div>` +
+      `<div class="total"><div class="v">${num(t.news_articles)}</div><div class="k">news articles</div></div>` +
+      `<div class="total"><div class="v">${num(t.github_projects)}</div><div class="k">GitHub projects</div></div>` +
+      `<div class="total"><div class="v">${num(t.news_outlets)}</div><div class="k">news outlets</div></div>` +
+      `<div class="total"><div class="v">${num(t.duplicates_collapsed)}</div><div class="k">duplicates collapsed</div></div>` +
+      (covA ? `<div id="coverage">news coverage ${covA} → ${covB}</div>` : "");
+    const through = (s.freshness.news_indexed_through || "").split("CC-NEWS-").pop()?.slice(0, 8);
+    const throughFmt = through ? `${through.slice(0,4)}-${through.slice(4,6)}-${through.slice(6,8)}` : "—";
+    $("stats").innerHTML =
+      stat("News in index", num(v.news_current),
+           backlog ? `${num(backlog)} awaiting embedding` : "all embedded") +
+      stat("News files processed", `${num(wDone)}<span style="color:var(--muted)"> / ${num(wTotal)}</span>`,
+           `${num(w.processing)} active · ${num(w.pending)} queued · ${num(w.failed)} failed`,
+           wTotal ? Math.round(100 * wDone / wTotal) : null) +
+      stat("Fresh through", throughFmt) +
+      stat("Projects in index", num(v.repos_current),
+           `${num(r.candidate)} candidates · ${num(r.hydrated)} ready to embed`) +
+      stat("Event hours scanned", num(g.done),
+           g.pending ? `${num(g.pending)} queued` : "caught up",
+           (g.done || g.pending) ? Math.round(100 * (g.done || 0) / ((g.done || 0) + (g.pending || 0))) : null) +
+      stat("Downloaded", dlTotal >= 1e9 ? `${(dlTotal / 1e9).toFixed(1)} GB` : `${Math.round(dlTotal / 1e6)} MB`,
+           "total, all sources");
+  } catch (e) {
+    document.getElementById("liveLabel").textContent = "stats unavailable";
+  }
+}
+function ago(iso) {
+  const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+  if (s < 90) return `${Math.round(s)}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+async function refreshFeed() {
+  try {
+    const rows = await (await fetch("/v1/recent?limit=25")).json();
+    if (!rows.length) return;
+    document.getElementById("feed").innerHTML = rows.map(r => `
+      <div class="feedrow">
+        <span class="badge src-${r.source}">${r.source}</span>
+        <span class="t"><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title || r.url)}</a></span>
+        <span class="when">${ago(r.indexed_at)}</span>
+      </div>`).join("");
+  } catch (e) { /* feed is best-effort */ }
+}
+
+document.getElementById("ctl").addEventListener("click", async () => {
+  const pausing = document.getElementById("ctl").textContent.startsWith("Pause");
+  await fetch(`/v1/control/${pausing ? "pause" : "start"}`, { method: "POST" });
+  refresh();
+});
+
+// --- charts: hand-rolled SVG area lines, crosshair tooltip on hover ---
+function drawChart(rootId, series, field, color, fmt) {
+  const root = document.getElementById(rootId);
+  const svg = root.querySelector("svg"), tip = root.querySelector(".tip");
+  const W = 600, H = 88, PAD = 4;
+  const vals = series.map(p => p[field]);
+  const max = Math.max(...vals, 1);
+  const x = i => PAD + i * (W - 2 * PAD) / Math.max(series.length - 1, 1);
+  const y = v => H - PAD - (v / max) * (H - 2 * PAD - 12);
+  const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+  const grid = [0.5].map(f => {
+    const gy = y(max * f).toFixed(1);
+    return `<line x1="${PAD}" x2="${W - PAD}" y1="${gy}" y2="${gy}" stroke="var(--line)" stroke-width="1"/>`;
+  }).join("");
+  svg.innerHTML = grid +
+    `<path d="M${pts.join(" L")} L${x(series.length - 1)},${H - PAD} L${x(0)},${H - PAD} Z"
+           fill="${color}" opacity="0.13"/>` +
+    `<path d="M${pts.join(" L")}" fill="none" stroke="${color}" stroke-width="2"
+           stroke-linejoin="round" vector-effect="non-scaling-stroke"/>` +
+    `<text x="${PAD + 2}" y="10" font-size="9" fill="var(--muted)"
+           font-family="var(--mono)">max ${fmt(max)}</text>` +
+    `<line class="xh" x1="0" x2="0" y1="${PAD}" y2="${H - PAD}" stroke="var(--muted)"
+           stroke-width="1" stroke-dasharray="2,2" visibility="hidden"/>`;
+  svg.onmousemove = e => {
+    const r = svg.getBoundingClientRect();
+    const i = Math.max(0, Math.min(series.length - 1,
+      Math.round((e.clientX - r.left) / r.width * (series.length - 1))));
+    const xh = svg.querySelector(".xh");
+    xh.setAttribute("x1", x(i)); xh.setAttribute("x2", x(i));
+    xh.setAttribute("visibility", "visible");
+    tip.style.display = "block";
+    tip.style.left = `${(x(i) / W) * r.width}px`;
+    tip.style.top = "34px";
+    const when = new Date(series[i].t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    tip.textContent = `${when} · ${fmt(series[i][field])}`;
+  };
+  svg.onmouseleave = () => {
+    tip.style.display = "none";
+    const xh = svg.querySelector(".xh");
+    if (xh) xh.setAttribute("visibility", "hidden");
+  };
+}
+
+async function refreshCharts() {
+  try {
+    const series = await (await fetch("/v1/timeseries?minutes=60")).json();
+    drawChart("chartDocs", series, "docs", getComputedStyle(document.documentElement).getPropertyValue("--chart-index").trim(), v => `${num(Math.round(v))} docs`);
+    drawChart("chartBw", series, "mb", getComputedStyle(document.documentElement).getPropertyValue("--chart-bw").trim(), v => `${Math.round(v)} MB`);
+  } catch (e) { /* charts are best-effort */ }
+}
+
+refresh();
+refreshFeed();
+refreshCharts();
+setInterval(refresh, 4000);
+setInterval(refreshFeed, 4000);
+setInterval(refreshCharts, 15000);
+</script>
+</body>
+</html>

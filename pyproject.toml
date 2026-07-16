@@ -1,0 +1,58 @@
+[project]
+name = "windex"
+version = "0.1.0"
+description = "Self-hosted web index (CC-News + GitHub projects) for search agents"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "pydantic-settings>=2.4",
+    "psycopg[binary]>=3.2",
+    "qdrant-client>=1.12",
+    "fastembed>=0.5",
+    "typer>=0.12",
+    "httpx>=0.27",
+    "pyarrow>=17",
+    "rich>=13",
+]
+
+[project.optional-dependencies]
+# CC-News / GH Archive processing (heavy: pulls trafilatura, fasttext, etc.)
+# trafilatura version is owned by datatrove's extra — don't pin it separately.
+pipeline = [
+    "datatrove[processing,io]>=0.4",
+    "spacy>=3.7",  # datatrove's en word tokenizer backend, not covered by its extras
+    "warcio>=1.7",
+    "zstandard>=0.23",
+]
+# Serving layer
+api = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "fastmcp>=2.0",
+]
+# Only needed if the user's embedding model runs in-process instead of behind HTTP
+st = [
+    "sentence-transformers>=3.0",
+]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+windex = "windex.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/windex"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
