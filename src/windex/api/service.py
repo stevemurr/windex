@@ -12,7 +12,7 @@ from windex.config import Settings
 from windex.index.search import search as index_search
 
 RESULT_FIELDS = ("url", "title", "snippet", "source", "published_at", "outlet",
-                 "stars", "language", "topics", "pushed_at", "lang")
+                 "stars", "language", "topics", "pushed_at", "lang", "incoming_links")
 
 
 def run_search(
@@ -135,15 +135,18 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
         bytes_30m = cur.fetchone()[0]
     news = docs.get("news", {})
     gh = docs.get("github", {})
+    wiki = docs.get("wiki", {})
     result = {
         "documents": docs,
         "repos": repos,
         "warc_files": warcs,
         "gharchive_files": hours,
         "totals": {
-            "indexed_pages": news.get("embedded", 0) + gh.get("embedded", 0),
+            "indexed_pages": news.get("embedded", 0) + gh.get("embedded", 0)
+            + wiki.get("embedded", 0),
             "news_articles": news.get("embedded", 0),
             "github_projects": gh.get("embedded", 0),
+            "wiki_articles": wiki.get("embedded", 0),
             "duplicates_collapsed": news.get("duplicate", 0),
             "news_outlets": outlets,
             "news_coverage": [
@@ -304,6 +307,7 @@ def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
         "stages": {
             "news": flags.get("news_stage", "idle"),
             "github": flags.get("gh_stage", "idle"),
+            "wiki": flags.get("wiki_stage", "idle"),
         },
         "downloading_bytes_on_disk": in_flight,
     }

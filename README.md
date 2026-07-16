@@ -18,6 +18,10 @@ themselves: Common Crawl's news feed, GH Archive's event stream, and the GitHub 
 - **GitHub projects** — indexes repository metadata and READMEs (not code): candidate
   discovery from GH Archive star events and Search-API sweeps, batched GraphQL hydration,
   README cleaning, and star-aware ranking.
+- **Wikipedia** — weekly [CirrusSearch index dumps](https://dumps.wikimedia.org/other/cirrus_search_index/)
+  with Wikimedia's own pre-extracted plain text (64 bzip2 shards, `_SUCCESS`-gated); the
+  text-hash ledger keeps weekly re-ingests to the changed-article delta instead of
+  re-embedding ~7M articles.
 - **Hybrid search** — dense vectors from *your* embedding model (any OpenAI/TEI-compatible
   endpoint, or in-process sentence-transformers) fused with BM25 sparse vectors via RRF in
   [Qdrant](https://qdrant.tech). Semantic queries and exact-name lookups both work.
@@ -104,6 +108,14 @@ uv run windex gh embed
 > `docs/wikipedia-sources.md` for the same verify-against-reality approach applied to the
 > next source.
 
+### Ingest Wikipedia
+
+```sh
+uv run windex wiki sync      # record the newest complete weekly snapshot (64 shards)
+uv run windex wiki ingest    # stream shards → clean parquet + ledger (delta only)
+uv run windex wiki embed     # embed staged articles into the wiki collection
+```
+
 ### Keep it fresh
 
 ```sh
@@ -178,9 +190,5 @@ outage behavior (fail-fast, circuit breakers), the job whitelist, and the API co
 
 ## Roadmap
 
-- **Wikipedia** as a third source — weekly
-  [CirrusSearch index dumps](https://dumps.wikimedia.org/other/cirrus_search_index/)
-  (pre-extracted plaintext, ~39 GB for English), delta-embedding via the text-hash ledger
-  (in progress; source analysis in `docs/wikipedia-sources.md`)
 - Cross-encoder reranking, per-passage chunking for long documents
-- Server log viewer in the console
+- Additional sources (the pattern generalizes: watermark table + idempotent batches + embed)

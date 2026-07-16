@@ -232,9 +232,65 @@ def gh_embed(limit: int = 100_000) -> None:
     console.print(f"[green]embedded {n} repos[/green]")
 
 
+wiki_app = typer.Typer(no_args_is_help=True, help="Wikipedia ingestion (CirrusSearch dumps)")
+app.add_typer(wiki_app, name="wiki")
+
+
+@wiki_app.command("sync")
+def wiki_sync() -> None:
+    """Record the newest complete Wikipedia snapshot's shard files as pending."""
+    from windex.wiki import sync as wsync
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        n = wsync.sync(conn, settings.wiki_dump)
+    console.print(f"[green]{n} new dump shards pending[/green]")
+
+
+@wiki_app.command("ingest")
+def wiki_ingest(
+    max_files: int = typer.Option(None, help="Stop after N shards (default: all pending)"),
+    chunk_rows: int = typer.Option(None, help="Rows per parquet row group / commit"),
+) -> None:
+    """Stream pending shards → clean parquet + documents ledger (changed-article delta)."""
+    from windex.wiki import ingest as wingest
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        stats = wingest.ingest(conn, settings, max_files=max_files, chunk_rows=chunk_rows)
+    console.print(stats)
+
+
+@wiki_app.command("embed")
+def wiki_embed(limit: int = 100_000) -> None:
+    """Embed staged Wikipedia articles into Qdrant. Respects the dashboard pause flag."""
+    from windex.wiki.embed_index import embed_pending
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        if db.get_control(conn, "indexing", "running") == "paused":
+            console.print("[yellow]paused — skipping embed[/yellow]")
+            raise typer.Exit(0)
+        n = embed_pending(conn, settings, limit=limit)
+    console.print(f"[green]embedded {n} articles[/green]")
+
+
+@wiki_app.command("status")
+def wiki_status() -> None:
+    """Dump-shard watermark + document pipeline counts."""
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT status, count(*) FROM wiki_dumps GROUP BY status ORDER BY status")
+        console.print({r[0]: r[1] for r in cur.fetchall()}, "wiki_dumps")
+        cur.execute(
+            "SELECT status, count(*) FROM documents WHERE source='wiki' GROUP BY status ORDER BY status"
+        )
+        console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
+
+
 @app.command()
 def reindex(
-    source: str = typer.Argument("all", help="news | repos | all"),
+    source: str = typer.Argument("all", help="news | repos | wiki | all"),
     drop_collections: bool = typer.Option(True, help="Recreate Qdrant collections from scratch"),
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation"),
 ) -> None:
@@ -269,8 +325,19 @@ def reindex(
                 qidx.ensure_collection(client, "repos", settings.embed_model, settings.embed_dim)
             cur.execute("UPDATE repos SET status='hydrated' WHERE status='embedded'")
             console.print(f"[green]repos: {cur.rowcount} queued for re-embed[/green]")
+        if source in ("wiki", "all"):
+            if drop_collections:
+                name = qidx.collection_name("wiki", settings.embed_model)
+                if client.collection_exists(name):
+                    client.delete_collection(name)
+                qidx.ensure_collection(client, "wiki", settings.embed_model, settings.embed_dim)
+            cur.execute(
+                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
+                   WHERE source='wiki' AND status='embedded'"""
+            )
+            console.print(f"[green]wiki: {cur.rowcount} docs queued for re-embed[/green]")
         conn.commit()
-    console.print("run `windex ccnews embed-loop` and `windex gh embed` to repopulate")
+    console.print("run `windex ccnews embed-loop`, `windex gh embed`, `windex wiki embed` to repopulate")
 
 
 @app.command()

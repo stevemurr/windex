@@ -28,7 +28,7 @@ def dashboard() -> HTMLResponse:
 @app.get("/v1/search")
 def search(
     q: str = Query(min_length=1),
-    source: Literal["news", "github", "all"] = "all",
+    source: Literal["news", "github", "wiki", "all"] = "all",
     limit: int = Query(10, ge=1, le=50),
     mode: Literal["hybrid", "dense", "lexical"] = "hybrid",
     published_after: datetime | None = None,

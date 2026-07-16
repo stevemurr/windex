@@ -27,6 +27,16 @@ def test_build_argv_choice_and_date_validation():
         jobs.build_argv(jobs.JOBS["gh-discover"], {"created_from": "not-a-date"})
 
 
+def test_build_argv_wiki_jobs():
+    assert jobs.build_argv(jobs.JOBS["wiki-sync"], {})[1:] == ["wiki", "sync"]
+    argv = jobs.build_argv(jobs.JOBS["wiki-ingest"], {"max_files": 3})
+    assert argv[1:] == ["wiki", "ingest", "--max-files", "3"]
+    with pytest.raises(ValueError, match="out of range"):
+        jobs.build_argv(jobs.JOBS["wiki-ingest"], {"max_files": 999})
+    argv = jobs.build_argv(jobs.JOBS["wiki-embed"], {"limit": 5000})
+    assert argv[1:] == ["wiki", "embed", "--limit", "5000"]
+
+
 def test_no_job_accepts_arbitrary_strings_into_argv():
     # every param is int, date, or enum — no free-text reaches the command line
     for job in jobs.JOBS.values():

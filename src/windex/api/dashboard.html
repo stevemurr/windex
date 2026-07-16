@@ -136,6 +136,7 @@
           color:var(--muted); font-size:.78rem; margin-top:.4rem; }
   .badge { border:1px solid var(--line); border-radius:99px; padding:.02rem .5rem; }
   .badge.src-news { color:var(--accent); border-color:var(--accent-soft); background:var(--accent-soft); }
+  .badge.src-wiki { color:var(--chart-bw); border-color:#3d6ea533; background:#3d6ea51a; }
   .url { font-family:var(--mono); font-size:.72rem; overflow:hidden; text-overflow:ellipsis;
          white-space:nowrap; max-width:100%; }
   .snippet { margin:.55rem 0 0; font-size:.88rem; color:var(--ink);
@@ -242,7 +243,7 @@
 
   <section id="tab-search" class="tabpane">
   <form id="f">
-    <input id="q" type="search" placeholder="Search news and GitHub projects…"
+    <input id="q" type="search" placeholder="Search news, GitHub projects, and Wikipedia…"
            autocomplete="off" autofocus>
     <button type="submit">Search</button>
   </form>
@@ -251,6 +252,7 @@
       <label><input type="radio" name="source" value="all" checked>Everything</label>
       <label><input type="radio" name="source" value="news">News</label>
       <label><input type="radio" name="source" value="github">GitHub</label>
+      <label><input type="radio" name="source" value="wiki">Wiki</label>
     </div>
     <span class="mode">
       <select id="mode" aria-label="Retrieval mode">
@@ -454,6 +456,7 @@ function renderStats(s) {
       `<div class="total"><div class="v">${num(t.indexed_pages)}</div><div class="k">pages indexed</div></div>` +
       `<div class="total"><div class="v">${num(t.news_articles)}</div><div class="k">news articles</div></div>` +
       `<div class="total"><div class="v">${num(t.github_projects)}</div><div class="k">GitHub projects</div></div>` +
+      `<div class="total"><div class="v">${num(t.wiki_articles)}</div><div class="k">Wikipedia articles</div></div>` +
       `<div class="total"><div class="v">${num(t.news_outlets)}</div><div class="k">news outlets</div></div>` +
       `<div class="total"><div class="v">${num(t.duplicates_collapsed)}</div><div class="k">duplicates collapsed</div></div>` +
       (covA ? `<div id="coverage">news coverage ${covA} → ${covB}</div>` : "");
@@ -590,7 +593,7 @@ async function refreshWorkers() {
 }
 
 // --- operations: whitelisted CLI jobs, start/stop from the page ---
-const CATS = { news: "News pipeline", github: "GitHub pipeline", maintenance: "Maintenance" };
+const CATS = { news: "News pipeline", github: "GitHub pipeline", wiki: "Wiki pipeline", maintenance: "Maintenance" };
 
 function paramInput(job, key, spec) {
   const id = `p-${job.name}-${key}`;

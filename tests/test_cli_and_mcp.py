@@ -34,7 +34,19 @@ def test_cli_status_and_retry_failed(settings, pg, monkeypatch):
 def test_cli_ensure_collections(settings, qclient, monkeypatch):
     _use_test_settings(monkeypatch, settings)
     r = runner.invoke(app, ["ensure-collections"])
-    assert r.exit_code == 0 and "news_current" in r.output
+    assert r.exit_code == 0 and "news_current" in r.output and "wiki_current" in r.output
+
+
+def test_cli_wiki_status(settings, pg, monkeypatch):
+    _use_test_settings(monkeypatch, settings)
+    with pg.cursor() as cur:
+        cur.execute(
+            "INSERT INTO wiki_dumps (name, dump_date, status) "
+            "VALUES ('enwiki_content-20260712-00000.json.bz2', '20260712', 'done')"
+        )
+    pg.commit()
+    r = runner.invoke(app, ["wiki", "status"])
+    assert r.exit_code == 0 and "done" in r.output
 
 
 def test_reindex_resets_statuses_and_recreates_collections(settings, pg, qclient, monkeypatch):
