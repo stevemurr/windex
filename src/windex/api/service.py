@@ -238,5 +238,14 @@ def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
         vectors = {"error": "qdrant unreachable"}
 
     stats["vectors"] = vectors
-    stats["activity"] = {**stats["activity"], "control": get_control(settings)}
+    # live, uncached extras: control flag and in-flight download bytes
+    in_flight = 0
+    for d in (settings.ccnews_downloads_dir, settings.gharchive_downloads_dir):
+        if d.exists():
+            in_flight += sum(f.stat().st_size for f in d.iterdir() if f.is_file())
+    stats["activity"] = {
+        **stats["activity"],
+        "control": get_control(settings),
+        "downloading_bytes_on_disk": in_flight,
+    }
     return stats

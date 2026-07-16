@@ -225,7 +225,14 @@ function stat(k, v, sub, barPct) {
 
 async function refresh() {
   try {
-    const s = await (await fetch("/v1/stats")).json();
+    renderStats(await (await fetch("/v1/stats")).json());
+  } catch (e) {
+    document.getElementById("liveLabel").textContent = "stats unavailable";
+  }
+}
+
+function renderStats(s) {
+  try {
     const w = s.warc_files || {}, d = (s.documents || {}).news || {}, r = s.repos || {},
           g = s.gharchive_files || {}, v = s.vectors || {};
     const wDone = w.done || 0,
@@ -235,9 +242,11 @@ async function refresh() {
     const act = s.activity || {};
     const busy = (act.warcs_processing || 0) > 0 || (act.indexed_last_2m || 0) > 0;
     const queued = (w.pending || 0) + (g.pending || 0) + backlog;
+    const inflight = act.downloading_bytes_on_disk || 0;
     $("liveDot").className = busy ? "busy" : "";
     document.getElementById("liveLabel").textContent =
-      busy ? "indexing" : queued ? `idle — ${num(queued)} queued` : "up to date";
+      busy ? (inflight > 5e8 ? `indexing — ${(inflight / 1e9).toFixed(1)} GB batch in flight` : "indexing")
+           : queued ? `idle — ${num(queued)} queued` : "up to date";
     const ctl = document.getElementById("ctl");
     ctl.style.display = "";
     if (act.control === "paused") {
@@ -291,7 +300,12 @@ function ago(iso) {
 
 async function refreshFeed() {
   try {
-    const rows = await (await fetch("/v1/recent?limit=25")).json();
+    renderFeed(await (await fetch("/v1/recent?limit=25")).json());
+  } catch (e) { /* feed is best-effort */ }
+}
+
+function renderFeed(rows) {
+  try {
     if (!rows.length) return;
     document.getElementById("feed").innerHTML = rows.map(r => `
       <div class="feedrow">
@@ -353,18 +367,32 @@ function drawChart(rootId, series, field, color, fmt) {
 
 async function refreshCharts() {
   try {
-    const series = await (await fetch("/v1/timeseries?minutes=60")).json();
-    drawChart("chartDocs", series, "docs", getComputedStyle(document.documentElement).getPropertyValue("--chart-index").trim(), v => `${num(Math.round(v))} docs`);
-    drawChart("chartBw", series, "mb", getComputedStyle(document.documentElement).getPropertyValue("--chart-bw").trim(), v => `${Math.round(v)} MB`);
+    renderCharts(await (await fetch("/v1/timeseries?minutes=60")).json());
   } catch (e) { /* charts are best-effort */ }
+}
+
+function renderCharts(series) {
+  try {
+    const css = getComputedStyle(document.documentElement);
+    drawChart("chartDocs", series, "docs", css.getPropertyValue("--chart-index").trim(), v => `${num(Math.round(v))} docs`);
+    drawChart("chartBw", series, "mb", css.getPropertyValue("--chart-bw").trim(), v => `${Math.round(v)} MB`);
+  } catch (e) { /* charts are best-effort */ }
+}
+
+// SSE keeps the page realtime; EventSource auto-reconnects on drops, and a
+// dropped connection also triggers one manual refresh as a bridge.
+function connectEvents() {
+  const es = new EventSource("/v1/events");
+  es.addEventListener("stats", e => renderStats(JSON.parse(e.data)));
+  es.addEventListener("recent", e => renderFeed(JSON.parse(e.data)));
+  es.addEventListener("timeseries", e => renderCharts(JSON.parse(e.data)));
+  es.onerror = () => refresh();
 }
 
 refresh();
 refreshFeed();
 refreshCharts();
-setInterval(refresh, 4000);
-setInterval(refreshFeed, 4000);
-setInterval(refreshCharts, 15000);
+connectEvents();
 </script>
 </body>
 </html>

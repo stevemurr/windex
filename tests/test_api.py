@@ -76,6 +76,16 @@ def test_recent_endpoint_orders_by_indexed_at(client, pg):
     assert client.get("/v1/recent", params={"limit": 0}).status_code == 422
 
 
+def test_events_stream_emits_sse(client, pg):
+    with client.stream("GET", "/v1/events", params={"ticks": 1}) as r:
+        assert r.headers["content-type"].startswith("text/event-stream")
+        body = "".join(r.iter_text())
+    assert "event: stats" in body
+    assert "event: recent" in body
+    assert "event: timeseries" in body
+    assert '"totals"' in body  # stats payload is the full contract object
+
+
 def test_control_endpoint_toggles_and_shows_in_stats(client, pg):
     assert client.post("/v1/control/pause").json() == {"indexing": "paused"}
     service_mod._pg_stats_cache.clear()
