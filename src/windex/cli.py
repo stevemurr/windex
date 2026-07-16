@@ -409,9 +409,73 @@ def smallweb_status() -> None:
         console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
 
 
+docs_app = typer.Typer(no_args_is_help=True, help="Programming docs ingestion (DevDocs bundles)")
+app.add_typer(docs_app, name="docs")
+
+
+@docs_app.command("sync")
+def docs_sync() -> None:
+    """Fetch the DevDocs manifest and upsert the docsets watermark table."""
+    from windex.docs_source import sync as dsync
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        stats = dsync.sync(conn, url=settings.docs_manifest_url)
+        pending = dsync.pending_docsets(conn, settings.docs_slug_list())
+    console.print(stats)
+    console.print(f"[green]{len(pending)} seed docsets pending ingest[/green]")
+
+
+@docs_app.command("ingest")
+def docs_ingest(
+    max_docsets: int = typer.Option(None, help="Stop after N docsets (default: all pending)"),
+) -> None:
+    """Fetch pending docsets → clean parquet + documents ledger (changed-page
+    delta; vanished pages tombstoned). Full-replace per slug; idempotent."""
+    from windex.docs_source import ingest as dingest
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        stats = dingest.ingest(conn, settings, max_docsets=max_docsets)
+    console.print(stats)
+
+
+@docs_app.command("embed")
+def docs_embed(limit: int = 100_000) -> None:
+    """Embed staged documentation pages into Qdrant. Respects the dashboard pause flag."""
+    from windex.docs_source.embed_index import embed_pending
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        if db.get_control(conn, "indexing", "running") == "paused":
+            console.print("[yellow]paused — skipping embed[/yellow]")
+            raise typer.Exit(0)
+        n = embed_pending(conn, settings, limit=limit)
+    console.print(f"[green]embedded {n} pages[/green]")
+
+
+@docs_app.command("status")
+def docs_status() -> None:
+    """Docset watermark + document pipeline counts."""
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT status, count(*) FROM docsets GROUP BY status ORDER BY status")
+        console.print({r[0]: r[1] for r in cur.fetchall()}, "docsets")
+        cur.execute(
+            """SELECT count(*) FROM docsets WHERE slug = ANY(%s)
+               AND (ingested_mtime IS NULL OR mtime > ingested_mtime)""",
+            (settings.docs_slug_list(),),
+        )
+        console.print(f"seed docsets pending ingest: {cur.fetchone()[0]}")
+        cur.execute(
+            "SELECT status, count(*) FROM documents WHERE source='docs' GROUP BY status ORDER BY status"
+        )
+        console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
+
+
 @app.command()
 def reindex(
-    source: str = typer.Argument("all", help="news | repos | wiki | arxiv | smallweb | all"),
+    source: str = typer.Argument("all", help="news | repos | wiki | arxiv | smallweb | docs | all"),
     drop_collections: bool = typer.Option(True, help="Recreate Qdrant collections from scratch"),
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation"),
 ) -> None:
@@ -479,10 +543,21 @@ def reindex(
                    WHERE source='smallweb' AND status='embedded'"""
             )
             console.print(f"[green]smallweb: {cur.rowcount} docs queued for re-embed[/green]")
+        if source in ("docs", "all"):
+            if drop_collections:
+                name = qidx.collection_name("docs", settings.embed_model)
+                if client.collection_exists(name):
+                    client.delete_collection(name)
+                qidx.ensure_collection(client, "docs", settings.embed_model, settings.embed_dim)
+            cur.execute(
+                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
+                   WHERE source='docs' AND status='embedded'"""
+            )
+            console.print(f"[green]docs: {cur.rowcount} docs queued for re-embed[/green]")
         conn.commit()
     console.print(
         "run `windex ccnews embed-loop`, `windex gh embed`, `windex wiki embed`, "
-        "`windex arxiv embed`, `windex smallweb embed` to repopulate"
+        "`windex arxiv embed`, `windex smallweb embed`, `windex docs embed` to repopulate"
     )
 
 

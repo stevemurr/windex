@@ -143,8 +143,10 @@
   .badge.src-wiki { color:var(--chart-bw); border-color:#3d6ea533; background:#3d6ea51a; }
   .badge.src-arxiv { color:#b31b1b; border-color:#b31b1b33; background:#b31b1b14; }
   .badge.src-smallweb { color:#2f8f5b; border-color:#2f8f5b33; background:#2f8f5b1a; }
+  .badge.src-docs { color:#6d4fc2; border-color:#6d4fc233; background:#6d4fc214; }
   @media (prefers-color-scheme:dark) { .badge.src-arxiv { color:#e06b6b; border-color:#e06b6b33; background:#e06b6b14; }
-    .badge.src-smallweb { color:#57c98a; border-color:#57c98a33; background:#57c98a14; } }
+    .badge.src-smallweb { color:#57c98a; border-color:#57c98a33; background:#57c98a14; }
+    .badge.src-docs { color:#a68bf0; border-color:#a68bf033; background:#a68bf014; } }
   .url { font-family:var(--mono); font-size:.72rem; overflow:hidden; text-overflow:ellipsis;
          white-space:nowrap; max-width:100%; }
   .snippet { margin:.55rem 0 0; font-size:.88rem; color:var(--ink);
@@ -253,7 +255,7 @@
 
   <section id="tab-search" class="tabpane">
   <form id="f">
-    <input id="q" type="search" placeholder="Search news, GitHub projects, Wikipedia, arXiv, and the Small Web…"
+    <input id="q" type="search" placeholder="Search news, GitHub projects, Wikipedia, arXiv, the Small Web, and programming docs…"
            autocomplete="off" autofocus>
     <button type="submit">Search</button>
   </form>
@@ -265,6 +267,7 @@
       <label><input type="radio" name="source" value="wiki">Wiki</label>
       <label><input type="radio" name="source" value="arxiv">arXiv</label>
       <label><input type="radio" name="source" value="smallweb">Small Web</label>
+      <label><input type="radio" name="source" value="docs">Docs</label>
     </div>
     <span class="mode">
       <select id="mode" class="pillselect" aria-label="Retrieval mode">
@@ -489,6 +492,7 @@ function renderStats(s) {
       `<div class="total"><div class="v">${num(t.wiki_articles)}</div><div class="k">Wikipedia articles</div></div>` +
       `<div class="total"><div class="v">${num(t.arxiv_papers)}</div><div class="k">arXiv papers</div></div>` +
       `<div class="total"><div class="v">${num(t.smallweb_posts)}</div><div class="k">Small Web posts</div></div>` +
+      `<div class="total"><div class="v">${num(t.docs_pages)}</div><div class="k">docs pages</div></div>` +
       `<div class="total"><div class="v">${num(t.news_outlets)}</div><div class="k">news outlets</div></div>` +
       `<div class="total"><div class="v">${num(t.duplicates_collapsed)}</div><div class="k">duplicates collapsed</div></div>` +
       (covA ? `<div id="coverage">news coverage ${covA} → ${covB}</div>` : "");
@@ -630,7 +634,7 @@ async function refreshWorkers() {
 }
 
 // --- operations: whitelisted CLI jobs, start/stop from the page ---
-const CATS = { news: "News pipeline", github: "GitHub pipeline", wiki: "Wiki pipeline", arxiv: "arXiv pipeline", smallweb: "Small Web pipeline", maintenance: "Maintenance" };
+const CATS = { news: "News pipeline", github: "GitHub pipeline", wiki: "Wiki pipeline", arxiv: "arXiv pipeline", smallweb: "Small Web pipeline", docs: "Docs pipeline", maintenance: "Maintenance" };
 
 function paramInput(job, key, spec) {
   const id = `p-${job.name}-${key}`;

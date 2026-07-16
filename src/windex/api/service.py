@@ -13,7 +13,8 @@ from windex.index.search import search as index_search
 
 RESULT_FIELDS = ("url", "title", "snippet", "source", "published_at", "outlet",
                  "stars", "language", "topics", "pushed_at", "lang", "incoming_links",
-                 "primary_category", "categories", "authors")
+                 "primary_category", "categories", "authors",
+                 "framework", "version", "attribution")
 
 
 def run_search(
@@ -28,12 +29,14 @@ def run_search(
     language: str | None = None,
     category: str | None = None,
     outlet: str | None = None,
+    framework: str | None = None,
 ) -> dict:
     t0 = time.monotonic()
     resp = index_search(
         settings, q, source=source, limit=limit, mode=mode,
         published_after=published_after, published_before=published_before,
         min_stars=min_stars, language=language, category=category, outlet=outlet,
+        framework=framework,
     )
     results = []
     for r in resp["results"]:
@@ -144,6 +147,7 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
     wiki = docs.get("wiki", {})
     arxiv = docs.get("arxiv", {})
     smallweb = docs.get("smallweb", {})
+    progdocs = docs.get("docs", {})
     result = {
         "documents": docs,
         "repos": repos,
@@ -152,12 +156,13 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
         "totals": {
             "indexed_pages": news.get("embedded", 0) + gh.get("embedded", 0)
             + wiki.get("embedded", 0) + arxiv.get("embedded", 0)
-            + smallweb.get("embedded", 0),
+            + smallweb.get("embedded", 0) + progdocs.get("embedded", 0),
             "news_articles": news.get("embedded", 0),
             "github_projects": gh.get("embedded", 0),
             "wiki_articles": wiki.get("embedded", 0),
             "arxiv_papers": arxiv.get("embedded", 0),
             "smallweb_posts": smallweb.get("embedded", 0),
+            "docs_pages": progdocs.get("embedded", 0),
             "duplicates_collapsed": news.get("duplicate", 0),
             "news_outlets": outlets,
             "news_coverage": [
@@ -328,6 +333,7 @@ def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
             "wiki": flags.get("wiki_stage", "idle"),
             "arxiv": flags.get("arxiv_stage", "idle"),
             "smallweb": flags.get("smallweb_stage", "idle"),
+            "docs": flags.get("docs_stage", "idle"),
         },
         "downloading_bytes_on_disk": in_flight,
     }

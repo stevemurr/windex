@@ -68,6 +68,20 @@ class Settings(BaseSettings):
     smallweb_min_chars: int = 200           # light quality gate: minimum post length
     smallweb_inline_summary_min: int = 600  # a description this long is a full-text feed (no page fetch)
 
+    # Programming docs (DevDocs pre-built bundles, https://devdocs.io/docs.json).
+    # docs_slugs is the seed list: which of the ~819 docsets to index, comma-
+    # separated. The default covers the mainstream stack; the whales (openjdk
+    # 120MB, dom 63MB, cpp 42MB) are deliberately excluded — add them per need.
+    # Version-pinned slugs (python~3.14, postgresql~18, …) should be bumped in
+    # step with the canonical-URL table (docs_source/canonical.py).
+    docs_manifest_url: str = "https://devdocs.io/docs.json"
+    docs_cdn_url: str = "https://documents.devdocs.io"
+    docs_slugs: str = (
+        "python~3.14,javascript,typescript,node,go,rust,c,react,vue~3,html,css,"
+        "http,postgresql~18,git,bash,php,ruby~3.4,django~6.1,flask,tailwindcss,"
+        "docker,kubernetes"
+    )
+
     github_tokens: str = ""  # comma-separated PATs for hydration
 
     @property
@@ -110,6 +124,14 @@ class Settings(BaseSettings):
     def smallweb_staging_dir(self) -> Path:
         return self.staging_dir / "smallweb"
 
+    @property
+    def docs_downloads_dir(self) -> Path:
+        return self.downloads_dir / "docs"
+
+    @property
+    def docs_staging_dir(self) -> Path:
+        return self.staging_dir / "docs"
+
     def all_dirs(self) -> list[Path]:
         return [
             self.ccnews_downloads_dir,
@@ -119,10 +141,15 @@ class Settings(BaseSettings):
             self.wiki_staging_dir,
             self.arxiv_staging_dir,
             self.smallweb_staging_dir,
+            self.docs_downloads_dir,
+            self.docs_staging_dir,
         ]
 
     def github_token_list(self) -> list[str]:
         return [t.strip() for t in self.github_tokens.split(",") if t.strip()]
+
+    def docs_slug_list(self) -> list[str]:
+        return [s.strip() for s in self.docs_slugs.split(",") if s.strip()]
 
 
 def get_settings() -> Settings:

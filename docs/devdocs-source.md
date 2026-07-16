@@ -19,6 +19,25 @@ comes from the open-source scraper defs (`lib/docs/scrapers/<name>.rb`) — NOT 
 seed set; rules group by scraper family: sphinx=+.html, MDN=no suffix). Verified live for
 python (docs.python.org/3.14/... #anchor → 200) and MDN.
 
+### Build findings (2026-07-16, implemented in `src/windex/docs_source/`)
+- **Per-page exact upstream URL comes free**: DevDocs' attribution filter appends
+  `<a href="<scraped url>" class="_attribution-link">` to every page scraped over HTTP
+  (verified 59/59 flask, 81/81 vue~3 pages). This is the PRIMARY canonical source — it
+  survives the fact that DevDocs **lowercases all page paths** (`normalize_paths.rb`),
+  which breaks table-based reconstruction against case-sensitive upstreams
+  (doc.rust-lang.org, react.dev, docs.ruby-lang.org, gnu.org all 404 on lowercased
+  mixed-case pages; MDN 301-redirects them, verified). Locally-scraped docsets (go)
+  carry no link (`base_url.host == 'localhost'` guard in their filter) → table fallback.
+- The rule table gained a third family, `"dir"`, for dirhtml-style upstreams where
+  DevDocs' trailing-slash pages became `…/index` paths (flask, django, docker,
+  kubernetes, go→pkg.go.dev): strip the trailing `index` segment. Sixteen fallback
+  constructions verified live (200/301/302); known-imperfect fallbacks (bash, ruby
+  mixed-case pages — both file-scraped) are documented in `canonical.py`.
+- Full-replace per slug means the staging parquet (`docs/clean/<slug>.parquet`) is
+  rewritten with the FULL live page set each refresh — unchanged pages must stay
+  readable at their `text_ref` — while the text-hash-guarded ledger upsert keeps
+  re-embedding to the changed delta and vanished pages are tombstoned.
+
 ## Refresh pattern
 Re-fetch the 363KB manifest; re-pull `db.json` only for slugs whose `mtime` advanced;
 full-replace that slug's staging partition (no per-page deltas upstream). Exactly the

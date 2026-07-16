@@ -1,8 +1,8 @@
 -- windex schema. Idempotent: applied via `windex init-db` on every deploy.
 
 CREATE TABLE IF NOT EXISTS documents (
-    id             text PRIMARY KEY,          -- stable API id: news:<hash> | gh:owner/repo | wiki:<page_id> | arxiv:<paper_id> | smallweb:<hash>
-    source         text NOT NULL,             -- news | github | wiki | arxiv | smallweb
+    id             text PRIMARY KEY,          -- stable API id: news:<hash> | gh:owner/repo | wiki:<page_id> | arxiv:<paper_id> | smallweb:<hash> | docs:<slug>/<path>
+    source         text NOT NULL,             -- news | github | wiki | arxiv | smallweb | docs
     url            text NOT NULL,
     canonical_url  text,
     title          text,
@@ -107,6 +107,27 @@ CREATE TABLE IF NOT EXISTS feeds (
 );
 CREATE INDEX IF NOT EXISTS feeds_status_idx ON feeds (status);
 CREATE INDEX IF NOT EXISTS feeds_last_polled_idx ON feeds (last_polled);
+
+-- Freshness watermark for programming docs (DevDocs pre-built bundles): one row
+-- per docset ever seen in the manifest (https://devdocs.io/docs.json). The
+-- manifest's per-docset `mtime` is THE upstream freshness signal: a docset is
+-- pending when it is in the configured seed list and mtime > ingested_mtime.
+-- Ingest is full-replace per slug (no per-page deltas upstream); the
+-- documents.text_hash ledger keeps a refresh to the changed-page delta, and
+-- pages that vanished from the new bundle are tombstoned. attribution is the
+-- upstream license HTML — stored here and carried into search payloads.
+CREATE TABLE IF NOT EXISTS docsets (
+    slug           text PRIMARY KEY,            -- e.g. python~3.14, javascript
+    release        text,                        -- upstream version (e.g. 3.14.6)
+    mtime          bigint,                      -- upstream freshness watermark (unix)
+    db_size        bigint,                      -- db.json bytes (bandwidth accounting)
+    attribution    text,                        -- upstream license/attribution HTML
+    status         text NOT NULL DEFAULT 'pending',  -- pending | processing | done | failed
+    ingested_mtime bigint,                      -- mtime last fully ingested (NULL = never)
+    doc_counts     jsonb,                       -- per-docset pages/staged/skipped/deleted stats
+    processed_at   timestamptz
+);
+CREATE INDEX IF NOT EXISTS docsets_status_idx ON docsets (status);
 
 -- Rolling-window LSH index for near-dup detection across daily batches.
 CREATE TABLE IF NOT EXISTS minhash_bands (

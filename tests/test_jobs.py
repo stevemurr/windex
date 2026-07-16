@@ -61,6 +61,19 @@ def test_build_argv_smallweb_jobs():
         ["reindex", "smallweb", "--yes"]
 
 
+def test_build_argv_docs_jobs():
+    assert jobs.build_argv(jobs.JOBS["docs-sync"], {})[1:] == ["docs", "sync"]
+    argv = jobs.build_argv(jobs.JOBS["docs-ingest"], {"max_docsets": 5})
+    assert argv[1:] == ["docs", "ingest", "--max-docsets", "5"]
+    with pytest.raises(ValueError, match="out of range"):
+        jobs.build_argv(jobs.JOBS["docs-ingest"], {"max_docsets": 9999})
+    assert jobs.build_argv(jobs.JOBS["docs-embed"], {"limit": 5000})[1:] == \
+        ["docs", "embed", "--limit", "5000"]
+    # reindex now accepts docs as a source
+    assert jobs.build_argv(jobs.JOBS["reindex"], {"source": "docs"})[1:] == \
+        ["reindex", "docs", "--yes"]
+
+
 def test_arxiv_harvest_and_backfill_patterns_are_unambiguous():
     # both jobs launch `windex arxiv harvest`; their pgrep patterns must not
     # cross-match, or stopping one would kill the other (LAN-exposed control).

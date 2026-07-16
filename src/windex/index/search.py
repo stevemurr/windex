@@ -78,6 +78,16 @@ def _smallweb_filter(outlet: str | None, published_after: datetime | None,
     return conds
 
 
+def _docs_filter(framework: str | None):
+    # Programming-docs payloads index framework (slug base, keyword) and
+    # version (keyword), so framework filtering mirrors how github filters
+    # language. Docs pages carry no published_at (reference pages aren't dated).
+    conds = []
+    if framework:
+        conds.append(qm.FieldCondition(key="framework", match=qm.MatchValue(value=framework)))
+    return conds
+
+
 def _arxiv_filter(category: str | None, published_after: datetime | None,
                   published_before: datetime | None):
     # arXiv indexes primary_category (keyword) and published_at (submission date),
@@ -148,6 +158,7 @@ def search(
     language: str | None = None,
     category: str | None = None,
     outlet: str | None = None,
+    framework: str | None = None,
 ) -> list[dict]:
     client = QdrantClient(url=settings.qdrant_url)
     existing = {c.name for c in client.get_collections().collections}
@@ -185,6 +196,8 @@ def search(
     if source in ("smallweb", "all"):
         targets.append(("smallweb", qidx.alias_name("smallweb"),
                         _smallweb_filter(outlet, published_after, published_before)))
+    if source in ("docs", "all"):
+        targets.append(("docs", qidx.alias_name("docs"), _docs_filter(framework)))
     t_search = time.monotonic()
     for _, alias, conds in targets:
         if alias not in aliases and alias not in existing:
