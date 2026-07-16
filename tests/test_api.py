@@ -93,6 +93,36 @@ def test_search_surfaces_smallweb_result_fields(client, monkeypatch):
     assert res["id"] == "smallweb:abc" and res["outlet"] == "blog.example"
 
 
+def test_search_docs_source_and_framework_passthrough(client, monkeypatch):
+    captured = {}
+
+    def fake_search(settings, q, **kw):
+        captured.update(kw)
+        return {"results": [], "degraded": False, "timings": {"embed_query_ms": 0, "search_ms": 0}}
+
+    monkeypatch.setattr(service_mod, "index_search", fake_search)
+    r = client.get("/v1/search",
+                   params={"q": "list comprehension", "source": "docs", "framework": "python"})
+    assert r.status_code == 200
+    assert captured["source"] == "docs" and captured["framework"] == "python"
+
+
+def test_search_surfaces_docs_result_fields(client, monkeypatch):
+    canned = {
+        "results": [{"doc_id": "docs:python~3.14/library/functions", "score": 0.8,
+                     "url": "https://docs.python.org/3.14/library/functions.html",
+                     "title": "Built-in Functions", "snippet": "print(*objects)…",
+                     "source": "docs", "framework": "python", "version": "3.14.6",
+                     "attribution": "© 2001–2026 Python Software Foundation"}],
+        "degraded": False, "timings": {"embed_query_ms": 1, "search_ms": 1},
+    }
+    monkeypatch.setattr(service_mod, "index_search", lambda *a, **k: canned)
+    res = client.get("/v1/search", params={"q": "x", "source": "docs"}).json()["results"][0]
+    assert res["id"] == "docs:python~3.14/library/functions"
+    assert res["framework"] == "python" and res["version"] == "3.14.6"
+    assert res["url"].startswith("https://docs.python.org/") and "Foundation" in res["attribution"]
+
+
 def test_search_surfaces_arxiv_result_fields(client, monkeypatch):
     canned = {
         "results": [{"doc_id": "arxiv:2401.1", "score": 0.9,

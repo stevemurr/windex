@@ -36,6 +36,7 @@ def test_cli_ensure_collections(settings, qclient, monkeypatch):
     r = runner.invoke(app, ["ensure-collections"])
     assert r.exit_code == 0 and "news_current" in r.output and "wiki_current" in r.output
     assert "arxiv_current" in r.output and "smallweb_current" in r.output
+    assert "docs_current" in r.output
 
 
 def test_cli_wiki_status(settings, pg, monkeypatch):
@@ -73,6 +74,19 @@ def test_cli_smallweb_status(settings, pg, monkeypatch):
     pg.commit()
     r = runner.invoke(app, ["smallweb", "status"])
     assert r.exit_code == 0 and "active" in r.output and "dead" in r.output
+
+
+def test_cli_docs_status(settings, pg, monkeypatch):
+    _use_test_settings(monkeypatch, settings)
+    with pg.cursor() as cur:
+        cur.execute(
+            "INSERT INTO docsets (slug, release, mtime, status, ingested_mtime) VALUES "
+            "('flask', '3.1.1', 1739347690, 'done', 1739347690),"
+            "('vue~3', '3.5.38', 1782016732, 'pending', NULL)"
+        )
+    pg.commit()
+    r = runner.invoke(app, ["docs", "status"])
+    assert r.exit_code == 0 and "done" in r.output and "pending" in r.output
 
 
 def test_reindex_resets_statuses_and_recreates_collections(settings, pg, qclient, monkeypatch):

@@ -51,6 +51,15 @@ GitHub API, Wikimedia's dumps, arXiv's OAI feed, and the small-web blogs it poli
   C4/FineWeb — so legitimately short, idiosyncratic blog posts aren't over-rejected.
   windex links out to the blogs (traffic to the small web); it doesn't republish them.
   See [`docs/smallweb-source.md`](docs/smallweb-source.md).
+- **Programming docs** — reference documentation for the mainstream stack (Python,
+  MDN JavaScript/HTML/CSS, Go, Rust, PostgreSQL, React, Django, …) from
+  [DevDocs](https://devdocs.io)' pre-built bundles ([freeCodeCamp/devdocs](https://github.com/freeCodeCamp/devdocs)):
+  a 363KB manifest whose per-docset `mtime` is the freshness watermark, then one
+  `db.json` of cleaned HTML per docset — no scraping of 20+ documentation sites.
+  Search results link to the *official* docs (a per-page scraped-from URL plus a
+  maintained canonical-URL table), carry the upstream version, and surface each
+  docset's upstream license attribution. Which docsets to index is config
+  (`WINDEX_DOCS_SLUGS`). See [`docs/devdocs-source.md`](docs/devdocs-source.md).
 - **Hybrid search** — dense vectors from *your* embedding model (any OpenAI/TEI-compatible
   endpoint, or in-process sentence-transformers) fused with BM25 sparse vectors via RRF in
   [Qdrant](https://qdrant.tech). Semantic queries and exact-name lookups both work.
@@ -72,6 +81,7 @@ flowchart LR
         WK[Wikipedia dumps]
         AX[arXiv OAI-PMH]
         SW[Small Web feeds]
+        DV[DevDocs bundles]
     end
     subgraph pipeline [Pipeline]
         EX[extract + filter<br/>datatrove/FineWeb]
@@ -93,6 +103,7 @@ flowchart LR
     WK --> PQ
     AX --> PQ
     SW --> EX
+    DV --> PQ
     DD <--> PG
     EM <--> PG
     QD --> API --> DASH
@@ -181,6 +192,25 @@ uv run windex smallweb embed                   # embed staged posts into the sma
 > The list is MIT-licensed; windex links out to the blogs. See
 > [`docs/smallweb-source.md`](docs/smallweb-source.md) for the verified source facts.
 
+### Ingest programming docs
+
+```sh
+uv run windex docs sync      # fetch the DevDocs manifest into the docsets watermark
+uv run windex docs ingest    # fetch pending docsets → clean parquet + ledger (delta only)
+uv run windex docs embed     # embed staged pages into the docs collection
+```
+
+> **Why DevDocs bundles?** One manifest + one `db.json` per docset replaces
+> scraping 20+ documentation sites, and the manifest's per-docset `mtime` is a
+> real freshness watermark (a refresh re-pulls only docsets that changed, and
+> the text-hash ledger re-embeds only changed pages; pages that vanish are
+> tombstoned). Results still link to the *official* docs: DevDocs records each
+> page's scraped-from URL, backed by a maintained canonical-URL table
+> (`docs_source/canonical.py`) built from DevDocs' open-source scraper
+> definitions. Per-docset upstream licenses (PSF, CC-BY-SA, …) are stored and
+> surfaced as attribution in every payload — windex indexes + links out, it
+> doesn't republish. See [`docs/devdocs-source.md`](docs/devdocs-source.md).
+
 ### Keep it fresh
 
 ```sh
@@ -194,12 +224,13 @@ curl "http://127.0.0.1:8100/v1/search?q=vector+database&source=github&min_stars=
 curl "http://127.0.0.1:8100/v1/search?q=fed+rate+cut&source=news&published_after=2026-07-01"
 curl "http://127.0.0.1:8100/v1/search?q=diffusion+models&source=arxiv&category=cs.LG"
 curl "http://127.0.0.1:8100/v1/search?q=vim+config&source=smallweb&outlet=example.com"
+curl "http://127.0.0.1:8100/v1/search?q=list+comprehension&source=docs&framework=python"
 curl "http://127.0.0.1:8100/v1/docs/arxiv:2401.00001"     # stored abstract by stable id
 curl "http://127.0.0.1:8100/v1/stats"                     # totals + freshness watermarks
 ```
 
 Responses carry stable ids (`news:<hash>`, `gh:owner/repo`, `wiki:<page_id>`,
-`arxiv:<paper_id>`, `smallweb:<hash>`), snippets, per-source metadata,
+`arxiv:<paper_id>`, `smallweb:<hash>`, `docs:<slug>/<path>`), snippets, per-source metadata,
 and timing breakdowns (`embed_query_ms` / `search_ms`). Under heavy indexing load, hybrid
 queries degrade gracefully to keyword search after a deadline rather than stalling — the
 response says so explicitly. Full OpenAPI docs at `/docs`.
@@ -227,6 +258,7 @@ Everything is environment-driven (`WINDEX_*`, see `.env.example`). The important
 | `WINDEX_EMBED_QUERY_TIMEOUT` | Deadline before hybrid search degrades to keyword |
 | `WINDEX_GITHUB_TOKENS` | Comma-separated no-scope PATs for hydration |
 | `WINDEX_NEWS_BACKFILL_DAYS`, `WINDEX_REPO_STAR_THRESHOLD` | Corpus policy |
+| `WINDEX_DOCS_SLUGS` | Which DevDocs docsets to index (comma-separated slugs) |
 
 Model choice is config, not code: collections are named per model and served behind aliases,
 so a swap is re-embed from parquet + alias flip.
@@ -242,6 +274,7 @@ Each layer derives from the one beneath it. The pipeline *is* the recovery proce
 | Postgres | restore a dump, or re-run sync + processing (dedup makes re-runs idempotent) |
 | arXiv metadata | re-run `windex arxiv harvest` — the per-year windows are restartable and the text-hash ledger dedupes |
 | Small Web posts | re-run `windex smallweb poll` — the feeds watermark + text-hash ledger keep re-polls to genuinely new posts |
+| Programming docs | re-run `windex docs sync` + `docs ingest` — full-replace per docset; the text-hash ledger keeps it to the changed-page delta |
 | Everything | run the ingestion flow from the top |
 
 Battle-tested: an external-drive failure corrupted the vector store mid-backfill; the index

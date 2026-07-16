@@ -9,6 +9,7 @@ from conftest import QDRANT_URL
 
 import windex.arxiv.embed_index as arxiv_embed
 import windex.ccnews.embed_index as news_embed
+import windex.docs_source.embed_index as docs_embed
 import windex.github.embed_index as gh_embed
 import windex.smallweb.embed_index as smallweb_embed
 import windex.wiki.embed_index as wiki_embed
@@ -223,3 +224,54 @@ def test_smallweb_embed_pending(pg, settings, qclient, fake_embedder, monkeypatc
     assert {"doc_id", "url", "title", "snippet", "outlet", "published_at", "source"} <= set(p1)
     assert p1["source"] == "smallweb" and p1["outlet"] == "blog.one"
     assert p1["published_at"] == "2026-07-14T08:00:00+00:00"
+
+
+def test_docs_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
+    monkeypatch.setattr(docs_embed, "build_embedder", lambda s: fake_embedder)
+    text_ref = "docs/clean/flask.parquet"
+    path = settings.staging_dir / text_ref
+    path.parent.mkdir(parents=True, exist_ok=True)
+    long_attribution = "© 2010 Pallets. Licensed under the BSD 3-clause License. " * 10
+    pq.write_table(
+        pa.table({
+            "id": ["docs:flask/api/index", "docs:flask/installation/index"],
+            "url": ["https://flask.palletsprojects.com/en/stable/api/",
+                    "https://flask.palletsprojects.com/en/stable/installation/"],
+            "title": ["API Reference", "Installation"],
+            "framework": ["flask", "flask"],
+            "version": ["3.1.1", "3.1.1"],
+            "attribution": [long_attribution, long_attribution],
+            "text": ["abort() aborts a request. " * 30, "pip install flask. " * 30],
+        }),
+        path,
+    )
+    with pg.cursor() as cur:
+        cur.executemany(
+            """INSERT INTO documents (id, source, url, canonical_url, title, status, text_ref)
+               VALUES (%s, 'docs', %s, %s, %s, 'deduped', %s)""",
+            [("docs:flask/api/index", "https://flask.palletsprojects.com/en/stable/api/",
+              "https://flask.palletsprojects.com/en/stable/api/", "API Reference", text_ref),
+             ("docs:flask/installation/index",
+              "https://flask.palletsprojects.com/en/stable/installation/",
+              "https://flask.palletsprojects.com/en/stable/installation/", "Installation",
+              text_ref)],
+        )
+    pg.commit()
+
+    n = docs_embed.embed_pending(pg, settings, limit=10)
+    assert n == 2
+    with pg.cursor() as cur:
+        cur.execute("SELECT count(*) FROM documents WHERE source='docs' AND status='embedded' "
+                    "AND embedded_model=%s", (settings.embed_model,))
+        assert cur.fetchone()[0] == 2
+    assert _qdrant_count("docs__pytest-model") >= 2
+    pts = QdrantClient(url=QDRANT_URL).scroll("docs__pytest-model", limit=10, with_payload=True)[0]
+    payloads = {p.payload["doc_id"]: p.payload for p in pts}
+    p1 = payloads["docs:flask/api/index"]
+    assert {"doc_id", "url", "title", "snippet", "framework", "version",
+            "attribution", "source"} <= set(p1)
+    assert p1["source"] == "docs" and p1["framework"] == "flask" and p1["version"] == "3.1.1"
+    assert p1["url"] == "https://flask.palletsprojects.com/en/stable/api/"
+    assert len(p1["snippet"]) <= 400 and "abort()" in p1["snippet"]
+    # attribution rides along truncated — the payload is a credit, not the license text
+    assert len(p1["attribution"]) <= 200 and p1["attribution"].startswith("© 2010 Pallets")
