@@ -69,6 +69,11 @@ def control(action: Literal["start", "pause"]) -> dict:
     return {"indexing": service.set_control(get_settings(), value)}
 
 
+@app.get("/v1/workers")
+def workers() -> dict:
+    return service.get_worker_activity(get_settings())
+
+
 @app.get("/v1/jobs")
 def jobs_list() -> list[dict]:
     return jobs.list_jobs()
@@ -118,6 +123,8 @@ async def events(ticks: int | None = Query(None, ge=1, le=100)) -> StreamingResp
             if n % 3 == 0:
                 job_state = await run_in_threadpool(jobs.list_jobs)
                 yield f"event: jobs\ndata: {json.dumps(job_state)}\n\n"
+            worker_state = await run_in_threadpool(service.get_worker_activity, settings)
+            yield f"event: workers\ndata: {json.dumps(worker_state)}\n\n"
             n += 1
             if ticks is not None and n >= ticks:
                 return

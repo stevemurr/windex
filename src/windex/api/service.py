@@ -187,6 +187,45 @@ def get_recent(settings: Settings, limit: int = 30) -> list[dict]:
         ]
 
 
+def get_worker_activity(settings: Settings) -> dict:
+    """Live view into the current extraction batch: datatrove's per-worker task
+    logs + completion markers. Powers the Console's batch-workers panel."""
+    import re
+
+    with db.connect(settings.pg_dsn) as conn:
+        stage = db.get_control(conn, "news_stage", "idle")
+    match = re.search(r"batch (\S+)", stage)
+    if not match:
+        return {"active": False, "stage": stage}
+    bid = match.group(1)
+    logdir = settings.news_staging_dir / "logs" / bid
+    total = 0
+    input_files = logdir / "input_files.txt"
+    if input_files.exists():
+        total = len(input_files.read_text().splitlines())
+    completions = logdir / "completions"
+    done = len(list(completions.glob("*"))) if completions.exists() else 0
+    workers = []
+    for f in sorted((logdir / "logs").glob("task_*.log")) if (logdir / "logs").exists() else []:
+        try:
+            with open(f, "rb") as fh:
+                size = fh.seek(0, 2)
+                fh.seek(max(size - 2000, 0))
+                lines = [
+                    ln.strip() for ln in fh.read().decode(errors="replace").splitlines()
+                    if ln.strip()
+                ]
+            if lines:
+                # strip datatrove's timestamp/level prefix for display
+                line = re.sub(r"^[\d\-\s:.,|]+\w+\s+\|\s*", "", lines[-1])
+                workers.append({"task": f.stem.replace("task_", "worker "),
+                                "line": line[-160:]})
+        except OSError:
+            continue
+    return {"active": True, "stage": stage, "batch": bid,
+            "tasks_done": done, "tasks_total": total, "workers": workers[:32]}
+
+
 def get_timeseries(settings: Settings, minutes: int = 60) -> list[dict]:
     """Per-minute indexing and download volumes for the trailing window,
     zero-filled — feeds the dashboard charts."""

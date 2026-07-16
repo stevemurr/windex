@@ -152,6 +152,17 @@
   .total .k { color:var(--muted); font-size:.74rem; margin-top:.2rem; }
   #coverage { grid-column:1 / -1; text-align:center; color:var(--muted);
               font-size:.78rem; padding:.1rem 0 0; }
+  #workers { display:none; border:1px solid var(--line); border-radius:12px;
+             background:var(--panel); padding:.8rem 1rem; margin-bottom:.65rem; }
+  #workers.active { display:block; }
+  #workers .whead { display:flex; justify-content:space-between; align-items:baseline;
+                    gap:1rem; margin-bottom:.5rem; }
+  #workers .whead .k { color:var(--muted); font-size:.75rem; }
+  #workers .whead .v { font:600 .85rem var(--sans); font-variant-numeric:tabular-nums; }
+  #workers .wrow { display:flex; gap:.6rem; font:.7rem var(--mono); color:var(--muted);
+                   padding:.14rem 0; overflow:hidden; }
+  #workers .wrow .wid { color:var(--ink); flex-shrink:0; }
+  #workers .wrow .wline { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .ops { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:.65rem; }
   .op { background:var(--panel); border:1px solid var(--line); border-radius:12px;
         padding:.75rem .9rem; display:flex; flex-direction:column; gap:.4rem; }
@@ -245,6 +256,14 @@
     <div id="totals"></div>
     <h2>Activity</h2>
     <div class="stageline" id="stagesLine"></div>
+    <div id="workers">
+      <div class="whead">
+        <span class="k" id="wstage"></span>
+        <span class="v" id="wprogress"></span>
+      </div>
+      <div class="bar"><div id="wbar" style="width:0%"></div></div>
+      <div id="wrows" style="margin-top:.5rem"></div>
+    </div>
     <div class="rows" id="stats"></div>
     <div class="charts">
       <div class="chart" id="chartDocs">
@@ -514,6 +533,25 @@ function renderCharts(series) {
   } catch (e) { /* charts are best-effort */ }
 }
 
+// --- batch workers: live extraction/filtering activity from datatrove logs ---
+function renderWorkers(w) {
+  const panel = document.getElementById("workers");
+  if (!w.active) { panel.classList.remove("active"); return; }
+  panel.classList.add("active");
+  document.getElementById("wstage").textContent = w.stage;
+  document.getElementById("wprogress").textContent =
+    w.tasks_total ? `${w.tasks_done} / ${w.tasks_total} shards done` : "";
+  document.getElementById("wbar").style.width =
+    w.tasks_total ? `${Math.round(100 * w.tasks_done / w.tasks_total)}%` : "0%";
+  document.getElementById("wrows").innerHTML = (w.workers || []).map(r =>
+    `<div class="wrow"><span class="wid">${esc(r.task)}</span><span class="wline">${esc(r.line)}</span></div>`
+  ).join("");
+}
+
+async function refreshWorkers() {
+  try { renderWorkers(await (await fetch("/v1/workers")).json()); } catch (e) {}
+}
+
 // --- operations: whitelisted CLI jobs, start/stop from the page ---
 const CATS = { news: "News pipeline", github: "GitHub pipeline", maintenance: "Maintenance" };
 
@@ -581,6 +619,7 @@ function connectEvents() {
   es.addEventListener("recent", e => renderFeed(JSON.parse(e.data)));
   es.addEventListener("timeseries", e => renderCharts(JSON.parse(e.data)));
   es.addEventListener("jobs", e => renderJobs(JSON.parse(e.data)));
+  es.addEventListener("workers", e => renderWorkers(JSON.parse(e.data)));
   es.onerror = () => refresh();
 }
 
@@ -588,6 +627,7 @@ refresh();
 refreshFeed();
 refreshCharts();
 refreshJobs();
+refreshWorkers();
 connectEvents();
 </script>
 </body>

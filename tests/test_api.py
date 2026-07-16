@@ -91,6 +91,26 @@ def test_events_stream_emits_sse(client, pg):
     assert '"totals"' in body  # stats payload is the full contract object
 
 
+def test_workers_endpoint_reads_batch_activity(client, pg, settings):
+    from windex import db as wdb
+
+    assert client.get("/v1/workers").json()["active"] is False
+    wdb.set_control(pg, "news_stage", "extracting + filtering · batch 20260501-abcd1234")
+    logdir = settings.news_staging_dir / "logs" / "20260501-abcd1234"
+    (logdir / "logs").mkdir(parents=True)
+    (logdir / "completions").mkdir()
+    (logdir / "input_files.txt").write_text("a.warc.gz\nb.warc.gz\nc.warc.gz")
+    (logdir / "completions" / "00000").touch()
+    (logdir / "logs" / "task_00001.log").write_text(
+        "2026-07-16 10:00:00.123 | INFO | reader:read:206 - Reading input file b.warc.gz, 1/1\n"
+    )
+    w = client.get("/v1/workers").json()
+    assert w["active"] is True and w["batch"] == "20260501-abcd1234"
+    assert w["tasks_done"] == 1 and w["tasks_total"] == 3
+    assert w["workers"][0]["task"] == "worker 00001"
+    assert "Reading input file b.warc.gz" in w["workers"][0]["line"]
+
+
 def test_control_endpoint_toggles_and_shows_in_stats(client, pg):
     assert client.post("/v1/control/pause").json() == {"indexing": "paused"}
     service_mod._pg_stats_cache.clear()
