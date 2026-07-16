@@ -44,14 +44,18 @@ def _pending_refs(conn: psycopg.Connection, limit: int) -> dict[str, list[str]]:
 
 
 def _embed_and_upsert(batch: list[dict], embedder, bm25, client, collection: str,
-                      max_chars: int) -> list[str]:
+                      max_chars: int, throttle: float = 0.0) -> list[str]:
     """Runs in a worker thread: dense + sparse embed, then Qdrant upsert.
     Returns the doc ids. Postgres updates stay on the caller's thread."""
+    import time as time_mod
+
     texts = [
         ((r["title"] + "\n\n") if r["title"] else "") + r["text"][:max_chars]
         for r in batch
     ]
     dense = embedder.embed_batch(texts)
+    if throttle:
+        time_mod.sleep(throttle)  # leave the embedding server a gap for queries
     sparse = list(bm25.embed(texts))
     points = [
         qm.PointStruct(
@@ -103,7 +107,8 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 50_
                 for start in range(0, len(rows), settings.embed_batch_size)
             ]
             futures = [
-                pool.submit(_embed_and_upsert, b, embedder, bm25, client, collection, max_chars)
+                pool.submit(_embed_and_upsert, b, embedder, bm25, client, collection,
+                            max_chars, settings.embed_throttle_seconds)
                 for b in batches
             ]
             # psycopg connections aren't thread-safe: commit progress here as

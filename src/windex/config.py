@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     embed_max_tokens: int = 512
     embed_batch_size: int = 64
     embed_concurrency: int = 8  # in-flight requests; GPU servers batch these
+    # Pause per worker between batches: creates idle gaps on the embedding
+    # server so live queries aren't stuck behind indexing (0 = full speed)
+    embed_throttle_seconds: float = 0.0
     # Prepended to *queries* only (retrieval-instruction models like qwen3-embedding)
     embed_query_prefix: str = ""
     # Query-time embedding deadline; hybrid search degrades to lexical past it
