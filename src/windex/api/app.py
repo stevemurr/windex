@@ -72,6 +72,13 @@ def _stats_with_uptime(settings) -> dict:
     return body
 
 
+@app.get("/v1/metrics")
+def metrics(minutes: int = Query(60, ge=1, le=43200)) -> dict:
+    """Search-performance rollup: latency percentiles + hybrid→keyword
+    degradation counts over the trailing window."""
+    return service.get_search_metrics(get_settings(), minutes=minutes)
+
+
 @app.get("/v1/recent")
 def recent(limit: int = Query(30, ge=1, le=100)) -> list[dict]:
     return service.get_recent(get_settings(), limit=limit)

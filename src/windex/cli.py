@@ -597,6 +597,12 @@ def daily(embed: bool = True) -> None:
             for d in batch_logs.iterdir():
                 if d.is_dir() and d.stat().st_mtime < cutoff:
                     shutil.rmtree(d, ignore_errors=True)
+
+        # retention: search_metrics grows one row per query forever otherwise
+        from windex.api import service as api_service
+
+        pruned = api_service.prune_search_metrics(conn, days=30)
+        console.print(f"search metrics: pruned {pruned} rows older than 30d")
         if settings.github_token_list():
             from windex.github import hydrate as gh_hydrate_mod
 

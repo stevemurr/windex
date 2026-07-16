@@ -637,7 +637,10 @@ function renderStats(s) {
       stat("Fresh through", throughFmt, "news indexed to this date") +
       stat("Downloaded", dlTotal >= 1e9 ? `${(dlTotal / 1e9).toFixed(1)} GB` : `${Math.round(dlTotal / 1e6)} MB`,
            "total, all sources") +
-      stat("Duplicates collapsed", num(t.duplicates_collapsed), "syndication + re-crawls");
+      stat("Duplicates collapsed", num(t.duplicates_collapsed), "syndication + re-crawls") +
+      stat("Search p95 (1h)", act.searches_1h ? `${num(act.search_p95_ms)} ms` : "—",
+           act.degraded_recent ? `${num(act.degraded_recent)} degraded to keyword`
+                               : act.searches_1h ? "no degraded searches" : "no searches yet");
   } catch (e) {
     document.getElementById("liveLabel").textContent = "stats unavailable";
   }
