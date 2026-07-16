@@ -58,14 +58,28 @@
   @keyframes pulse { 50% { opacity:.35; } }
   @media (prefers-reduced-motion: reduce) { #liveDot.busy i { animation:none; } }
 
-  nav.tabs { display:inline-flex; border:1px solid var(--line); border-radius:99px;
-             padding:.15rem; background:var(--panel); margin-bottom:1.8rem; }
-  nav.tabs button { padding:.35rem 1.1rem; border:none; border-radius:99px; cursor:pointer;
-                    font:600 .85rem var(--sans); color:var(--muted); background:transparent; }
-  nav.tabs button.active { background:var(--ink); color:var(--bg); }
+  nav.tabs { display:inline-flex; position:relative; border:1px solid var(--line);
+             border-radius:99px; padding:.15rem; background:var(--panel); margin-bottom:1.8rem; }
+  nav.tabs .pill { position:absolute; top:.15rem; bottom:.15rem; left:0; width:0;
+                   border-radius:99px; background:var(--ink);
+                   transition:left .28s cubic-bezier(.4,0,.2,1), width .28s cubic-bezier(.4,0,.2,1); }
+  nav.tabs button { position:relative; padding:.35rem 1.1rem; border:none; border-radius:99px;
+                    cursor:pointer; font:600 .85rem var(--sans); color:var(--muted);
+                    background:transparent; transition:color .28s ease; }
+  nav.tabs button.active { color:var(--bg); }
   nav.tabs button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .tabpane { display:none; }
   .tabpane.active { display:block; }
+  .tabpane.active.slide-left { animation:paneFromRight .24s ease both; }
+  .tabpane.active.slide-right { animation:paneFromLeft .24s ease both; }
+  @keyframes paneFromRight { from { opacity:0; transform:translateX(14px); }
+                             to { opacity:1; transform:none; } }
+  @keyframes paneFromLeft { from { opacity:0; transform:translateX(-14px); }
+                            to { opacity:1; transform:none; } }
+  @media (prefers-reduced-motion: reduce) {
+    nav.tabs .pill, nav.tabs button { transition:none; }
+    .tabpane.active.slide-left, .tabpane.active.slide-right { animation:none; }
+  }
 
   form { position:relative; margin-bottom:.9rem; }
   input[type=search] {
@@ -90,8 +104,20 @@
   .seg label { padding:.28rem .85rem; border-radius:99px; font-size:.82rem; color:var(--muted); cursor:pointer; }
   .seg input { position:absolute; opacity:0; pointer-events:none; }
   .seg label:has(input:checked) { background:var(--ink); color:var(--bg); }
-  .mode { margin-left:auto; color:var(--muted); font-size:.82rem; display:flex; gap:.4rem; align-items:center; }
+  .mode { margin-left:auto; display:flex; align-items:center; }
   @media (max-width:600px) { .mode { margin-left:0; } }
+  #mode { appearance:none; -webkit-appearance:none; cursor:pointer;
+    font:600 .82rem var(--sans); color:var(--muted); background:var(--panel);
+    border:1px solid var(--line); border-radius:99px; padding:.32rem 1.9rem .32rem .9rem;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%237a7568' fill='none' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat:no-repeat; background-position:right .8rem center;
+    transition:border-color .15s, color .15s; }
+  #mode:hover { border-color:var(--accent); color:var(--ink); }
+  #mode:focus-visible { outline:none; border-color:var(--accent);
+    box-shadow:0 0 0 3px var(--accent-soft); }
+  @media (prefers-color-scheme: dark) {
+    #mode { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a19b8d' fill='none' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E"); }
+  }
   .stageline { color:var(--muted); font-size:.78rem; margin:-.3rem 0 .8rem;
                font-variant-numeric:tabular-nums; }
   .stageline b { color:var(--ink); font-weight:600; }
@@ -131,6 +157,9 @@
         padding:.75rem .9rem; display:flex; flex-direction:column; gap:.4rem; }
   .op .t { display:flex; align-items:center; gap:.5rem; font-weight:600; font-size:.9rem; }
   .op .t i { width:.45rem; height:.45rem; border-radius:99px; background:var(--line-strong); flex-shrink:0; }
+  .op.running { border-color:color-mix(in srgb, var(--ok) 40%, var(--line));
+                background:color-mix(in srgb, var(--ok) 4%, var(--panel));
+                box-shadow:0 0 0 1px color-mix(in srgb, var(--ok) 12%, transparent); }
   .op.running .t i { background:var(--ok); animation:pulse 1.6s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) { .op.running .t i { animation:none; } }
   .op .d { color:var(--muted); font-size:.75rem; flex:1; }
@@ -180,6 +209,7 @@
   </header>
 
   <nav class="tabs" role="tablist">
+    <span class="pill" aria-hidden="true"></span>
     <button id="tabbtn-search" role="tab" onclick="switchTab('search')">Search</button>
     <button id="tabbtn-console" role="tab" onclick="switchTab('console')">Console</button>
   </nav>
@@ -196,13 +226,13 @@
       <label><input type="radio" name="source" value="news">News</label>
       <label><input type="radio" name="source" value="github">GitHub</label>
     </div>
-    <label class="mode">retrieval
+    <span class="mode">
       <select id="mode" aria-label="Retrieval mode">
-        <option value="hybrid">hybrid</option>
-        <option value="dense">semantic</option>
-        <option value="lexical">keyword</option>
+        <option value="hybrid">Hybrid</option>
+        <option value="dense">Semantic</option>
+        <option value="lexical">Keyword</option>
       </select>
-    </label>
+    </span>
   </div>
 
   <div id="took" aria-live="polite"></div>
@@ -240,16 +270,36 @@ const $ = id => document.getElementById(id);
 const esc = s => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
 const num = n => (n ?? 0).toLocaleString();
 
-// --- tabs: hash-addressable (#search / #console) ---
+// --- tabs: hash-addressable (#search / #console), animated pill + pane slide ---
+const TAB_ORDER = ["search", "console"];
+let currentTab = null;
+
+function movePill() {
+  const btn = document.querySelector("nav.tabs button.active");
+  const pill = document.querySelector("nav.tabs .pill");
+  if (btn && pill) {
+    pill.style.left = `${btn.offsetLeft}px`;
+    pill.style.width = `${btn.offsetWidth}px`;
+  }
+}
+
 window.switchTab = (name) => {
-  for (const t of ["search", "console"]) {
-    document.getElementById(`tab-${t}`).classList.toggle("active", t === name);
+  const dir = currentTab === null ? "" :
+    TAB_ORDER.indexOf(name) > TAB_ORDER.indexOf(currentTab) ? "slide-left" : "slide-right";
+  for (const t of TAB_ORDER) {
+    const pane = document.getElementById(`tab-${t}`);
+    pane.classList.remove("slide-left", "slide-right");
+    pane.classList.toggle("active", t === name);
+    if (t === name && dir) pane.classList.add(dir);
     document.getElementById(`tabbtn-${t}`).classList.toggle("active", t === name);
   }
+  currentTab = name;
+  movePill();
   history.replaceState(null, "", `#${name}`);
   if (name === "search") $("q").focus();
 };
 switchTab(location.hash === "#console" ? "console" : "search");
+window.addEventListener("resize", movePill);
 
 $("f").addEventListener("submit", async e => {
   e.preventDefault();
@@ -263,7 +313,13 @@ $("f").addEventListener("submit", async e => {
     const r = await fetch(`/v1/search?${params}`);
     const data = await r.json();
     if (!r.ok) throw new Error(JSON.stringify(data.detail || data));
-    $("took").textContent = `${data.results.length} result${data.results.length === 1 ? "" : "s"} · ${data.took_ms} ms`;
+    const tm = data.timings || {};
+    const parts = [`${data.results.length} result${data.results.length === 1 ? "" : "s"}`,
+                   `${num(tm.total_ms ?? data.took_ms)} ms total`];
+    if (tm.embed_query_ms) parts.push(`embed ${num(tm.embed_query_ms)} ms`);
+    if (tm.search_ms != null) parts.push(`index ${num(tm.search_ms)} ms`);
+    if ((data.mode || "").includes("degraded")) parts.push("⚠ degraded to keyword");
+    $("took").textContent = parts.join(" · ");
     $("results").innerHTML = data.results.map(res => `
       <article class="card">
         <h3><a href="${esc(res.url)}" target="_blank" rel="noopener">${esc(res.title || res.url)}</a></h3>

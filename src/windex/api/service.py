@@ -27,22 +27,23 @@ def run_search(
     language: str | None = None,
 ) -> dict:
     t0 = time.monotonic()
-    raw = index_search(
+    resp = index_search(
         settings, q, source=source, limit=limit, mode=mode,
         published_after=published_after, published_before=published_before,
         min_stars=min_stars, language=language,
     )
-    degraded = bool(raw and raw[0].get("_degraded"))
     results = []
-    for r in raw:
+    for r in resp["results"]:
         item = {"id": r.get("doc_id"), "score": round(r["score"], 4)}
         item.update({k: r[k] for k in RESULT_FIELDS if r.get(k) is not None})
         results.append(item)
+    total_ms = int((time.monotonic() - t0) * 1000)
     return {
         "query": q,
         "results": results,
-        "mode": "lexical (embedder busy — degraded from hybrid)" if degraded else mode,
-        "took_ms": int((time.monotonic() - t0) * 1000),
+        "mode": "lexical (embedder busy — degraded from hybrid)" if resp["degraded"] else mode,
+        "timings": {**resp["timings"], "total_ms": total_ms},
+        "took_ms": total_ms,
     }
 
 

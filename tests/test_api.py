@@ -22,15 +22,20 @@ def test_dashboard_served_at_root(client):
 
 
 def test_search_endpoint_shapes_results(client, monkeypatch):
-    canned = [{"doc_id": "gh:o/r", "score": 0.5, "url": "https://github.com/o/r",
-               "title": "o/r", "snippet": "desc", "source": "github", "stars": 42}]
+    canned = {
+        "results": [{"doc_id": "gh:o/r", "score": 0.5, "url": "https://github.com/o/r",
+                     "title": "o/r", "snippet": "desc", "source": "github", "stars": 42}],
+        "degraded": False,
+        "timings": {"embed_query_ms": 12, "search_ms": 3},
+    }
     monkeypatch.setattr(service_mod, "index_search", lambda *a, **k: canned)
     r = client.get("/v1/search", params={"q": "tool"})
     assert r.status_code == 200
     body = r.json()
     assert body["results"][0]["id"] == "gh:o/r"
     assert body["results"][0]["stars"] == 42
-    assert "took_ms" in body
+    assert body["timings"]["embed_query_ms"] == 12
+    assert "total_ms" in body["timings"] and "took_ms" in body
 
 
 def test_search_validates_params(client):

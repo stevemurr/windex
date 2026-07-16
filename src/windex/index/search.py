@@ -2,6 +2,7 @@
 BM25 fused with RRF server-side. mode=lexical works without a configured
 embedding model, which lets the API run before the model arrives."""
 
+import time
 from datetime import datetime
 from typing import Literal
 
@@ -106,9 +107,11 @@ def search(
     # server must degrade hybrid → lexical, never stall the search.
     query_dense = None
     degraded = False
+    embed_ms = 0.0
     if mode in ("hybrid", "dense"):
         from windex.embed import build_embedder
 
+        t_embed = time.monotonic()
         try:
             embedder = build_embedder(settings, timeout=settings.embed_query_timeout)
             query_dense = embedder.embed_batch([settings.embed_query_prefix + q])[0]
@@ -116,6 +119,7 @@ def search(
             if mode == "dense":
                 raise  # explicit dense request: fail loudly, don't change semantics
             degraded = True
+        embed_ms = (time.monotonic() - t_embed) * 1000
 
     results = []
     targets = []
@@ -123,14 +127,17 @@ def search(
         targets.append(("news", qidx.alias_name("news"), _news_filter(published_after, published_before)))
     if source in ("github", "all"):
         targets.append(("github", qidx.alias_name("repos"), _repo_filter(min_stars, language)))
+    t_search = time.monotonic()
     for _, alias, conds in targets:
         if alias not in aliases and alias not in existing:
             continue  # collection not built yet — serve what exists
         results.extend(
             _query_collection(client, alias, q, mode, limit, conds, settings, query_dense)
         )
+    search_ms = (time.monotonic() - t_search) * 1000
     results.sort(key=lambda r: r["score"], reverse=True)
-    out = results[:limit]
-    for r in out:
-        r["_degraded"] = degraded
-    return out
+    return {
+        "results": results[:limit],
+        "degraded": degraded,
+        "timings": {"embed_query_ms": round(embed_ms), "search_ms": round(search_ms)},
+    }

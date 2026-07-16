@@ -77,18 +77,21 @@ def seeded_collection(qclient, fake_embedder):
 
 def test_lexical_search_ranks_term_match_first(qclient, settings, seeded_collection, monkeypatch):
     monkeypatch.setattr(searchmod.qidx, "alias_name", lambda source: seeded_collection)
-    results = searchmod.search(settings, "transit bus lanes", source="news", mode="lexical", limit=3)
-    assert results and results[0]["doc_id"] == "news:bbb"
+    resp = searchmod.search(settings, "transit bus lanes", source="news", mode="lexical", limit=3)
+    assert resp["results"] and resp["results"][0]["doc_id"] == "news:bbb"
+    assert resp["degraded"] is False
+    assert resp["timings"]["embed_query_ms"] == 0  # lexical never embeds
 
 
 def test_hybrid_search_uses_fake_dense(qclient, settings, seeded_collection, monkeypatch, fake_embedder):
     monkeypatch.setattr(searchmod.qidx, "alias_name", lambda source: seeded_collection)
     import windex.embed as embed_mod
 
-    monkeypatch.setattr(embed_mod, "build_embedder", lambda s: fake_embedder)
-    results = searchmod.search(settings, "semiconductor datacenter earnings", source="news",
-                               mode="hybrid", limit=3)
-    assert results and results[0]["doc_id"] == "news:ccc"
+    monkeypatch.setattr(embed_mod, "build_embedder", lambda s, timeout=None: fake_embedder)
+    resp = searchmod.search(settings, "semiconductor datacenter earnings", source="news",
+                            mode="hybrid", limit=3)
+    assert resp["results"] and resp["results"][0]["doc_id"] == "news:ccc"
+    assert "search_ms" in resp["timings"]
 
 
 def test_hybrid_degrades_to_lexical_when_embedder_unreachable(
@@ -96,12 +99,13 @@ def test_hybrid_degrades_to_lexical_when_embedder_unreachable(
 ):
     monkeypatch.setattr(searchmod.qidx, "alias_name", lambda source: seeded_collection)
     # settings' embed endpoint points at a dead port — hybrid must still answer
-    results = searchmod.search(settings, "transit bus lanes", source="news",
-                               mode="hybrid", limit=3)
-    assert results and results[0]["doc_id"] == "news:bbb"
-    assert results[0]["_degraded"] is True
+    resp = searchmod.search(settings, "transit bus lanes", source="news",
+                            mode="hybrid", limit=3)
+    assert resp["results"] and resp["results"][0]["doc_id"] == "news:bbb"
+    assert resp["degraded"] is True
 
 
 def test_search_skips_missing_collections(settings, monkeypatch):
     monkeypatch.setattr(searchmod.qidx, "alias_name", lambda source: "does_not_exist")
-    assert searchmod.search(settings, "anything", source="github", mode="lexical") == []
+    resp = searchmod.search(settings, "anything", source="github", mode="lexical")
+    assert resp["results"] == []
