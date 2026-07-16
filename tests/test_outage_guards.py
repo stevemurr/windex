@@ -15,6 +15,22 @@ from windex.config import Settings
 runner = CliRunner()
 
 
+def test_pooled_connections_reuse_and_work(pg_dsn):
+    from windex import db
+
+    with db.pooled(pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT 1")
+        assert cur.fetchone() == (1,)
+    # same pool object per dsn; connections are recycled, not re-dialed
+    assert db.pool(pg_dsn) is db.pool(pg_dsn)
+    before = db.pool(pg_dsn).get_stats().get("connections_num", 0)
+    for _ in range(5):
+        with db.pooled(pg_dsn) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+    after = db.pool(pg_dsn).get_stats().get("connections_num", 0)
+    assert after <= max(before, 2)  # churn does not create new backends
+
+
 def test_db_connect_fails_fast_on_dead_port():
     from windex import db
 

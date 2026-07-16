@@ -48,7 +48,7 @@ def run_search(
 
 
 def get_document(settings: Settings, doc_id: str) -> dict | None:
-    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """
             SELECT id, source, url, title, published_at, lang, status, duplicate_of, text_ref
@@ -83,7 +83,7 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
     hit = _pg_stats_cache.get(settings.pg_dsn)
     if hit and now - hit[0] < ttl:
         return hit[1]
-    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT source, status, count(*) FROM documents GROUP BY source, status"
         )
@@ -174,7 +174,7 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
 
 def get_recent(settings: Settings, limit: int = 30) -> list[dict]:
     """Most recently indexed documents — the dashboard's live ticker."""
-    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """
             SELECT id, source, url, title, indexed_at
@@ -195,7 +195,7 @@ def get_worker_activity(settings: Settings) -> dict:
     logs + completion markers. Powers the Console's batch-workers panel."""
     import re
 
-    with db.connect(settings.pg_dsn) as conn:
+    with db.pooled(settings.pg_dsn) as conn:
         stage = db.get_control(conn, "news_stage", "idle")
     match = re.search(r"batch (\S+)", stage)
     if not match:
@@ -232,7 +232,7 @@ def get_worker_activity(settings: Settings) -> dict:
 def get_timeseries(settings: Settings, minutes: int = 60) -> list[dict]:
     """Per-minute indexing and download volumes for the trailing window,
     zero-filled — feeds the dashboard charts."""
-    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """
             SELECT g.m, coalesce(i.docs, 0)::bigint, coalesce(e.docs, 0)::bigint,
@@ -268,18 +268,18 @@ def get_timeseries(settings: Settings, minutes: int = 60) -> list[dict]:
 
 
 def get_control(settings: Settings) -> str:
-    with db.connect(settings.pg_dsn) as conn:
+    with db.pooled(settings.pg_dsn) as conn:
         return db.get_control(conn, "indexing", "running")
 
 
 def set_embed_profile(settings: Settings, profile: str) -> str:
-    with db.connect(settings.pg_dsn) as conn:
+    with db.pooled(settings.pg_dsn) as conn:
         db.set_control(conn, "embed_profile", profile)
     return profile
 
 
 def set_control(settings: Settings, value: str) -> str:
-    with db.connect(settings.pg_dsn) as conn:
+    with db.pooled(settings.pg_dsn) as conn:
         db.set_control(conn, "indexing", value)
     return value
 
@@ -304,7 +304,7 @@ def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
     for d in (settings.ccnews_downloads_dir, settings.gharchive_downloads_dir):
         if d.exists():
             in_flight += sum(f.stat().st_size for f in d.iterdir() if f.is_file())
-    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT key, value FROM control")
         flags = dict(cur.fetchall())
     stats["activity"] = {

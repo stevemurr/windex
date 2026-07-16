@@ -13,6 +13,7 @@ dependencies = [
     "httpx>=0.27",
     "pyarrow>=17",
     "rich>=13",
+    "psycopg-pool>=3.3.1",
 ]
 
 [project.optional-dependencies]
