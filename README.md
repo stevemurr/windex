@@ -52,3 +52,18 @@ uv run windex daily        # news sync+process+embed, gh tail+hydrate refresh; i
 
 Bulky data (WARC/event downloads, parquet staging) lives under `WINDEX_DATA_ROOT`
 (default `/Volumes/External/windex`).
+
+## Reproducibility: rebuild from any layer
+
+Each layer is derivable from the one beneath it; nothing below the vector store
+is ever mutated by a rebuild.
+
+| Lost / corrupted | Source of truth | Rebuild |
+|---|---|---|
+| Vector index (Qdrant) | staged parquet + Postgres ledger | `windex reindex all` then `windex ccnews embed-loop` + `windex gh embed` — no re-crawl, no re-extraction |
+| Embedding model swap | same | same (new collection per model, alias flips when ready) |
+| Postgres | pg_dump backups + watermark re-sync | restore dump; or re-run `ccnews sync` + `run` (dedup makes re-processing idempotent) |
+| Everything | the public datasets | `init-db` → `ccnews sync/run` → `gh sync-hours/scan/discover/hydrate` → embed — the full flow is the recovery procedure |
+
+Battle-tested 2026-07-16: an external-drive detach corrupted the news collection;
+`reindex` + the embed loop rebuilt it from parquet with zero re-crawling.

@@ -233,6 +233,47 @@ def gh_embed(limit: int = 100_000) -> None:
 
 
 @app.command()
+def reindex(
+    source: str = typer.Argument("all", help="news | repos | all"),
+    drop_collections: bool = typer.Option(True, help="Recreate Qdrant collections from scratch"),
+    yes: bool = typer.Option(False, "--yes", help="Skip confirmation"),
+) -> None:
+    """Rebuild vectors from staged parquet (the reproducibility path: extracted
+    text is the source of truth; vectors are always derivable). Resets embedded
+    docs and recreates collections; the embed loop / gh embed repopulate."""
+    from windex.index import qdrant as qidx
+
+    settings = get_settings()
+    if not yes:
+        typer.confirm(
+            f"Drop and rebuild the {source} vector index from parquet?", abort=True
+        )
+    client = qidx.client_from_url(settings.qdrant_url)
+    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+        if source in ("news", "all"):
+            if drop_collections:
+                name = qidx.collection_name("news", settings.embed_model)
+                if client.collection_exists(name):
+                    client.delete_collection(name)
+                qidx.ensure_collection(client, "news", settings.embed_model, settings.embed_dim)
+            cur.execute(
+                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
+                   WHERE source='news' AND status='embedded'"""
+            )
+            console.print(f"[green]news: {cur.rowcount} docs queued for re-embed[/green]")
+        if source in ("repos", "all"):
+            if drop_collections:
+                name = qidx.collection_name("repos", settings.embed_model)
+                if client.collection_exists(name):
+                    client.delete_collection(name)
+                qidx.ensure_collection(client, "repos", settings.embed_model, settings.embed_dim)
+            cur.execute("UPDATE repos SET status='hydrated' WHERE status='embedded'")
+            console.print(f"[green]repos: {cur.rowcount} queued for re-embed[/green]")
+        conn.commit()
+    console.print("run `windex ccnews embed-loop` and `windex gh embed` to repopulate")
+
+
+@app.command()
 def daily(embed: bool = True) -> None:
     """The daily freshness job: news sync+process+embed, gh tail+hydrate refresh.
 

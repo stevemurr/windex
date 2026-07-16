@@ -37,6 +37,29 @@ def test_cli_ensure_collections(settings, qclient, monkeypatch):
     assert r.exit_code == 0 and "news_current" in r.output
 
 
+def test_reindex_resets_statuses_and_recreates_collections(settings, pg, qclient, monkeypatch):
+    _use_test_settings(monkeypatch, settings)
+    with pg.cursor() as cur:
+        cur.execute(
+            """INSERT INTO documents (id, source, url, status, embedded_model, indexed_at)
+               VALUES ('news:r1', 'news', 'u', 'embedded', 'pytest-model', now())"""
+        )
+        cur.execute(
+            "INSERT INTO repos (repo_id, full_name, stars, status) VALUES (5, 'o/r', 20, 'embedded')"
+        )
+    pg.commit()
+    r = runner.invoke(app, ["reindex", "all", "--yes"])
+    assert r.exit_code == 0, r.output
+    with pg.cursor() as cur:
+        cur.execute("SELECT status, embedded_model FROM documents WHERE id = 'news:r1'")
+        assert cur.fetchone() == ("deduped", None)
+        cur.execute("SELECT status FROM repos WHERE repo_id = 5")
+        assert cur.fetchone()[0] == "hydrated"
+    from windex.index.qdrant import collection_name
+
+    assert qclient.get_collection(collection_name("news", "pytest-model")).points_count == 0
+
+
 def test_mcp_tools_wrap_service(settings, monkeypatch):
     import windex.api.mcp as mcp_mod
 
