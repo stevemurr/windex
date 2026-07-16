@@ -698,7 +698,6 @@ function drawChart(rootId, series, field, color, fmt) {
            fill="${color}" opacity="0.13"/>` +
     `<path d="M${pts.join(" L")}" fill="none" stroke="${color}" stroke-width="2"
            stroke-linejoin="round" vector-effect="non-scaling-stroke"/>` +
-    `<text x="${PAD + 2}" y="10">max ${fmt(max)}</text>` +
     `<line class="xh" x1="0" x2="0" y1="${PAD}" y2="${H - PAD}" stroke="var(--muted)"
            stroke-width="1" stroke-dasharray="2,2" visibility="hidden"/>`;
   svg.onmousemove = e => {
