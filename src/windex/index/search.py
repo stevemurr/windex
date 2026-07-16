@@ -117,9 +117,17 @@ def _query_collection(
 ) -> list[dict]:
     prefetch = []
     flt = qm.Filter(must=conditions) if conditions else None
+    # rescore=False: with original f32 vectors on disk, the default rescoring
+    # re-reads them per query from the saturated drive; int8 recall at 4096-dim
+    # doesn't need it (docs/store-tuning.md). hnsw_ef explicit = the recall knob.
+    dense_params = qm.SearchParams(
+        hnsw_ef=96,
+        quantization=qm.QuantizationSearchParams(rescore=False),
+    )
     if mode in ("hybrid", "dense") and query_dense is not None:
         prefetch.append(
-            qm.Prefetch(query=query_dense, using=qidx.DENSE, limit=limit * 4, filter=flt)
+            qm.Prefetch(query=query_dense, using=qidx.DENSE, limit=limit * 4,
+                        filter=flt, params=dense_params)
         )
     if mode in ("hybrid", "lexical"):
         sparse = next(iter(_bm25_model().query_embed(q)))

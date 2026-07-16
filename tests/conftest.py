@@ -2,6 +2,9 @@
 isolated namespaces (windex_test database; *__pytest-model collections) and
 skip cleanly when a service isn't running."""
 
+import hashlib
+from pathlib import Path
+
 import psycopg
 import pytest
 
@@ -9,7 +12,11 @@ from windex import db as windex_db
 from windex.config import Settings
 
 ADMIN_DSN = "postgresql://windex:windex@127.0.0.1:5432/windex"
-TEST_DB = "windex_test"
+# Per-checkout DB name: concurrent agent worktrees each run their own suite,
+# and a shared name means one suite force-drops the DB out from under another
+# (observed 2026-07-16 by two builders simultaneously).
+_checkout_key = hashlib.sha1(str(Path(__file__).resolve().parent).encode()).hexdigest()[:8]
+TEST_DB = f"windex_test_{_checkout_key}"
 TEST_DSN = f"postgresql://windex:windex@127.0.0.1:5432/{TEST_DB}"
 QDRANT_URL = "http://127.0.0.1:6333"
 TEST_MODEL = "pytest-model"
