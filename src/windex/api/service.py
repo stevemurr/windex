@@ -12,7 +12,8 @@ from windex.config import Settings
 from windex.index.search import search as index_search
 
 RESULT_FIELDS = ("url", "title", "snippet", "source", "published_at", "outlet",
-                 "stars", "language", "topics", "pushed_at", "lang", "incoming_links")
+                 "stars", "language", "topics", "pushed_at", "lang", "incoming_links",
+                 "primary_category", "categories", "authors")
 
 
 def run_search(
@@ -25,12 +26,13 @@ def run_search(
     published_before: datetime | None = None,
     min_stars: int | None = None,
     language: str | None = None,
+    category: str | None = None,
 ) -> dict:
     t0 = time.monotonic()
     resp = index_search(
         settings, q, source=source, limit=limit, mode=mode,
         published_after=published_after, published_before=published_before,
-        min_stars=min_stars, language=language,
+        min_stars=min_stars, language=language, category=category,
     )
     results = []
     for r in resp["results"]:
@@ -68,7 +70,10 @@ def get_document(settings: Settings, doc_id: str) -> dict | None:
     if text_ref:
         table = pq.read_table(settings.staging_dir / text_ref, filters=[("id", "==", doc_id)])
         if table.num_rows:
-            doc["text"] = table.column("text")[0].as_py()
+            # arXiv stages the abstract (metadata only) rather than a `text` column
+            col = "text" if "text" in table.column_names else "abstract"
+            if col in table.column_names:
+                doc["text"] = table.column(col)[0].as_py()
     return doc
 
 
@@ -136,6 +141,7 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
     news = docs.get("news", {})
     gh = docs.get("github", {})
     wiki = docs.get("wiki", {})
+    arxiv = docs.get("arxiv", {})
     result = {
         "documents": docs,
         "repos": repos,
@@ -143,10 +149,11 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
         "gharchive_files": hours,
         "totals": {
             "indexed_pages": news.get("embedded", 0) + gh.get("embedded", 0)
-            + wiki.get("embedded", 0),
+            + wiki.get("embedded", 0) + arxiv.get("embedded", 0),
             "news_articles": news.get("embedded", 0),
             "github_projects": gh.get("embedded", 0),
             "wiki_articles": wiki.get("embedded", 0),
+            "arxiv_papers": arxiv.get("embedded", 0),
             "duplicates_collapsed": news.get("duplicate", 0),
             "news_outlets": outlets,
             "news_coverage": [
@@ -308,6 +315,7 @@ def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
             "news": flags.get("news_stage", "idle"),
             "github": flags.get("gh_stage", "idle"),
             "wiki": flags.get("wiki_stage", "idle"),
+            "arxiv": flags.get("arxiv_stage", "idle"),
         },
         "downloading_bytes_on_disk": in_flight,
     }

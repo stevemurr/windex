@@ -137,6 +137,8 @@
   .badge { border:1px solid var(--line); border-radius:99px; padding:.02rem .5rem; }
   .badge.src-news { color:var(--accent); border-color:var(--accent-soft); background:var(--accent-soft); }
   .badge.src-wiki { color:var(--chart-bw); border-color:#3d6ea533; background:#3d6ea51a; }
+  .badge.src-arxiv { color:#b31b1b; border-color:#b31b1b33; background:#b31b1b14; }
+  @media (prefers-color-scheme:dark) { .badge.src-arxiv { color:#e06b6b; border-color:#e06b6b33; background:#e06b6b14; } }
   .url { font-family:var(--mono); font-size:.72rem; overflow:hidden; text-overflow:ellipsis;
          white-space:nowrap; max-width:100%; }
   .snippet { margin:.55rem 0 0; font-size:.88rem; color:var(--ink);
@@ -245,7 +247,7 @@
 
   <section id="tab-search" class="tabpane">
   <form id="f">
-    <input id="q" type="search" placeholder="Search news, GitHub projects, and Wikipedia…"
+    <input id="q" type="search" placeholder="Search news, GitHub projects, Wikipedia, and arXiv…"
            autocomplete="off" autofocus>
     <button type="submit">Search</button>
   </form>
@@ -255,6 +257,7 @@
       <label><input type="radio" name="source" value="news">News</label>
       <label><input type="radio" name="source" value="github">GitHub</label>
       <label><input type="radio" name="source" value="wiki">Wiki</label>
+      <label><input type="radio" name="source" value="arxiv">arXiv</label>
     </div>
     <span class="mode">
       <select id="mode" class="pillselect" aria-label="Retrieval mode">
@@ -389,6 +392,8 @@ $("f").addEventListener("submit", async e => {
           <span class="badge src-${res.source}">${res.source}</span>
           ${res.stars != null ? `<span class="badge">★ ${num(res.stars)}</span>` : ""}
           ${res.language ? `<span class="badge">${esc(res.language)}</span>` : ""}
+          ${res.primary_category ? `<span class="badge">${esc(res.primary_category)}</span>` : ""}
+          ${res.authors ? `<span class="badge">${esc(res.authors)}</span>` : ""}
           ${res.published_at ? `<span class="badge">${esc(res.published_at.slice(0, 10))}</span>` : ""}
           <span class="url">${esc(res.url)}</span>
         </div>
@@ -465,6 +470,7 @@ function renderStats(s) {
       `<div class="total"><div class="v">${num(t.news_articles)}</div><div class="k">news articles</div></div>` +
       `<div class="total"><div class="v">${num(t.github_projects)}</div><div class="k">GitHub projects</div></div>` +
       `<div class="total"><div class="v">${num(t.wiki_articles)}</div><div class="k">Wikipedia articles</div></div>` +
+      `<div class="total"><div class="v">${num(t.arxiv_papers)}</div><div class="k">arXiv papers</div></div>` +
       `<div class="total"><div class="v">${num(t.news_outlets)}</div><div class="k">news outlets</div></div>` +
       `<div class="total"><div class="v">${num(t.duplicates_collapsed)}</div><div class="k">duplicates collapsed</div></div>` +
       (covA ? `<div id="coverage">news coverage ${covA} → ${covB}</div>` : "");
@@ -601,7 +607,7 @@ async function refreshWorkers() {
 }
 
 // --- operations: whitelisted CLI jobs, start/stop from the page ---
-const CATS = { news: "News pipeline", github: "GitHub pipeline", wiki: "Wiki pipeline", maintenance: "Maintenance" };
+const CATS = { news: "News pipeline", github: "GitHub pipeline", wiki: "Wiki pipeline", arxiv: "arXiv pipeline", maintenance: "Maintenance" };
 
 function paramInput(job, key, spec) {
   const id = `p-${job.name}-${key}`;

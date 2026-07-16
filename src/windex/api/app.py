@@ -28,18 +28,20 @@ def dashboard() -> HTMLResponse:
 @app.get("/v1/search")
 def search(
     q: str = Query(min_length=1),
-    source: Literal["news", "github", "wiki", "all"] = "all",
+    source: Literal["news", "github", "wiki", "arxiv", "all"] = "all",
     limit: int = Query(10, ge=1, le=50),
     mode: Literal["hybrid", "dense", "lexical"] = "hybrid",
     published_after: datetime | None = None,
     published_before: datetime | None = None,
     min_stars: int | None = None,
     language: str | None = None,
+    category: str | None = Query(None, max_length=64,
+                                 description="arXiv primary category, e.g. cs.LG"),
 ) -> dict:
     return service.run_search(
         get_settings(), q, source=source, limit=limit, mode=mode,
         published_after=published_after, published_before=published_before,
-        min_stars=min_stars, language=language,
+        min_stars=min_stars, language=language, category=category,
     )
 
 

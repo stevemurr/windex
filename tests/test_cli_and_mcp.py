@@ -35,6 +35,7 @@ def test_cli_ensure_collections(settings, qclient, monkeypatch):
     _use_test_settings(monkeypatch, settings)
     r = runner.invoke(app, ["ensure-collections"])
     assert r.exit_code == 0 and "news_current" in r.output and "wiki_current" in r.output
+    assert "arxiv_current" in r.output
 
 
 def test_cli_wiki_status(settings, pg, monkeypatch):
@@ -46,6 +47,18 @@ def test_cli_wiki_status(settings, pg, monkeypatch):
         )
     pg.commit()
     r = runner.invoke(app, ["wiki", "status"])
+    assert r.exit_code == 0 and "done" in r.output
+
+
+def test_cli_arxiv_status(settings, pg, monkeypatch):
+    _use_test_settings(monkeypatch, settings)
+    with pg.cursor() as cur:
+        cur.execute(
+            "INSERT INTO arxiv_windows (from_date, until_date, status) "
+            "VALUES ('2024-01-01', '2024-12-31', 'done')"
+        )
+    pg.commit()
+    r = runner.invoke(app, ["arxiv", "status"])
     assert r.exit_code == 0 and "done" in r.output
 
 

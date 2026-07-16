@@ -1,15 +1,15 @@
 -- windex schema. Idempotent: applied via `windex init-db` on every deploy.
 
 CREATE TABLE IF NOT EXISTS documents (
-    id             text PRIMARY KEY,          -- stable API id: news:<hash> | gh:owner/repo | wiki:<page_id>
-    source         text NOT NULL,             -- news | github | wiki
+    id             text PRIMARY KEY,          -- stable API id: news:<hash> | gh:owner/repo | wiki:<page_id> | arxiv:<paper_id>
+    source         text NOT NULL,             -- news | github | wiki | arxiv
     url            text NOT NULL,
     canonical_url  text,
     title          text,
     published_at   timestamptz,
     lang           text,
     text_hash      text,                      -- sha1 of normalized text (exact dedup)
-    status         text NOT NULL DEFAULT 'extracted',  -- extracted | deduped | embedded | duplicate
+    status         text NOT NULL DEFAULT 'extracted',  -- extracted | deduped | embedded | duplicate | deleted
     duplicate_of   text,                      -- id of canonical doc when near-dup
     embedded_model text,
     indexed_at     timestamptz,
@@ -66,6 +66,26 @@ CREATE TABLE IF NOT EXISTS wiki_dumps (
     processed_at timestamptz
 );
 CREATE INDEX IF NOT EXISTS wiki_dumps_status_idx ON wiki_dumps (status);
+
+-- Freshness watermark for arXiv OAI-PMH harvest: one row per date window.
+-- The full corpus is chunked into independently restartable per-year windows
+-- (backfill) plus a rolling incremental window; a window is only 'done' once its
+-- resumption-token chain completes. OAI resumption tokens expire at the next
+-- 00:00 UTC, so an interrupted window is safely re-harvested from its start
+-- (the documents.text_hash ledger keeps re-harvests to the changed-paper delta).
+CREATE TABLE IF NOT EXISTS arxiv_windows (
+    from_date    text NOT NULL,               -- YYYY-MM-DD OAI `from` (inclusive)
+    until_date   text NOT NULL,               -- YYYY-MM-DD OAI `until` (inclusive)
+    status       text NOT NULL DEFAULT 'pending',  -- pending | processing | done | failed
+    token        text,                        -- last resumption token seen (progress only)
+    pages        integer DEFAULT 0,
+    records      integer DEFAULT 0,           -- records seen (incl. tombstones)
+    staged       integer DEFAULT 0,           -- delta rows staged to parquet + ledger
+    deleted      integer DEFAULT 0,           -- tombstones applied
+    processed_at timestamptz,
+    PRIMARY KEY (from_date, until_date)
+);
+CREATE INDEX IF NOT EXISTS arxiv_windows_status_idx ON arxiv_windows (status);
 
 -- Rolling-window LSH index for near-dup detection across daily batches.
 CREATE TABLE IF NOT EXISTS minhash_bands (
