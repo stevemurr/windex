@@ -83,10 +83,14 @@ def sweep(
     if not tokens:
         raise ValueError("no GitHub tokens configured (WINDEX_GITHUB_TOKENS)")
     created_to = created_to or date.today()
+    from windex import db as wdb
+
     stats = {"shards": 0, "repos_seen": 0, "repos_new": 0, "capped_shards": 0}
     shards: deque[tuple[date, date]] = deque([(created_from, created_to)])
     tok_i = 0
-    with httpx.Client(timeout=30) as client:
+    with wdb.stage(conn, "gh_stage", "discovery sweep (search API)"), httpx.Client(
+        timeout=30
+    ) as client:
         while shards:
             a, b = shards.popleft()
             token = tokens[tok_i % len(tokens)]

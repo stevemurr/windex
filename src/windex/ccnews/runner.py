@@ -41,55 +41,62 @@ def run_batches(
     staged = 0
     batches_done = 0
     consecutive_failures = 0
-    while max_batches is None or batches_done < max_batches:
-        # dashboard pause: wait between batches, never mid-batch
-        paused_notice = False
-        while db.get_control(conn, "indexing", "running") == "paused":
-            if not paused_notice:
-                console.print("[yellow]paused via control flag — waiting[/yellow]")
-                paused_notice = True
-            time.sleep(pause_poll_seconds)
-        paths = sync.pending_paths(conn, batch_size)
-        if not paths:
-            break
-        bid = batch_id_for(paths)
-        console.print(f"[bold]batch {bid}[/bold]: {len(paths)} WARCs")
-        sync.mark(conn, paths, "processing")
-        try:
-            local = download.download_batch(paths, settings.ccnews_downloads_dir)
-            sizes = {p: lp.stat().st_size for p, lp in zip(paths, local)}
-            extracted_dir = settings.news_staging_dir / "extracted" / bid
-            logging_dir = settings.news_staging_dir / "logs" / bid
-            pipeline.process_batch(
-                warc_dir=settings.ccnews_downloads_dir,
-                local_names=[p.name for p in local],
-                out_dir=extracted_dir,
-                logging_dir=logging_dir,
-                language=settings.news_language,
-                workers=workers,
-            )
-            text_ref = f"news/clean/{bid}.parquet"
-            stats = dd.run_dedup(
-                conn,
-                extracted_dir=extracted_dir,
-                clean_path=settings.staging_dir / text_ref,
-                text_ref=text_ref,
-                day=sync.path_date(paths[0]),
-            )
-            sync.mark(conn, paths, "done", {"batch_id": bid, **stats}, sizes=sizes)
-            console.print(f"  {stats}")
-            staged += stats["clean_out"]
-            if not keep_warcs:
-                for p in local:
-                    Path(p).unlink(missing_ok=True)
-                shutil.rmtree(extracted_dir, ignore_errors=True)
-            consecutive_failures = 0
-        except Exception as exc:
-            conn.rollback()
-            sync.mark(conn, paths, "failed")
-            consecutive_failures += 1
-            console.print(f"[red]batch {bid} failed[/red] ({exc}); continuing")
-            if consecutive_failures >= max_consecutive_failures:
-                raise
-        batches_done += 1
+    try:
+        while max_batches is None or batches_done < max_batches:
+            # dashboard pause: wait between batches, never mid-batch
+            paused_notice = False
+            while db.get_control(conn, "indexing", "running") == "paused":
+                if not paused_notice:
+                    console.print("[yellow]paused via control flag — waiting[/yellow]")
+                    db.set_control(conn, "news_stage", "paused")
+                    paused_notice = True
+                time.sleep(pause_poll_seconds)
+            paths = sync.pending_paths(conn, batch_size)
+            if not paths:
+                break
+            bid = batch_id_for(paths)
+            console.print(f"[bold]batch {bid}[/bold]: {len(paths)} WARCs")
+            sync.mark(conn, paths, "processing")
+            try:
+                db.set_control(conn, "news_stage", f"downloading {len(paths)} shards · batch {bid}")
+                local = download.download_batch(paths, settings.ccnews_downloads_dir)
+                sizes = {p: lp.stat().st_size for p, lp in zip(paths, local)}
+                extracted_dir = settings.news_staging_dir / "extracted" / bid
+                logging_dir = settings.news_staging_dir / "logs" / bid
+                db.set_control(conn, "news_stage", f"extracting + filtering · batch {bid}")
+                pipeline.process_batch(
+                    warc_dir=settings.ccnews_downloads_dir,
+                    local_names=[p.name for p in local],
+                    out_dir=extracted_dir,
+                    logging_dir=logging_dir,
+                    language=settings.news_language,
+                    workers=workers,
+                )
+                text_ref = f"news/clean/{bid}.parquet"
+                db.set_control(conn, "news_stage", f"deduplicating · batch {bid}")
+                stats = dd.run_dedup(
+                    conn,
+                    extracted_dir=extracted_dir,
+                    clean_path=settings.staging_dir / text_ref,
+                    text_ref=text_ref,
+                    day=sync.path_date(paths[0]),
+                )
+                sync.mark(conn, paths, "done", {"batch_id": bid, **stats}, sizes=sizes)
+                console.print(f"  {stats}")
+                staged += stats["clean_out"]
+                if not keep_warcs:
+                    for p in local:
+                        Path(p).unlink(missing_ok=True)
+                    shutil.rmtree(extracted_dir, ignore_errors=True)
+                consecutive_failures = 0
+            except Exception as exc:
+                conn.rollback()
+                sync.mark(conn, paths, "failed")
+                consecutive_failures += 1
+                console.print(f"[red]batch {bid} failed[/red] ({exc}); continuing")
+                if consecutive_failures >= max_consecutive_failures:
+                    raise
+            batches_done += 1
+    finally:
+        db.set_control(conn, "news_stage", "idle")
     return staged

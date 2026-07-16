@@ -29,3 +29,20 @@ def set_control(conn: psycopg.Connection, key: str, value: str) -> None:
             (key, value),
         )
     conn.commit()
+
+
+class stage:
+    """Context manager: publish a pipeline stage to the control table for the
+    dashboard, resetting to idle on exit (including crashes)."""
+
+    def __init__(self, conn: psycopg.Connection, key: str, value: str):
+        self.conn, self.key, self.value = conn, key, value
+
+    def __enter__(self):
+        set_control(self.conn, self.key, self.value)
+        return self
+
+    def __exit__(self, *exc):
+        self.conn.rollback()  # stage must reset even if the job died mid-transaction
+        set_control(self.conn, self.key, "idle")
+        return False

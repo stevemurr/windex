@@ -96,9 +96,13 @@ def hydrate(
     limit: int = 10_000,
     min_star_events: int = 1,
 ) -> dict:
+    from windex import db as wdb
+
     pool = TokenPool(tokens)
     readme_dir.mkdir(parents=True, exist_ok=True)
     stats = {"hydrated": 0, "below_threshold": 0, "gone": 0, "readmes": 0}
+    stage_ctx = wdb.stage(conn, "gh_stage", "hydrating repos (metadata + READMEs)")
+    stage_ctx.__enter__()
     stamp = time.strftime("%Y%m%d-%H%M%S")
     writer: pq.ParquetWriter | None = None
     parquet_name = f"{stamp}.parquet"
@@ -172,6 +176,7 @@ def hydrate(
     finally:
         if writer is not None:
             writer.close()
+        stage_ctx.__exit__(None, None, None)
     stats["readme_file"] = parquet_name if writer is not None else None
     return stats
 

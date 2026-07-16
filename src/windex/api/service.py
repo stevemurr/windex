@@ -238,14 +238,21 @@ def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
         vectors = {"error": "qdrant unreachable"}
 
     stats["vectors"] = vectors
-    # live, uncached extras: control flag and in-flight download bytes
+    # live, uncached extras: control flags, pipeline stages, in-flight bytes
     in_flight = 0
     for d in (settings.ccnews_downloads_dir, settings.gharchive_downloads_dir):
         if d.exists():
             in_flight += sum(f.stat().st_size for f in d.iterdir() if f.is_file())
+    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT key, value FROM control")
+        flags = dict(cur.fetchall())
     stats["activity"] = {
         **stats["activity"],
-        "control": get_control(settings),
+        "control": flags.get("indexing", "running"),
+        "stages": {
+            "news": flags.get("news_stage", "idle"),
+            "github": flags.get("gh_stage", "idle"),
+        },
         "downloading_bytes_on_disk": in_flight,
     }
     return stats

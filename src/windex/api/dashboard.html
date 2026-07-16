@@ -27,7 +27,13 @@
          -webkit-font-smoothing: antialiased; }
   main { max-width: 720px; margin: 0 auto; padding: 3.5rem 1.25rem 5rem; }
 
-  header { display:flex; align-items:baseline; gap:.75rem; margin-bottom:2.25rem; }
+  header { display:flex; align-items:baseline; gap:.75rem; margin-bottom:2.25rem;
+           flex-wrap:wrap; row-gap:.5rem; }
+  #ctl { flex-shrink:0; }
+  @media (max-width:600px) {
+    .tagline { display:none; }
+    main { padding-top: 2rem; }
+  }
   .wordmark { font-family:var(--serif); font-size:1.6rem; font-weight:600; letter-spacing:-.01em; }
   .tagline { color:var(--muted); font-size:.85rem; }
   #liveDot { margin-left:auto; font-size:.8rem; color:var(--muted); display:flex; align-items:center; gap:.45rem; white-space:nowrap; }
@@ -76,6 +82,10 @@
   .seg input { position:absolute; opacity:0; pointer-events:none; }
   .seg label:has(input:checked) { background:var(--ink); color:var(--bg); }
   .mode { margin-left:auto; color:var(--muted); font-size:.82rem; display:flex; gap:.4rem; align-items:center; }
+  @media (max-width:600px) { .mode { margin-left:0; } }
+  .stageline { color:var(--muted); font-size:.78rem; margin:-.3rem 0 .8rem;
+               font-variant-numeric:tabular-nums; }
+  .stageline b { color:var(--ink); font-weight:600; }
   select { font:.85rem var(--sans); color:var(--ink); background:var(--panel);
            border:1px solid var(--line); border-radius:8px; padding:.25rem .5rem; }
 
@@ -165,6 +175,7 @@
     <h2>Index</h2>
     <div id="totals"></div>
     <h2>Activity</h2>
+    <div class="stageline" id="stagesLine"></div>
     <div class="rows" id="stats"></div>
     <div class="charts">
       <div class="chart" id="chartDocs">
@@ -240,13 +251,28 @@ function renderStats(s) {
     const backlog = d.deduped || 0;
     // busy = work actually happening, not merely queued
     const act = s.activity || {};
-    const busy = (act.warcs_processing || 0) > 0 || (act.indexed_last_2m || 0) > 0;
+    const st = act.stages || {};
+    const embedding = (act.indexed_last_2m || 0) > 0;
+    const busy = (act.warcs_processing || 0) > 0 || embedding
+              || (st.news && st.news !== "idle" && st.news !== "paused")
+              || (st.github && st.github !== "idle");
     const queued = (w.pending || 0) + (g.pending || 0) + backlog;
     const inflight = act.downloading_bytes_on_disk || 0;
     $("liveDot").className = busy ? "busy" : "";
-    document.getElementById("liveLabel").textContent =
-      busy ? (inflight > 5e8 ? `indexing — ${(inflight / 1e9).toFixed(1)} GB batch in flight` : "indexing")
-           : queued ? `idle — ${num(queued)} queued` : "up to date";
+    // pill states the dominant phase; the stages line has the full detail
+    let label;
+    if (busy) {
+      const phase = (st.news && st.news !== "idle") ? st.news.split("·")[0].trim()
+                  : (st.github && st.github !== "idle") ? st.github
+                  : "embedding";
+      label = phase + (inflight > 5e8 ? ` — ${(inflight / 1e9).toFixed(1)} GB in flight` : "");
+    } else {
+      label = queued ? `idle — ${num(queued)} queued` : "up to date";
+    }
+    document.getElementById("liveLabel").textContent = label;
+    document.getElementById("stagesLine").innerHTML =
+      `news <b>${esc(st.news || "idle")}</b> · github <b>${esc(st.github || "idle")}</b>` +
+      ` · embedder <b>${embedding ? `active (${num(Math.round(act.docs_per_min || 0))}/min)` : backlog ? "backlog waiting" : "idle"}</b>`;
     const ctl = document.getElementById("ctl");
     ctl.style.display = "";
     if (act.control === "paused") {

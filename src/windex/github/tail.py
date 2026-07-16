@@ -157,9 +157,13 @@ def scan(
     batch: int = 24,
 ) -> dict:
     """Process pending hour files. Returns aggregate stats."""
+    from windex import db as wdb
+
     dest_dir.mkdir(parents=True, exist_ok=True)
     stats = {"files": 0, "missing": 0, "watch_events": 0, "repos_touched": 0}
-    with httpx.Client(timeout=httpx.Timeout(30, read=120), follow_redirects=True) as client:
+    with wdb.stage(conn, "gh_stage", "scanning event hours"), httpx.Client(
+        timeout=httpx.Timeout(30, read=120), follow_redirects=True
+    ) as client:
         while max_files is None or stats["files"] + stats["missing"] < max_files:
             limit = batch if max_files is None else min(batch, max_files - stats["files"] - stats["missing"])
             names = pending_hours(conn, limit)
