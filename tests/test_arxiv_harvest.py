@@ -247,13 +247,16 @@ def test_reharvest_skips_unchanged_papers(pg, settings):
     assert pq.read_table(settings.staging_dir / new_ref).num_rows == 1  # only the changed paper
 
 
-def test_tombstone_marks_ledger_and_drops_point(pg, settings, qclient):
+def test_tombstone_marks_ledger_and_drops_point(pg, settings, qclient, monkeypatch):
     from qdrant_client import models as qm
 
     from windex.ccnews.embed_index import point_id
     from windex.index import qdrant as qidx
 
     coll = qidx.ensure_collection(qclient, "arxiv", settings.embed_model, settings.embed_dim)
+    # never let the delete resolve through the live alias: once production
+    # collections exist, arxiv_current points at them, not the pytest one
+    monkeypatch.setattr("windex.index.qdrant.alias_name", lambda source: coll)
     doc_id = "arxiv:2401.9"
     with pg.cursor() as cur:
         cur.execute(

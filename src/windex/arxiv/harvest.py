@@ -293,6 +293,7 @@ def apply_tombstones(conn: psycopg.Connection, settings: Settings, doc_ids: list
         client.delete(
             collection_name=qidx.alias_name("arxiv"),
             points_selector=qm.PointIdsList(points=[point_id(i) for i in doc_ids]),
+            wait=True,  # tombstones are rare; deletion should be visible on return
         )
     except Exception as exc:  # index absent/unreachable: ledger tombstone stands
         console.print(f"[yellow]tombstone: qdrant delete skipped ({exc})[/yellow]")

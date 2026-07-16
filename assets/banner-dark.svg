@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="windex — self-hosted web index">
+  <rect width="1200" height="300" fill="#201f1b"/>
+  <rect x="0.5" y="0.5" width="1199" height="299" fill="none" stroke="#3a3831" stroke-width="1"/>
+
+  <!-- MOTIF: six source-strands gather into an aligned index -->
+  <g fill="none" stroke-width="2.4" stroke-linecap="round">
+    <!-- s0 CC-News (clay) -->
+    <path d="M250 78 C 370 78 380 118 500 118" stroke="#d97757"/>
+    <!-- s1 Wikipedia (slate blue) -->
+    <path d="M210 107 C 330 107 380 131 500 131" stroke="#5a8ed2"/>
+    <!-- s2 GitHub / docs (muted tan) -->
+    <path d="M286 136 C 406 136 380 144 500 144" stroke="#98917f"/>
+    <!-- s3 arXiv (red) -->
+    <path d="M228 164 C 348 164 380 157 500 157" stroke="#e06b6b" opacity="0.92"/>
+    <!-- s4 small-web (green) -->
+    <path d="M300 193 C 420 193 380 170 500 170" stroke="#8fbc8f" opacity="0.92"/>
+    <!-- s5 base index (ink → light on dark) -->
+    <path d="M196 222 C 316 222 380 183 500 183" stroke="#e8e5dd" opacity="0.85"/>
+  </g>
+
+  <!-- aligned index lines (the unified, ordered result) -->
+  <g stroke-width="2.4" stroke-linecap="round">
+    <line x1="500" y1="118" x2="588" y2="118" stroke="#d97757"/>
+    <line x1="500" y1="131" x2="588" y2="131" stroke="#5a8ed2"/>
+    <line x1="500" y1="144" x2="588" y2="144" stroke="#98917f"/>
+    <line x1="500" y1="157" x2="588" y2="157" stroke="#e06b6b" opacity="0.92"/>
+    <line x1="500" y1="170" x2="588" y2="170" stroke="#8fbc8f" opacity="0.92"/>
+    <line x1="500" y1="183" x2="588" y2="183" stroke="#e8e5dd" opacity="0.85"/>
+  </g>
+
+  <!-- WORDMARK -->
+  <text x="632" y="178" font-family="ui-serif, 'Iowan Old Style', Palatino, Georgia, 'Times New Roman', serif" font-size="104" font-weight="600" letter-spacing="-1.5" fill="#e8e5dd">windex</text>
+  <text x="636" y="210" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="21" font-weight="400" letter-spacing="1" fill="#a19b8d">self-hosted web index</text>
+</svg>
