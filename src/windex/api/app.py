@@ -28,7 +28,7 @@ def dashboard() -> HTMLResponse:
 @app.get("/v1/search")
 def search(
     q: str = Query(min_length=1),
-    source: Literal["news", "github", "wiki", "arxiv", "all"] = "all",
+    source: Literal["news", "github", "wiki", "arxiv", "smallweb", "all"] = "all",
     limit: int = Query(10, ge=1, le=50),
     mode: Literal["hybrid", "dense", "lexical"] = "hybrid",
     published_after: datetime | None = None,
@@ -37,11 +37,13 @@ def search(
     language: str | None = None,
     category: str | None = Query(None, max_length=64,
                                  description="arXiv primary category, e.g. cs.LG"),
+    outlet: str | None = Query(None, max_length=253,
+                               description="Small Web feed host, e.g. example.com"),
 ) -> dict:
     return service.run_search(
         get_settings(), q, source=source, limit=limit, mode=mode,
         published_after=published_after, published_before=published_before,
-        min_stars=min_stars, language=language, category=category,
+        min_stars=min_stars, language=language, category=category, outlet=outlet,
     )
 
 

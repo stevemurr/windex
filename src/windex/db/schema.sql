@@ -1,8 +1,8 @@
 -- windex schema. Idempotent: applied via `windex init-db` on every deploy.
 
 CREATE TABLE IF NOT EXISTS documents (
-    id             text PRIMARY KEY,          -- stable API id: news:<hash> | gh:owner/repo | wiki:<page_id> | arxiv:<paper_id>
-    source         text NOT NULL,             -- news | github | wiki | arxiv
+    id             text PRIMARY KEY,          -- stable API id: news:<hash> | gh:owner/repo | wiki:<page_id> | arxiv:<paper_id> | smallweb:<hash>
+    source         text NOT NULL,             -- news | github | wiki | arxiv | smallweb
     url            text NOT NULL,
     canonical_url  text,
     title          text,
@@ -86,6 +86,27 @@ CREATE TABLE IF NOT EXISTS arxiv_windows (
     PRIMARY KEY (from_date, until_date)
 );
 CREATE INDEX IF NOT EXISTS arxiv_windows_status_idx ON arxiv_windows (status);
+
+-- Feed registry for the Kagi Small Web source. This is windex's only FETCH-based
+-- source: sync.py seeds this table from smallweb.txt (github.com/kagisearch/smallweb,
+-- MIT); poll.py polls each active feed with a conditional GET (etag/last_modified),
+-- parses it, and stages new posts. fail_count accrues on consecutive failures and
+-- flips status to 'dead' at the cap (reset on any success/304); feeds that drop off
+-- the upstream list become 'removed' (the row + poll watermark survive a reappearance).
+CREATE TABLE IF NOT EXISTS feeds (
+    url           text PRIMARY KEY,           -- RSS/Atom feed URL from smallweb.txt
+    host          text NOT NULL,              -- feed host (payload outlet for its posts)
+    etag          text,                       -- conditional-GET validator (If-None-Match)
+    last_modified text,                       -- conditional-GET validator (If-Modified-Since)
+    last_polled   timestamptz,                -- poll watermark (drives rotation order)
+    last_status   integer,                    -- last HTTP status seen (200/304/…; progress only)
+    items_seen    integer NOT NULL DEFAULT 0, -- cumulative posts staged from this feed
+    fail_count    integer NOT NULL DEFAULT 0, -- consecutive failures
+    status        text NOT NULL DEFAULT 'active',  -- active | dead | removed
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS feeds_status_idx ON feeds (status);
+CREATE INDEX IF NOT EXISTS feeds_last_polled_idx ON feeds (last_polled);
 
 -- Rolling-window LSH index for near-dup detection across daily batches.
 CREATE TABLE IF NOT EXISTS minhash_bands (

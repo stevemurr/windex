@@ -48,6 +48,19 @@ def test_build_argv_arxiv_jobs():
         ["arxiv", "embed", "--limit", "5000"]
 
 
+def test_build_argv_smallweb_jobs():
+    assert jobs.build_argv(jobs.JOBS["smallweb-sync"], {})[1:] == ["smallweb", "sync"]
+    argv = jobs.build_argv(jobs.JOBS["smallweb-poll"], {"max_feeds": 500})
+    assert argv[1:] == ["smallweb", "poll", "--max-feeds", "500"]
+    with pytest.raises(ValueError, match="out of range"):
+        jobs.build_argv(jobs.JOBS["smallweb-poll"], {"max_feeds": 999999})
+    assert jobs.build_argv(jobs.JOBS["smallweb-embed"], {"limit": 5000})[1:] == \
+        ["smallweb", "embed", "--limit", "5000"]
+    # reindex now accepts smallweb as a source
+    assert jobs.build_argv(jobs.JOBS["reindex"], {"source": "smallweb"})[1:] == \
+        ["reindex", "smallweb", "--yes"]
+
+
 def test_arxiv_harvest_and_backfill_patterns_are_unambiguous():
     # both jobs launch `windex arxiv harvest`; their pgrep patterns must not
     # cross-match, or stopping one would kill the other (LAN-exposed control).

@@ -10,6 +10,7 @@ from conftest import QDRANT_URL
 import windex.arxiv.embed_index as arxiv_embed
 import windex.ccnews.embed_index as news_embed
 import windex.github.embed_index as gh_embed
+import windex.smallweb.embed_index as smallweb_embed
 import windex.wiki.embed_index as wiki_embed
 
 
@@ -180,3 +181,45 @@ def test_arxiv_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
     assert p1["authors"] == "Yann LeCun, Yoshua Bengio, Geoffrey Hinton, et al."
     assert p1["published_at"] == "2024-01-01T00:00:00Z"
     assert payloads["arxiv:2401.2"]["authors"] == "Jane Doe"  # single author, no et al.
+
+
+def test_smallweb_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
+    monkeypatch.setattr(smallweb_embed, "build_embedder", lambda s: fake_embedder)
+    text_ref = "smallweb/clean/20260714T090000Z_0000.parquet"
+    path = settings.staging_dir / text_ref
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.table({
+            "id": ["smallweb:aa", "smallweb:bb"],
+            "url": ["https://blog.one/post", "https://blog.two/post"],
+            "canonical_url": ["https://blog.one/post", "https://blog.two/post"],
+            "title": ["Coop latch", "Basil"],
+            "published_at": ["2026-07-14T08:00:00+00:00", None],  # bare-None survives
+            "outlet": ["blog.one", "blog.two"],
+            "lang": ["en", "en"],
+            "text": ["latch " * 50, "basil " * 50],
+        }),
+        path,
+    )
+    with pg.cursor() as cur:
+        cur.executemany(
+            """INSERT INTO documents (id, source, url, canonical_url, title, status, text_ref)
+               VALUES (%s, 'smallweb', %s, %s, %s, 'deduped', %s)""",
+            [("smallweb:aa", "https://blog.one/post", "https://blog.one/post", "Coop latch", text_ref),
+             ("smallweb:bb", "https://blog.two/post", "https://blog.two/post", "Basil", text_ref)],
+        )
+    pg.commit()
+
+    n = smallweb_embed.embed_pending(pg, settings, limit=10)
+    assert n == 2
+    with pg.cursor() as cur:
+        cur.execute("SELECT count(*) FROM documents WHERE source='smallweb' AND status='embedded' "
+                    "AND embedded_model=%s", (settings.embed_model,))
+        assert cur.fetchone()[0] == 2
+    assert _qdrant_count("smallweb__pytest-model") >= 2
+    pts = QdrantClient(url=QDRANT_URL).scroll("smallweb__pytest-model", limit=10, with_payload=True)[0]
+    payloads = {p.payload["doc_id"]: p.payload for p in pts}
+    p1 = payloads["smallweb:aa"]
+    assert {"doc_id", "url", "title", "snippet", "outlet", "published_at", "source"} <= set(p1)
+    assert p1["source"] == "smallweb" and p1["outlet"] == "blog.one"
+    assert p1["published_at"] == "2026-07-14T08:00:00+00:00"
