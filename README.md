@@ -1,11 +1,24 @@
-# windex
+<div align="center">
 
-**A self-hosted web index for search agents.** Fresh news and GitHub projects, continuously
-ingested, deduplicated, embedded with your own model, and served over REST and MCP — so your
-agents can find things and link to them without ever touching a third-party search API.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.svg">
+  <img alt="windex — self-hosted web index" src="assets/banner-light.svg" width="820">
+</picture>
 
-Everything runs on your hardware. The only external touchpoints are the public datasets
-themselves: Common Crawl's news feed, GH Archive's event stream, and the GitHub API.
+*Fresh public datasets — CC-News, GitHub, Wikipedia, arXiv, the small web — continuously ingested, deduped, embedded with **your** model, and served as hybrid search over REST and MCP.*
+
+![Python](https://img.shields.io/badge/python-3.11%E2%80%933.12-c15f3c?style=flat-square&labelColor=29261f)
+&nbsp;
+![Serves](https://img.shields.io/badge/serves-REST%20%2B%20MCP-7a7568?style=flat-square&labelColor=29261f)
+
+[Quickstart](#quickstart) · [Architecture](#architecture) · [Search API](#search-api) · [Dashboard](#dashboard) · [Reproducibility](#reproducibility-rebuild-from-any-layer)
+
+</div>
+
+A search index for agents, on your hardware. Everything runs self-hosted; the only external
+touchpoints are the public datasets themselves — Common Crawl's news feed, GH Archive and the
+GitHub API, Wikimedia's dumps, arXiv's OAI feed, and the small-web blogs it politely polls.
 
 ## What it does
 
