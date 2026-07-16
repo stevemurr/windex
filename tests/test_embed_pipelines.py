@@ -11,6 +11,7 @@ import windex.arxiv.embed_index as arxiv_embed
 import windex.ccnews.embed_index as news_embed
 import windex.docs_source.embed_index as docs_embed
 import windex.github.embed_index as gh_embed
+import windex.hn.embed_index as hn_embed
 import windex.smallweb.embed_index as smallweb_embed
 import windex.wiki.embed_index as wiki_embed
 
@@ -224,6 +225,57 @@ def test_smallweb_embed_pending(pg, settings, qclient, fake_embedder, monkeypatc
     assert {"doc_id", "url", "title", "snippet", "outlet", "published_at", "source"} <= set(p1)
     assert p1["source"] == "smallweb" and p1["outlet"] == "blog.one"
     assert p1["published_at"] == "2026-07-14T08:00:00+00:00"
+
+
+def test_hn_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
+    monkeypatch.setattr(hn_embed, "build_embedder", lambda s: fake_embedder)
+    text_ref = "hn/clean/20260715_20260717.parquet"
+    path = settings.staging_dir / text_ref
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.table({
+            "id": ["hn:101", "hn:102"],
+            "url": ["https://news.ycombinator.com/item?id=101",
+                    "https://news.ycombinator.com/item?id=102"],
+            "target_url": ["https://example.com/post", None],  # self post: no target
+            "title": ["Show HN: windex", "Ask HN: which parquet layout?"],
+            "story_text": ["", "I benchmarked row groups. " * 10],
+            "author": ["alice", "bob"],
+            "points": pa.array([42, 5], pa.int64()),
+            "num_comments": pa.array([7, 2], pa.int64()),
+            "created_at": ["2026-07-15T08:00:00Z", "2026-07-15T09:00:00Z"],
+        }),
+        path,
+    )
+    with pg.cursor() as cur:
+        cur.executemany(
+            """INSERT INTO documents (id, source, url, title, published_at, status, text_ref)
+               VALUES (%s, 'hn', %s, %s, %s, 'deduped', %s)""",
+            [("hn:101", "https://news.ycombinator.com/item?id=101", "Show HN: windex",
+              "2026-07-15T08:00:00Z", text_ref),
+             ("hn:102", "https://news.ycombinator.com/item?id=102",
+              "Ask HN: which parquet layout?", "2026-07-15T09:00:00Z", text_ref)],
+        )
+    pg.commit()
+
+    n = hn_embed.embed_pending(pg, settings, limit=10)
+    assert n == 2
+    with pg.cursor() as cur:
+        cur.execute("SELECT count(*) FROM documents WHERE source='hn' AND status='embedded' "
+                    "AND embedded_model=%s", (settings.embed_model,))
+        assert cur.fetchone()[0] == 2
+    assert _qdrant_count("hn__pytest-model") >= 2
+    pts = QdrantClient(url=QDRANT_URL).scroll("hn__pytest-model", limit=10, with_payload=True)[0]
+    payloads = {p.payload["doc_id"]: p.payload for p in pts}
+    p1 = payloads["hn:101"]
+    assert {"doc_id", "url", "target_url", "title", "snippet", "points",
+            "num_comments", "author", "published_at", "source"} <= set(p1)
+    assert p1["source"] == "hn" and p1["points"] == 42 and p1["num_comments"] == 7
+    assert p1["url"] == "https://news.ycombinator.com/item?id=101"  # discussion is canonical
+    assert p1["target_url"] == "https://example.com/post"
+    assert p1["snippet"] == "Show HN: windex"  # the title IS the snippet
+    assert payloads["hn:102"]["target_url"] is None
+    assert payloads["hn:102"]["published_at"] == "2026-07-15T09:00:00Z"
 
 
 def test_docs_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):

@@ -129,6 +129,27 @@ CREATE TABLE IF NOT EXISTS docsets (
 );
 CREATE INDEX IF NOT EXISTS docsets_status_idx ON docsets (status);
 
+-- Freshness watermark for Hacker News: one row per [from_ts, until_ts) epoch
+-- window — calendar months for the backfill (drained from either the Algolia
+-- API or the open-index parquet mirror; same staging flow), plus a rolling
+-- trailing-days window for the tail. Algolia hard-caps any query at 1000 hits,
+-- so a window is FETCHED by recursively halving over-cap sub-ranges but staged
+-- and marked as one unit. The trailing window is re-armed on every run: the
+-- documents.text_hash ledger keeps unchanged stories from re-embedding, while
+-- their points/num_comments payloads are refreshed in place (set_payload).
+CREATE TABLE IF NOT EXISTS hn_windows (
+    from_ts      bigint NOT NULL,             -- created_at_i >= (inclusive, unix UTC)
+    until_ts     bigint NOT NULL,             -- created_at_i <  (exclusive, unix UTC)
+    status       text NOT NULL DEFAULT 'pending',  -- pending | processing | done | failed
+    queries      integer DEFAULT 0,           -- Algolia requests issued (incl. cap splits)
+    hits         integer DEFAULT 0,           -- stories seen
+    staged       integer DEFAULT 0,           -- changed-text delta rows staged to parquet + ledger
+    refreshed    integer DEFAULT 0,           -- unchanged stories with a points payload refresh
+    processed_at timestamptz,
+    PRIMARY KEY (from_ts, until_ts)
+);
+CREATE INDEX IF NOT EXISTS hn_windows_status_idx ON hn_windows (status);
+
 -- Rolling-window LSH index for near-dup detection across daily batches.
 CREATE TABLE IF NOT EXISTS minhash_bands (
     band_idx  smallint NOT NULL,

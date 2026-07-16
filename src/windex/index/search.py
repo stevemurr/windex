@@ -88,6 +88,23 @@ def _docs_filter(framework: str | None):
     return conds
 
 
+def _hn_filter(min_points: int | None, published_after: datetime | None,
+               published_before: datetime | None):
+    # HN payloads index points (integer) and published_at (story date), so
+    # min_points filtering mirrors how github filters min_stars.
+    conds = []
+    if min_points:
+        conds.append(qm.FieldCondition(key="points", range=qm.Range(gte=min_points)))
+    if published_after or published_before:
+        conds.append(
+            qm.FieldCondition(
+                key="published_at",
+                range=qm.DatetimeRange(gte=published_after, lte=published_before),
+            )
+        )
+    return conds
+
+
 def _arxiv_filter(category: str | None, published_after: datetime | None,
                   published_before: datetime | None):
     # arXiv indexes primary_category (keyword) and published_at (submission date),
@@ -167,6 +184,7 @@ def search(
     category: str | None = None,
     outlet: str | None = None,
     framework: str | None = None,
+    min_points: int | None = None,
 ) -> list[dict]:
     client = QdrantClient(url=settings.qdrant_url)
     existing = {c.name for c in client.get_collections().collections}
@@ -206,6 +224,9 @@ def search(
                         _smallweb_filter(outlet, published_after, published_before)))
     if source in ("docs", "all"):
         targets.append(("docs", qidx.alias_name("docs"), _docs_filter(framework)))
+    if source in ("hn", "all"):
+        targets.append(("hn", qidx.alias_name("hn"),
+                        _hn_filter(min_points, published_after, published_before)))
     t_search = time.monotonic()
     for _, alias, conds in targets:
         if alias not in aliases and alias not in existing:

@@ -473,9 +473,93 @@ def docs_status() -> None:
         console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
 
 
+hn_app = typer.Typer(no_args_is_help=True, help="Hacker News ingestion (Algolia API + parquet mirror)")
+app.add_typer(hn_app, name="hn")
+
+
+@hn_app.command("harvest")
+def hn_harvest(
+    days: int = typer.Option(None, help="Trailing window: re-pull the last N days (default: config)"),
+    max_windows: int = typer.Option(None, help="Stop after N windows (default: all pending)"),
+) -> None:
+    """Harvest HN stories from the Algolia API → clean parquet + documents ledger.
+
+    Arms a rolling trailing-days window (re-armed each run: the text_hash ledger
+    skips unchanged stories while their points/num_comments are refreshed in the
+    payload without re-embedding), then drains ALL pending windows — including
+    any backfill months still open — splitting over-cap ranges automatically.
+    """
+    from windex.hn import harvest as hharvest
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        frm, until = hharvest.plan_incremental(conn, days or settings.hn_incremental_days)
+        console.print(
+            f"[green]trailing window {hharvest.window_label(frm)}..{hharvest.window_label(until)} armed[/green]"
+        )
+        stats = hharvest.harvest(conn, settings, max_windows=max_windows)
+    console.print(stats)
+
+
+@hn_app.command("backfill")
+def hn_backfill(
+    from_year: int = typer.Option(2006, help="Earliest year to plan (HN starts 2006-10)"),
+    from_month: int = typer.Option(None, help="Earliest month (default: Oct for 2006, else Jan)"),
+    to_year: int = typer.Option(None, help="Latest year (default: current)"),
+    to_month: int = typer.Option(None, help="Latest month (default: current / Dec)"),
+    max_windows: int = typer.Option(None, help="Stop after N months (default: all pending)"),
+    keep: bool = typer.Option(False, help="Keep downloaded monthly parquet files"),
+) -> None:
+    """Fast-path backfill: plan per-month windows, then drain them from the
+    open-index/hacker-news parquet mirror (ODC-By 1.0) — zero Algolia load.
+
+    Same watermarks and staging flow as `hn harvest`, so the two are
+    interchangeable per window; months left pending (or failed) can be drained
+    by the Algolia harvester instead. Idempotent either way.
+    """
+    from windex.hn import backfill as hbackfill
+    from windex.hn import harvest as hharvest
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        planned = hharvest.plan_backfill(
+            conn, from_year, from_month, to_year, to_month
+        )
+        console.print(f"[green]{planned} new per-month windows planned[/green]")
+        stats = hbackfill.backfill(conn, settings, max_windows=max_windows, keep=keep)
+    console.print(stats)
+
+
+@hn_app.command("embed")
+def hn_embed(limit: int = 100_000) -> None:
+    """Embed staged HN stories into Qdrant. Respects the dashboard pause flag."""
+    from windex.hn.embed_index import embed_pending
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        if db.get_control(conn, "indexing", "running") == "paused":
+            console.print("[yellow]paused — skipping embed[/yellow]")
+            raise typer.Exit(0)
+        n = embed_pending(conn, settings, limit=limit)
+    console.print(f"[green]embedded {n} stories[/green]")
+
+
+@hn_app.command("status")
+def hn_status() -> None:
+    """Harvest-window watermark + document pipeline counts."""
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT status, count(*) FROM hn_windows GROUP BY status ORDER BY status")
+        console.print({r[0]: r[1] for r in cur.fetchall()}, "hn_windows")
+        cur.execute(
+            "SELECT status, count(*) FROM documents WHERE source='hn' GROUP BY status ORDER BY status"
+        )
+        console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
+
+
 @app.command()
 def reindex(
-    source: str = typer.Argument("all", help="news | repos | wiki | arxiv | smallweb | docs | all"),
+    source: str = typer.Argument("all", help="news | repos | wiki | arxiv | smallweb | docs | hn | all"),
     drop_collections: bool = typer.Option(True, help="Recreate Qdrant collections from scratch"),
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation"),
 ) -> None:
@@ -554,10 +638,22 @@ def reindex(
                    WHERE source='docs' AND status='embedded'"""
             )
             console.print(f"[green]docs: {cur.rowcount} docs queued for re-embed[/green]")
+        if source in ("hn", "all"):
+            if drop_collections:
+                name = qidx.collection_name("hn", settings.embed_model)
+                if client.collection_exists(name):
+                    client.delete_collection(name)
+                qidx.ensure_collection(client, "hn", settings.embed_model, settings.embed_dim)
+            cur.execute(
+                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
+                   WHERE source='hn' AND status='embedded'"""
+            )
+            console.print(f"[green]hn: {cur.rowcount} docs queued for re-embed[/green]")
         conn.commit()
     console.print(
         "run `windex ccnews embed-loop`, `windex gh embed`, `windex wiki embed`, "
-        "`windex arxiv embed`, `windex smallweb embed`, `windex docs embed` to repopulate"
+        "`windex arxiv embed`, `windex smallweb embed`, `windex docs embed`, "
+        "`windex hn embed` to repopulate"
     )
 
 

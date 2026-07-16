@@ -82,6 +82,18 @@ class Settings(BaseSettings):
         "docker,kubernetes"
     )
 
+    # Hacker News (stories only, never comments). Tail + authoritative backfill:
+    # the Algolia HN Search API (free, no auth, ~10k req/hr/IP; every query is
+    # hard-capped at 1000 hits, so windows recursively split until they fit —
+    # keep the pacing polite anyway). Fast backfill: the open-index/hacker-news
+    # parquet mirror on Hugging Face (ODC-By 1.0). The incremental window trails
+    # a couple of days ON PURPOSE: re-pulling unchanged stories refreshes their
+    # points/num_comments payloads in place (set_payload, never a re-embed).
+    hn_algolia_url: str = "https://hn.algolia.com/api/v1/search_by_date"
+    hn_mirror_url: str = "https://huggingface.co/datasets/open-index/hacker-news/resolve/main/data"
+    hn_request_interval: float = 0.4
+    hn_incremental_days: int = 2
+
     github_tokens: str = ""  # comma-separated PATs for hydration
 
     @property
@@ -132,6 +144,14 @@ class Settings(BaseSettings):
     def docs_staging_dir(self) -> Path:
         return self.staging_dir / "docs"
 
+    @property
+    def hn_downloads_dir(self) -> Path:
+        return self.downloads_dir / "hn"
+
+    @property
+    def hn_staging_dir(self) -> Path:
+        return self.staging_dir / "hn"
+
     def all_dirs(self) -> list[Path]:
         return [
             self.ccnews_downloads_dir,
@@ -143,6 +163,8 @@ class Settings(BaseSettings):
             self.smallweb_staging_dir,
             self.docs_downloads_dir,
             self.docs_staging_dir,
+            self.hn_downloads_dir,
+            self.hn_staging_dir,
         ]
 
     def github_token_list(self) -> list[str]:
