@@ -18,7 +18,7 @@ from qdrant_client import models as qm
 from windex import db
 from windex.ccnews.embed_index import point_id
 from windex.config import Settings
-from windex.embed import build_embedder
+from windex.embed import build_embedder, with_runtime_profile
 from windex.index import qdrant as qidx
 
 
@@ -80,6 +80,7 @@ def _embed_and_upsert(batch: list[dict], embedder, bm25, client, collection: str
 
 
 def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 100_000) -> int:
+    settings = with_runtime_profile(conn, settings)
     embedder = build_embedder(settings)
     from fastembed import SparseTextEmbedding
 

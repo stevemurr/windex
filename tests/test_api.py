@@ -100,6 +100,23 @@ def test_events_stream_emits_sse(client, pg):
     assert '"totals"' in body  # stats payload is the full contract object
 
 
+def test_throttle_profile_endpoint_and_overlay(client, pg, settings):
+    from windex import db as wdb
+    from windex.embed import with_runtime_profile
+
+    assert client.post("/v1/throttle/full").json() == {"embed_profile": "full"}
+    assert with_runtime_profile(pg, settings).embed_concurrency == 8
+    assert client.post("/v1/throttle/polite").json() == {"embed_profile": "polite"}
+    eff = with_runtime_profile(pg, settings)
+    assert (eff.embed_concurrency, eff.embed_batch_size, eff.embed_throttle_seconds) == (2, 16, 1.0)
+    client.post("/v1/throttle/env")
+    assert with_runtime_profile(pg, settings) is settings  # env = untouched
+    assert client.post("/v1/throttle/ludicrous").status_code == 422
+    service_mod._pg_stats_cache.clear()
+    assert client.get("/v1/stats").json()["activity"]["embed_profile"] == "env"
+    wdb.set_control(pg, "embed_profile", "env")
+
+
 def test_workers_endpoint_reads_batch_activity(client, pg, settings):
     from windex import db as wdb
 

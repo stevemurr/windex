@@ -120,6 +120,10 @@
   @media (prefers-color-scheme: dark) {
     .pillselect { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a19b8d' fill='none' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E"); }
   }
+  .actrow { display:flex; align-items:flex-start; gap:.8rem; margin:-.3rem 0 .8rem; }
+  .actrow .stageline { flex:1; margin:0; }
+  .actrow .pillselect { flex-shrink:0; }
+  @media (max-width:600px) { .actrow { flex-direction:column; } }
   .stageline { color:var(--muted); font-size:.78rem; margin:-.3rem 0 .8rem;
                font-variant-numeric:tabular-nums; }
   .stageline b { color:var(--ink); font-weight:600; }
@@ -292,7 +296,15 @@
       <pre id="logbody">select a log…</pre>
     </div>
     <h2 style="margin-top:1.6rem">Activity</h2>
-    <div class="stageline" id="stagesLine"></div>
+    <div class="actrow">
+      <div class="stageline" id="stagesLine"></div>
+      <select id="throttle" class="pillselect" aria-label="Embed throughput profile"
+              title="Embedding throughput — polite keeps search fast, full drains the backlog. Applies within a minute, no restarts.">
+        <option value="env">Throttle · env</option>
+        <option value="polite">Throttle · polite</option>
+        <option value="full">Throttle · full</option>
+      </select>
+    </div>
     <div id="workers">
       <div class="whead">
         <span class="k" id="wstage"></span>
@@ -441,6 +453,8 @@ function renderStats(s) {
       label = queued ? `idle — ${num(queued)} queued` : "up to date";
     }
     document.getElementById("liveLabel").textContent = label;
+    const th = document.getElementById("throttle");
+    if (document.activeElement !== th) th.value = act.embed_profile || "env";
     document.getElementById("stagesLine").innerHTML =
       `news <b>${esc(st.news || "idle")}</b> · github <b>${esc(st.github || "idle")}</b>` +
       ` · embedder <b>${embedding ? `active (${num(Math.round(act.docs_per_min || 0))}/min)` : backlog ? "backlog waiting" : "idle"}</b>`;
@@ -513,6 +527,11 @@ function renderFeed(rows) {
       </div>`).join("");
   } catch (e) { /* feed is best-effort */ }
 }
+
+document.getElementById("throttle").addEventListener("change", async (e) => {
+  await fetch(`/v1/throttle/${e.target.value}`, { method: "POST" });
+  refresh();
+});
 
 document.getElementById("ctl").addEventListener("click", async () => {
   const pausing = document.getElementById("ctl").textContent.startsWith("Pause");

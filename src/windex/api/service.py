@@ -272,6 +272,12 @@ def get_control(settings: Settings) -> str:
         return db.get_control(conn, "indexing", "running")
 
 
+def set_embed_profile(settings: Settings, profile: str) -> str:
+    with db.connect(settings.pg_dsn) as conn:
+        db.set_control(conn, "embed_profile", profile)
+    return profile
+
+
 def set_control(settings: Settings, value: str) -> str:
     with db.connect(settings.pg_dsn) as conn:
         db.set_control(conn, "indexing", value)
@@ -304,6 +310,7 @@ def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
     stats["activity"] = {
         **stats["activity"],
         "control": flags.get("indexing", "running"),
+        "embed_profile": flags.get("embed_profile", "env"),
         "stages": {
             "news": flags.get("news_stage", "idle"),
             "github": flags.get("gh_stage", "idle"),

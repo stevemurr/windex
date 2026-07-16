@@ -17,7 +17,7 @@ from qdrant_client import models as qm
 
 from windex import db
 from windex.config import Settings
-from windex.embed import build_embedder
+from windex.embed import build_embedder, with_runtime_profile
 from windex.index import qdrant as qidx
 
 _NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # uuid5 namespace
@@ -86,6 +86,7 @@ def _embed_and_upsert(batch: list[dict], embedder, bm25, client, collection: str
 
 
 def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 50_000) -> int:
+    settings = with_runtime_profile(conn, settings)
     import concurrent.futures as cf
 
     embedder = build_embedder(settings)

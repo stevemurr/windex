@@ -120,6 +120,13 @@ def jobs_stop(name: str) -> dict:
         raise HTTPException(404, f"unknown job: {name}")
 
 
+@app.post("/v1/throttle/{profile}")
+def throttle(profile: Literal["polite", "full", "env"]) -> dict:
+    """Embedding throughput profile — read by embedders at each pass, so it
+    applies within about a minute without restarting anything."""
+    return {"embed_profile": service.set_embed_profile(get_settings(), profile)}
+
+
 @app.get("/v1/events")
 async def events(ticks: int | None = Query(None, ge=1, le=100)) -> StreamingResponse:
     """SSE stream for the dashboard: `stats` every ~2s, `recent` only when it
