@@ -45,6 +45,7 @@ def ensure_collection(client: QdrantClient, source: str, model_id: str, dim: int
     if not client.collection_exists(name):
         client.create_collection(
             collection_name=name,
+            on_disk_payload=True,  # snippets × millions of docs must not live in RAM
             vectors_config={
                 DENSE: qm.VectorParams(size=dim, distance=qm.Distance.COSINE, on_disk=True)
             },

@@ -4,7 +4,9 @@ import psycopg
 
 
 def connect(dsn: str) -> psycopg.Connection:
-    return psycopg.connect(dsn)
+    # fail fast when postgres is down — a wedged connect turned a service
+    # outage into an 8h silent stall for the embed follower (2026-07-16)
+    return psycopg.connect(dsn, connect_timeout=10)
 
 
 def init_db(conn: psycopg.Connection) -> None:

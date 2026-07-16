@@ -37,11 +37,11 @@ up() {
     -e POSTGRES_USER=windex -e POSTGRES_PASSWORD=windex -e POSTGRES_DB=windex \
     -e PGDATA=/var/lib/postgresql/data/pgdata \
     -v "$SERVICES_DIR/postgres:/var/lib/postgresql/data" \
-    -c 2 -m 2G \
+    -c 2 -m 4G \
     -p 5432:5432 "$PG_IMAGE"
   run_or_start "$QD_NAME" container run -d --name "$QD_NAME" \
     -v "$SERVICES_DIR/qdrant:/qdrant/storage" \
-    -c 2 -m 4G \
+    -c 4 -m 10G \
     -p 6333:6333 -p 6334:6334 "$QD_IMAGE"
   container ls
 }

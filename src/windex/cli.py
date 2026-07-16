@@ -64,6 +64,54 @@ def ccnews_embed(limit: int = 50_000) -> None:
     console.print(f"[green]embedded {n} docs[/green]")
 
 
+def _processor_alive() -> bool:
+    import subprocess
+
+    return subprocess.run(
+        ["pgrep", "-f", "ccnews run"], capture_output=True
+    ).returncode == 0
+
+
+@ccnews_app.command("embed-loop")
+def ccnews_embed_loop(
+    interval: int = 30,
+    max_consecutive_failures: int = 10,
+) -> None:
+    """Long-running embed drainer: follows the processor, backs off on errors,
+    and circuit-breaks (exit code 2) instead of spinning against dead services.
+    Exits cleanly when the backlog is drained and no processor is running."""
+    import time as time_mod
+
+    from windex.ccnews.embed_index import embed_pending
+
+    settings = get_settings()
+    failures = 0
+    while True:
+        try:
+            with db.connect(settings.pg_dsn) as conn:
+                if db.get_control(conn, "indexing", "running") == "paused":
+                    console.print("paused — waiting")
+                    time_mod.sleep(interval)
+                    continue
+                n = embed_pending(conn, settings)
+            failures = 0
+            console.print(f"embedded {n} docs")
+            if n == 0:
+                if not _processor_alive():
+                    console.print("[green]backlog drained, no processor — done[/green]")
+                    return
+                time_mod.sleep(interval)
+        except Exception as exc:
+            failures += 1
+            console.print(
+                f"[red]embed cycle failed ({failures}/{max_consecutive_failures}): {exc}[/red]"
+            )
+            if failures >= max_consecutive_failures:
+                console.print("[red]circuit breaker tripped — exiting[/red]")
+                raise typer.Exit(2)
+            time_mod.sleep(min(interval * failures, 300))
+
+
 @ccnews_app.command("status")
 def ccnews_status() -> None:
     """WARC watermark + document pipeline counts."""
