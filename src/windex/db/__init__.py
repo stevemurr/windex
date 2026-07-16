@@ -25,6 +25,12 @@ def pool(dsn: str) -> ConnectionPool:
         if p is None:
             p = ConnectionPool(
                 dsn, min_size=1, max_size=16, timeout=10, open=True,
+                # health-check each checkout: a backend killed while the conn
+                # sat idle in the pool (terminate bursts, restarts, forward
+                # resets) is discarded + replaced instead of handed out dead
+                # (post-mortem 2026-07-16: 7 one-shot 500s, self-healed on the
+                # next request — this closes the gap at ~1 round-trip cost)
+                check=ConnectionPool.check_connection,
                 kwargs={"connect_timeout": 10},
             )
             _pools[dsn] = p
