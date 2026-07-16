@@ -39,7 +39,7 @@ def pg(pg_dsn):
     with conn.cursor() as cur:
         cur.execute(
             "TRUNCATE documents, warc_files, repos, gharchive_files, minhash_bands, "
-            "control, wiki_dumps"
+            "control, wiki_dumps, arxiv_windows"
         )
     conn.commit()
     yield conn

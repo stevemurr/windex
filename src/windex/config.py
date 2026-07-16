@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     # row-group / commit / pause-check granularity within a shard.
     wiki_dump: str = "enwiki"
     wiki_chunk_rows: int = 2_000
+    # arXiv (OAI-PMH metadata harvest). Metadata is CC0; we harvest metadata only
+    # (title + abstract), never full text. arXiv ToU: 1 request / 3 seconds from a
+    # single connection with a descriptive User-Agent. The backfill is chunked into
+    # per-year date windows so each is independently restartable (resumption tokens
+    # expire at the next 00:00 UTC).
+    arxiv_oai_endpoint: str = "https://oaipmh.arxiv.org/oai"
+    arxiv_metadata_prefix: str = "arXiv"
+    arxiv_request_interval: float = 3.0
+    arxiv_incremental_days: int = 7
+    arxiv_earliest_year: int = 2005  # earliestDatestamp is 2005-09-16
 
     github_tokens: str = ""  # comma-separated PATs for hydration
 
@@ -76,6 +86,10 @@ class Settings(BaseSettings):
     def wiki_staging_dir(self) -> Path:
         return self.staging_dir / "wiki"
 
+    @property
+    def arxiv_staging_dir(self) -> Path:
+        return self.staging_dir / "arxiv"
+
     def all_dirs(self) -> list[Path]:
         return [
             self.ccnews_downloads_dir,
@@ -83,6 +97,7 @@ class Settings(BaseSettings):
             self.news_staging_dir,
             self.repos_staging_dir,
             self.wiki_staging_dir,
+            self.arxiv_staging_dir,
         ]
 
     def github_token_list(self) -> list[str]:

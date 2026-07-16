@@ -288,9 +288,70 @@ def wiki_status() -> None:
         console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
 
 
+arxiv_app = typer.Typer(no_args_is_help=True, help="arXiv ingestion (OAI-PMH metadata harvest)")
+app.add_typer(arxiv_app, name="arxiv")
+
+
+@arxiv_app.command("harvest")
+def arxiv_harvest(
+    days: int = typer.Option(None, help="Incremental window: harvest the last N days (default: config)"),
+    from_year: int = typer.Option(None, help="Backfill: earliest year (per-year windows)"),
+    to_year: int = typer.Option(None, help="Backfill: latest year (default: current year)"),
+    max_windows: int = typer.Option(None, help="Stop after N windows (default: all pending)"),
+) -> None:
+    """Harvest arXiv metadata over OAI-PMH → clean parquet + documents ledger.
+
+    Incremental (default): a rolling last-N-days window. Backfill: pass --from-year
+    to plan independently restartable per-year windows (the whole corpus is
+    --from-year 2005). Idempotent; the text_hash ledger keeps re-harvests to the
+    changed-paper delta.
+    """
+    from datetime import date
+
+    from windex.arxiv import harvest as aharvest
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        if from_year is not None:
+            planned = aharvest.plan_backfill(conn, from_year, to_year or date.today().year)
+            console.print(f"[green]{planned} new per-year windows planned[/green]")
+        else:
+            frm, until = aharvest.plan_incremental(conn, days or settings.arxiv_incremental_days)
+            console.print(f"[green]incremental window {frm}..{until} armed[/green]")
+        stats = aharvest.harvest(conn, settings, max_windows=max_windows)
+    console.print(stats)
+
+
+@arxiv_app.command("embed")
+def arxiv_embed(limit: int = 100_000) -> None:
+    """Embed staged arXiv papers into Qdrant. Respects the dashboard pause flag."""
+    from windex.arxiv.embed_index import embed_pending
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        if db.get_control(conn, "indexing", "running") == "paused":
+            console.print("[yellow]paused — skipping embed[/yellow]")
+            raise typer.Exit(0)
+        n = embed_pending(conn, settings, limit=limit)
+    console.print(f"[green]embedded {n} papers[/green]")
+
+
+@arxiv_app.command("status")
+def arxiv_status() -> None:
+    """Harvest-window watermark + document pipeline counts."""
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT status, count(*) FROM arxiv_windows GROUP BY status ORDER BY status")
+        console.print({r[0]: r[1] for r in cur.fetchall()}, "arxiv_windows")
+        cur.execute(
+            "SELECT status, count(*) FROM documents WHERE source='arxiv' GROUP BY status ORDER BY status"
+        )
+        console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
+
+
 @app.command()
 def reindex(
-    source: str = typer.Argument("all", help="news | repos | wiki | all"),
+    source: str = typer.Argument("all", help="news | repos | wiki | arxiv | all"),
     drop_collections: bool = typer.Option(True, help="Recreate Qdrant collections from scratch"),
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation"),
 ) -> None:
@@ -336,8 +397,22 @@ def reindex(
                    WHERE source='wiki' AND status='embedded'"""
             )
             console.print(f"[green]wiki: {cur.rowcount} docs queued for re-embed[/green]")
+        if source in ("arxiv", "all"):
+            if drop_collections:
+                name = qidx.collection_name("arxiv", settings.embed_model)
+                if client.collection_exists(name):
+                    client.delete_collection(name)
+                qidx.ensure_collection(client, "arxiv", settings.embed_model, settings.embed_dim)
+            cur.execute(
+                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
+                   WHERE source='arxiv' AND status='embedded'"""
+            )
+            console.print(f"[green]arxiv: {cur.rowcount} docs queued for re-embed[/green]")
         conn.commit()
-    console.print("run `windex ccnews embed-loop`, `windex gh embed`, `windex wiki embed` to repopulate")
+    console.print(
+        "run `windex ccnews embed-loop`, `windex gh embed`, `windex wiki embed`, "
+        "`windex arxiv embed` to repopulate"
+    )
 
 
 @app.command()

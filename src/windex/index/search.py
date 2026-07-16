@@ -61,6 +61,23 @@ def _wiki_filter(published_after: datetime | None, published_before: datetime | 
     return conds
 
 
+def _arxiv_filter(category: str | None, published_after: datetime | None,
+                  published_before: datetime | None):
+    # arXiv indexes primary_category (keyword) and published_at (submission date),
+    # so category filtering mirrors how github filters language.
+    conds = []
+    if category:
+        conds.append(qm.FieldCondition(key="primary_category", match=qm.MatchValue(value=category)))
+    if published_after or published_before:
+        conds.append(
+            qm.FieldCondition(
+                key="published_at",
+                range=qm.DatetimeRange(gte=published_after, lte=published_before),
+            )
+        )
+    return conds
+
+
 def _query_collection(
     client: QdrantClient,
     collection: str,
@@ -112,6 +129,7 @@ def search(
     published_before: datetime | None = None,
     min_stars: int | None = None,
     language: str | None = None,
+    category: str | None = None,
 ) -> list[dict]:
     client = QdrantClient(url=settings.qdrant_url)
     existing = {c.name for c in client.get_collections().collections}
@@ -143,6 +161,9 @@ def search(
         targets.append(("github", qidx.alias_name("repos"), _repo_filter(min_stars, language)))
     if source in ("wiki", "all"):
         targets.append(("wiki", qidx.alias_name("wiki"), _wiki_filter(published_after, published_before)))
+    if source in ("arxiv", "all"):
+        targets.append(("arxiv", qidx.alias_name("arxiv"),
+                        _arxiv_filter(category, published_after, published_before)))
     t_search = time.monotonic()
     for _, alias, conds in targets:
         if alias not in aliases and alias not in existing:

@@ -22,6 +22,11 @@ themselves: Common Crawl's news feed, GH Archive's event stream, and the GitHub 
   with Wikimedia's own pre-extracted plain text (64 bzip2 shards, `_SUCCESS`-gated); the
   text-hash ledger keeps weekly re-ingests to the changed-article delta instead of
   re-embedding ~7M articles.
+- **arXiv** — paper metadata (title + abstract, CC0) over the
+  [OAI-PMH](https://oaipmh.arxiv.org/oai) feed: a rate-limited harvest (1 req / 3s)
+  chunked into independently restartable per-year date windows, `deletedRecord`
+  tombstone handling, and the same text-hash ledger for changed-paper deltas. Full
+  text is never harvested. See [`docs/arxiv-source.md`](docs/arxiv-source.md).
 - **Hybrid search** — dense vectors from *your* embedding model (any OpenAI/TEI-compatible
   endpoint, or in-process sentence-transformers) fused with BM25 sparse vectors via RRF in
   [Qdrant](https://qdrant.tech). Semantic queries and exact-name lookups both work.
@@ -40,6 +45,8 @@ flowchart LR
         CC[CC-News WARCs]
         GHA[GH Archive events]
         GH[GitHub GraphQL]
+        WK[Wikipedia dumps]
+        AX[arXiv OAI-PMH]
     end
     subgraph pipeline [Pipeline]
         EX[extract + filter<br/>datatrove/FineWeb]
@@ -58,6 +65,8 @@ flowchart LR
     end
     CC --> EX --> DD --> PQ --> EM --> QD
     GHA --> GH --> PQ
+    WK --> PQ
+    AX --> PQ
     DD <--> PG
     EM <--> PG
     QD --> API --> DASH
@@ -116,6 +125,20 @@ uv run windex wiki ingest    # stream shards → clean parquet + ledger (delta o
 uv run windex wiki embed     # embed staged articles into the wiki collection
 ```
 
+### Ingest arXiv
+
+```sh
+uv run windex arxiv harvest --from-year 2005   # full backfill: per-year OAI windows (~2-3h at 1 req/3s)
+uv run windex arxiv harvest --days 7           # incremental: rolling last-N-days window (cron this)
+uv run windex arxiv embed                      # embed staged papers into the arxiv collection
+```
+
+> **Why per-year windows?** arXiv's OAI resumption tokens expire at the next 00:00
+> UTC, so a single 2–3h token chain can't span a day boundary. The backfill is
+> chunked into independently restartable per-year windows (`arxiv_windows`
+> watermark); the text-hash ledger keeps re-harvests to the changed-paper delta.
+> See [`docs/arxiv-source.md`](docs/arxiv-source.md) for the verified source facts.
+
 ### Keep it fresh
 
 ```sh
@@ -127,11 +150,13 @@ uv run windex daily                     # idempotent; cron it once a day
 ```sh
 curl "http://127.0.0.1:8100/v1/search?q=vector+database&source=github&min_stars=100"
 curl "http://127.0.0.1:8100/v1/search?q=fed+rate+cut&source=news&published_after=2026-07-01"
-curl "http://127.0.0.1:8100/v1/docs/gh:qdrant/qdrant"     # stored full text by stable id
+curl "http://127.0.0.1:8100/v1/search?q=diffusion+models&source=arxiv&category=cs.LG"
+curl "http://127.0.0.1:8100/v1/docs/arxiv:2401.00001"     # stored abstract by stable id
 curl "http://127.0.0.1:8100/v1/stats"                     # totals + freshness watermarks
 ```
 
-Responses carry stable ids (`news:<hash>`, `gh:owner/repo`), snippets, per-source metadata,
+Responses carry stable ids (`news:<hash>`, `gh:owner/repo`, `wiki:<page_id>`,
+`arxiv:<paper_id>`), snippets, per-source metadata,
 and timing breakdowns (`embed_query_ms` / `search_ms`). Under heavy indexing load, hybrid
 queries degrade gracefully to keyword search after a deadline rather than stalling — the
 response says so explicitly. Full OpenAPI docs at `/docs`.
@@ -172,6 +197,7 @@ Each layer derives from the one beneath it. The pipeline *is* the recovery proce
 | Vector index | `windex reindex all`, then the embed loops — no re-crawl, no re-extraction |
 | Embedding model swap | same operation into a new aliased collection |
 | Postgres | restore a dump, or re-run sync + processing (dedup makes re-runs idempotent) |
+| arXiv metadata | re-run `windex arxiv harvest` — the per-year windows are restartable and the text-hash ledger dedupes |
 | Everything | run the ingestion flow from the top |
 
 Battle-tested: an external-drive failure corrupted the vector store mid-backfill; the index

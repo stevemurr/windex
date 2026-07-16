@@ -53,6 +53,34 @@ def test_search_accepts_wiki_source(client, monkeypatch):
     assert client.get("/v1/search", params={"q": "x", "source": "wiki"}).status_code == 200
 
 
+def test_search_arxiv_source_and_category_passthrough(client, monkeypatch):
+    captured = {}
+
+    def fake_search(settings, q, **kw):
+        captured.update(kw)
+        return {"results": [], "degraded": False, "timings": {"embed_query_ms": 0, "search_ms": 0}}
+
+    monkeypatch.setattr(service_mod, "index_search", fake_search)
+    r = client.get("/v1/search", params={"q": "transformers", "source": "arxiv", "category": "cs.LG"})
+    assert r.status_code == 200
+    assert captured["source"] == "arxiv" and captured["category"] == "cs.LG"
+
+
+def test_search_surfaces_arxiv_result_fields(client, monkeypatch):
+    canned = {
+        "results": [{"doc_id": "arxiv:2401.1", "score": 0.9,
+                     "url": "https://arxiv.org/abs/2401.1", "title": "Deep Nets",
+                     "snippet": "We study", "source": "arxiv", "primary_category": "cs.LG",
+                     "categories": ["cs.LG", "stat.ML"], "authors": "A, B, et al.",
+                     "published_at": "2024-01-01T00:00:00Z"}],
+        "degraded": False, "timings": {"embed_query_ms": 1, "search_ms": 1},
+    }
+    monkeypatch.setattr(service_mod, "index_search", lambda *a, **k: canned)
+    res = client.get("/v1/search", params={"q": "x", "source": "arxiv"}).json()["results"][0]
+    assert res["primary_category"] == "cs.LG" and res["authors"] == "A, B, et al."
+    assert res["categories"] == ["cs.LG", "stat.ML"]
+
+
 def test_docs_endpoint_handles_slash_ids_and_404(client, pg, settings):
     text_ref = "repos/clean/t.parquet"
     path = settings.staging_dir / text_ref

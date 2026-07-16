@@ -37,6 +37,28 @@ def test_build_argv_wiki_jobs():
     assert argv[1:] == ["wiki", "embed", "--limit", "5000"]
 
 
+def test_build_argv_arxiv_jobs():
+    assert jobs.build_argv(jobs.JOBS["arxiv-harvest"], {"days": 30})[1:] == \
+        ["arxiv", "harvest", "--days", "30"]
+    argv = jobs.build_argv(jobs.JOBS["arxiv-backfill"], {"from_year": 2005, "to_year": 2024})
+    assert argv[1:] == ["arxiv", "harvest", "--from-year", "2005", "--to-year", "2024"]
+    with pytest.raises(ValueError, match="out of range"):
+        jobs.build_argv(jobs.JOBS["arxiv-backfill"], {"from_year": 1990})
+    assert jobs.build_argv(jobs.JOBS["arxiv-embed"], {"limit": 5000})[1:] == \
+        ["arxiv", "embed", "--limit", "5000"]
+
+
+def test_arxiv_harvest_and_backfill_patterns_are_unambiguous():
+    # both jobs launch `windex arxiv harvest`; their pgrep patterns must not
+    # cross-match, or stopping one would kill the other (LAN-exposed control).
+    harvest_cmd = " ".join(jobs.build_argv(jobs.JOBS["arxiv-harvest"], {}))
+    backfill_cmd = " ".join(jobs.build_argv(jobs.JOBS["arxiv-backfill"], {}))
+    assert jobs.JOBS["arxiv-harvest"].pattern in harvest_cmd
+    assert jobs.JOBS["arxiv-harvest"].pattern not in backfill_cmd
+    assert jobs.JOBS["arxiv-backfill"].pattern in backfill_cmd
+    assert jobs.JOBS["arxiv-backfill"].pattern not in harvest_cmd
+
+
 def test_no_job_accepts_arbitrary_strings_into_argv():
     # every param is int, date, or enum — no free-text reaches the command line
     for job in jobs.JOBS.values():
