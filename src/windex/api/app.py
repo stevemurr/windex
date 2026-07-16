@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from datetime import datetime
 from importlib.resources import files
 from typing import Literal
@@ -12,6 +13,8 @@ from fastapi import Body
 
 from windex.api import jobs, logs, service
 from windex.config import get_settings
+
+STARTED_AT = time.time()  # serve-process uptime for the console
 
 app = FastAPI(title="windex", version="0.1.0",
               description="Self-hosted web index for search agents")
@@ -60,7 +63,13 @@ def get_doc(doc_id: str) -> dict:
 
 @app.get("/v1/stats")
 def stats() -> dict:
-    return service.get_stats(get_settings())
+    return _stats_with_uptime(get_settings())
+
+
+def _stats_with_uptime(settings) -> dict:
+    body = service.get_stats(settings)
+    body["activity"]["uptime_s"] = int(time.time() - STARTED_AT)
+    return body
 
 
 @app.get("/v1/recent")
@@ -145,7 +154,7 @@ async def events(ticks: int | None = Query(None, ge=1, le=100)) -> StreamingResp
         last_recent_key = None
         n = 0
         while True:
-            stats = await run_in_threadpool(service.get_stats, settings)
+            stats = await run_in_threadpool(_stats_with_uptime, settings)
             yield f"event: stats\ndata: {json.dumps(stats)}\n\n"
             recent = await run_in_threadpool(service.get_recent, settings, 25)
             key = (recent[0]["id"], recent[0]["indexed_at"]) if recent else ()

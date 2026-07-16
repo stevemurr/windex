@@ -628,21 +628,15 @@ function renderStats(s) {
     const [covA, covB] = t.news_coverage || [];
     const through = (s.freshness.news_indexed_through || "").split("CC-NEWS-").pop()?.slice(0, 8);
     const throughFmt = through ? `${through.slice(0,4)}-${through.slice(4,6)}-${through.slice(6,8)}` : "—";
+    const up = act.uptime_s || 0;
+    const upFmt = up >= 86400 ? `${Math.floor(up / 86400)}d ${Math.floor(up % 86400 / 3600)}h`
+                : up >= 3600 ? `${Math.floor(up / 3600)}h ${Math.floor(up % 3600 / 60)}m`
+                : `${Math.floor(up / 60)}m`;
     $("stats").innerHTML =
-      stat("News in index", num(v.news_current),
-           backlog ? `${num(backlog)} awaiting embedding` : "all embedded") +
-      stat("News files processed", `${num(wDone)}<span style="color:var(--muted)"> / ${num(wTotal)}</span>`,
-           `${num(w.processing)} active · ${num(w.pending)} queued · ${num(w.failed)} failed`,
-           wTotal ? Math.round(100 * wDone / wTotal) : null) +
-      stat("Fresh through", throughFmt) +
-      stat("Projects in index", num(v.repos_current),
-           `${num(r.candidate)} candidates · ${num(r.hydrated)} ready to embed`) +
-      stat("Event hours scanned", num(g.done),
-           g.pending ? `${num(g.pending)} queued` : "caught up",
-           (g.done || g.pending) ? Math.round(100 * (g.done || 0) / ((g.done || 0) + (g.pending || 0))) : null) +
+      stat("Uptime", upFmt, "API server") +
+      stat("Fresh through", throughFmt, "news indexed to this date") +
       stat("Downloaded", dlTotal >= 1e9 ? `${(dlTotal / 1e9).toFixed(1)} GB` : `${Math.round(dlTotal / 1e6)} MB`,
            "total, all sources") +
-      stat("News outlets", num(t.news_outlets), covA ? `coverage ${covA} → ${covB}` : "") +
       stat("Duplicates collapsed", num(t.duplicates_collapsed), "syndication + re-crawls");
   } catch (e) {
     document.getElementById("liveLabel").textContent = "stats unavailable";
