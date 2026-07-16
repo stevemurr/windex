@@ -58,6 +58,15 @@
   @keyframes pulse { 50% { opacity:.35; } }
   @media (prefers-reduced-motion: reduce) { #liveDot.busy i { animation:none; } }
 
+  nav.tabs { display:inline-flex; border:1px solid var(--line); border-radius:99px;
+             padding:.15rem; background:var(--panel); margin-bottom:1.8rem; }
+  nav.tabs button { padding:.35rem 1.1rem; border:none; border-radius:99px; cursor:pointer;
+                    font:600 .85rem var(--sans); color:var(--muted); background:transparent; }
+  nav.tabs button.active { background:var(--ink); color:var(--bg); }
+  nav.tabs button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .tabpane { display:none; }
+  .tabpane.active { display:block; }
+
   form { position:relative; margin-bottom:.9rem; }
   input[type=search] {
     width:100%; padding:1rem 6.4rem 1rem 1.15rem; font:1.02rem var(--sans); color:var(--ink);
@@ -170,6 +179,12 @@
     <button id="ctl" style="display:none">Pause</button>
   </header>
 
+  <nav class="tabs" role="tablist">
+    <button id="tabbtn-search" role="tab" onclick="switchTab('search')">Search</button>
+    <button id="tabbtn-console" role="tab" onclick="switchTab('console')">Console</button>
+  </nav>
+
+  <section id="tab-search" class="tabpane">
   <form id="f">
     <input id="q" type="search" placeholder="Search news and GitHub projects…"
            autocomplete="off" autofocus>
@@ -192,7 +207,9 @@
 
   <div id="took" aria-live="polite"></div>
   <div id="results"></div>
+  </section>
 
+  <section id="tab-console" class="tabpane">
   <section id="status">
     <h2>Index</h2>
     <div id="totals"></div>
@@ -216,11 +233,23 @@
     <h2 style="margin-top:1.6rem">Recently indexed</h2>
     <div id="feed"><div class="feed-empty">nothing indexed yet</div></div>
   </section>
+  </section>
 </main>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
 const num = n => (n ?? 0).toLocaleString();
+
+// --- tabs: hash-addressable (#search / #console) ---
+window.switchTab = (name) => {
+  for (const t of ["search", "console"]) {
+    document.getElementById(`tab-${t}`).classList.toggle("active", t === name);
+    document.getElementById(`tabbtn-${t}`).classList.toggle("active", t === name);
+  }
+  history.replaceState(null, "", `#${name}`);
+  if (name === "search") $("q").focus();
+};
+switchTab(location.hash === "#console" ? "console" : "search");
 
 $("f").addEventListener("submit", async e => {
   e.preventDefault();
