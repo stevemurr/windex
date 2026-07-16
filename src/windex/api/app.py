@@ -87,9 +87,10 @@ def logs_tail(
     name: str,
     lines: int = Query(200, ge=1, le=2000),
     grep: str | None = Query(None, max_length=200),
+    level: Literal["info", "warn", "error"] | None = None,
 ) -> dict:
     try:
-        return logs.tail(name, lines=lines, grep=grep)
+        return logs.tail(name, lines=lines, grep=grep, level=level)
     except KeyError:
         raise HTTPException(404, f"unknown log: {name}")
 

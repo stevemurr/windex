@@ -108,17 +108,17 @@
   .seg label:has(input:checked) { background:var(--ink); color:var(--bg); }
   .mode { margin-left:auto; display:flex; align-items:center; }
   @media (max-width:600px) { .mode { margin-left:0; } }
-  #mode { appearance:none; -webkit-appearance:none; cursor:pointer;
+  .pillselect { appearance:none; -webkit-appearance:none; cursor:pointer;
     font:600 .82rem var(--sans); color:var(--muted); background:var(--panel);
     border:1px solid var(--line); border-radius:99px; padding:.32rem 1.9rem .32rem .9rem;
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%237a7568' fill='none' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
     background-repeat:no-repeat; background-position:right .8rem center;
     transition:border-color .15s, color .15s; }
-  #mode:hover { border-color:var(--accent); color:var(--ink); }
-  #mode:focus-visible { outline:none; border-color:var(--accent);
+  .pillselect:hover { border-color:var(--accent); color:var(--ink); }
+  .pillselect:focus-visible { outline:none; border-color:var(--accent);
     box-shadow:0 0 0 3px var(--accent-soft); }
   @media (prefers-color-scheme: dark) {
-    #mode { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a19b8d' fill='none' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E"); }
+    .pillselect { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a19b8d' fill='none' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E"); }
   }
   .stageline { color:var(--muted); font-size:.78rem; margin:-.3rem 0 .8rem;
                font-variant-numeric:tabular-nums; }
@@ -192,10 +192,12 @@
   .opcat { grid-column:1 / -1; color:var(--muted); font-size:.72rem;
            letter-spacing:.06em; text-transform:uppercase; margin-top:.4rem; }
   #logpanel .lbar { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-bottom:.55rem; }
-  #logpanel select, #logpanel input[type=search] {
-    font:.8rem var(--sans); color:var(--ink); background:var(--panel);
-    border:1px solid var(--line); border-radius:8px; padding:.3rem .6rem; }
-  #logpanel input[type=search] { flex:1; min-width:8rem; box-shadow:none; }
+  #logpanel input[type=search] {
+    flex:1; min-width:8rem; font:.8rem var(--sans); color:var(--ink);
+    background:var(--panel); border:1px solid var(--line); border-radius:99px;
+    padding:.32rem .9rem; box-shadow:none; }
+  #logpanel input[type=search]:focus { border-color:var(--accent);
+    box-shadow:0 0 0 3px var(--accent-soft); }
   #logmeta { color:var(--muted); font-size:.72rem; margin-left:auto; white-space:nowrap;
              font-variant-numeric:tabular-nums; }
   #logbody { font:.72rem/1.5 var(--mono); background:var(--bg); color:var(--ink);
@@ -255,7 +257,7 @@
       <label><input type="radio" name="source" value="wiki">Wiki</label>
     </div>
     <span class="mode">
-      <select id="mode" aria-label="Retrieval mode">
+      <select id="mode" class="pillselect" aria-label="Retrieval mode">
         <option value="hybrid">Hybrid</option>
         <option value="dense">Semantic</option>
         <option value="lexical">Keyword</option>
@@ -271,7 +273,25 @@
   <section id="status">
     <h2>Index</h2>
     <div id="totals"></div>
-    <h2>Activity</h2>
+    <h2>Logs</h2>
+    <div id="logpanel">
+      <div class="lbar">
+        <select id="logsel" class="pillselect" aria-label="Log source"></select>
+        <select id="loglevel" class="pillselect" aria-label="Level">
+          <option value="">All levels</option>
+          <option value="info">Info</option>
+          <option value="warn">Warn</option>
+          <option value="error">Error</option>
+        </select>
+        <select id="loglines" class="pillselect" aria-label="Lines">
+          <option>100</option><option selected>300</option><option>1000</option>
+        </select>
+        <input id="loggrep" type="search" placeholder="filter lines…">
+        <span id="logmeta"></span>
+      </div>
+      <pre id="logbody">select a log…</pre>
+    </div>
+    <h2 style="margin-top:1.6rem">Activity</h2>
     <div class="stageline" id="stagesLine"></div>
     <div id="workers">
       <div class="whead">
@@ -304,18 +324,6 @@
     </div>
     <h2 style="margin-top:1.6rem">Operations</h2>
     <div class="ops" id="ops"></div>
-    <h2 style="margin-top:1.6rem">Logs</h2>
-    <div id="logpanel">
-      <div class="lbar">
-        <select id="logsel" aria-label="Log source"></select>
-        <select id="loglines" aria-label="Lines">
-          <option>100</option><option selected>300</option><option>1000</option>
-        </select>
-        <input id="loggrep" type="search" placeholder="filter lines…">
-        <span id="logmeta"></span>
-      </div>
-      <pre id="logbody">select a log…</pre>
-    </div>
   </section>
   </section>
 </main>
@@ -677,6 +685,7 @@ async function refreshLogBody() {
   const params = new URLSearchParams({ lines: $("loglines").value });
   const grep = $("loggrep").value.trim();
   if (grep) params.set("grep", grep);
+  if ($("loglevel").value) params.set("level", $("loglevel").value);
   try {
     const d = await (await fetch(`/v1/logs/${encodeURIComponent(name)}?${params}`)).json();
     const body = $("logbody");
@@ -695,6 +704,7 @@ async function initLogs() {
 }
 $("logsel").addEventListener("change", refreshLogBody);
 $("loglines").addEventListener("change", refreshLogBody);
+$("loglevel").addEventListener("change", refreshLogBody);
 $("loggrep").addEventListener("input", () => { clearTimeout(window._lgt); window._lgt = setTimeout(refreshLogBody, 350); });
 setInterval(refreshLogBody, 3000);
 

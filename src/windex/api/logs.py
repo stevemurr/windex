@@ -116,7 +116,15 @@ def _read_container_tail(container: str) -> str | None:
     return out.stdout[-MAX_WINDOW_BYTES:]
 
 
-def tail(name: str, lines: int = 200, grep: str | None = None) -> dict:
+LEVEL_PATTERNS = {
+    "error": re.compile(r"(?i)\b(error|critical|traceback|failed?|exception)\b"),
+    "warn": re.compile(r"(?i)\bwarn(ing)?\b"),
+    "info": re.compile(r"(?i)\binfo\b"),
+}
+
+
+def tail(name: str, lines: int = 200, grep: str | None = None,
+         level: str | None = None) -> dict:
     source = LOGS.get(name)
     if source is None:
         raise KeyError(name)
@@ -130,6 +138,9 @@ def tail(name: str, lines: int = 200, grep: str | None = None) -> dict:
     if raw is None:
         return {"name": name, "available": False, "lines": []}
     cleaned = _clean(raw)
+    if level in LEVEL_PATTERNS:
+        pattern = LEVEL_PATTERNS[level]
+        cleaned = [ln for ln in cleaned if pattern.search(ln)]
     if grep:
         needle = grep.lower()
         cleaned = [ln for ln in cleaned if needle in ln.lower()]

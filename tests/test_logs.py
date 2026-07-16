@@ -47,6 +47,27 @@ def test_tail_cleans_ansi_and_progress_and_greps(tmp_path, monkeypatch):
     assert grepped["lines"] == ["ERROR something broke"]
 
 
+def test_tail_level_filter(tmp_path, monkeypatch):
+    log = tmp_path / "lv.log"
+    log.write_text(
+        "2026-07-16 INFO starting worker\n"
+        "2026-07-16 WARNING slow response\n"
+        "2026-07-16 ERROR connection refused\n"
+        "Traceback (most recent call last):\n"
+        "plain line with no level\n"
+    )
+    monkeypatch.setitem(
+        logsmod.LOGS, "lv", LogSource("lv", "L", "test", "server", path=log)
+    )
+    assert logsmod.tail("lv", level="error")["lines"] == [
+        "2026-07-16 ERROR connection refused",
+        "Traceback (most recent call last):",
+    ]
+    assert logsmod.tail("lv", level="warn")["lines"] == ["2026-07-16 WARNING slow response"]
+    assert logsmod.tail("lv", level="info")["lines"] == ["2026-07-16 INFO starting worker"]
+    assert len(logsmod.tail("lv")["lines"]) == 5  # no filter → everything
+
+
 def test_tail_missing_file_is_unavailable_not_error(tmp_path, monkeypatch):
     monkeypatch.setitem(
         logsmod.LOGS, "gone",
