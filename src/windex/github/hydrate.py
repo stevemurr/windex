@@ -184,7 +184,13 @@ def hydrate(
 def _post(client: httpx.Client, pool: TokenPool, query: str, retries: int = 5) -> dict:
     for attempt in range(retries):
         token = pool.next()
-        resp = client.post(API, json={"query": query}, headers={"Authorization": f"bearer {token}"})
+        try:
+            resp = client.post(
+                API, json={"query": query}, headers={"Authorization": f"bearer {token}"}
+            )
+        except httpx.HTTPError:  # dropped/half-closed connections, timeouts
+            time.sleep(2**attempt)
+            continue
         if resp.status_code in (502, 503):
             time.sleep(2**attempt)
             continue
