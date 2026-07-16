@@ -125,6 +125,20 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS text_ref text;  -- staging parque
 CREATE INDEX IF NOT EXISTS documents_indexed_at_idx
     ON documents (indexed_at DESC) WHERE indexed_at IS NOT NULL;
 
+-- Embed-backlog claim: every embed batch selects the oldest N 'deduped' rows
+-- per source — without this partial index that's a seq scan + sort over
+-- millions of rows per batch (measured; see docs/store-tuning.md)
+CREATE INDEX IF NOT EXISTS documents_embed_backlog_idx
+    ON documents (source, created_at) WHERE status = 'deduped';
+
+-- Autovacuum: minhash_bands' rolling deletes never reach the default 20%
+-- trigger at ~10M rows; documents churns millions of status UPDATEs during
+-- backlog burn-down (see docs/store-tuning.md)
+ALTER TABLE minhash_bands SET (autovacuum_vacuum_scale_factor = 0,
+    autovacuum_vacuum_threshold = 50000, autovacuum_vacuum_cost_delay = 0);
+ALTER TABLE documents SET (autovacuum_vacuum_scale_factor = 0.05,
+    autovacuum_vacuum_threshold = 10000);
+
 -- Bandwidth accounting (dashboard rate metrics)
 ALTER TABLE warc_files ADD COLUMN IF NOT EXISTS bytes bigint;
 ALTER TABLE gharchive_files ADD COLUMN IF NOT EXISTS bytes bigint;
