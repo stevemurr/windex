@@ -1,9 +1,12 @@
 """Transport-agnostic search service: both the REST app and the MCP server call
 these functions and return the same result objects (the /v1 contract)."""
 
+import hashlib
+import threading
 import time
 from datetime import datetime
 
+import psycopg
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
@@ -46,13 +49,103 @@ def run_search(
         item.update({k: r[k] for k in RESULT_FIELDS if r.get(k) is not None})
         results.append(item)
     total_ms = int((time.monotonic() - t0) * 1000)
-    return {
+    response = {
         "query": q,
         "results": results,
         "mode": "lexical (embedder busy — degraded from hybrid)" if resp["degraded"] else mode,
         "timings": {**resp["timings"], "total_ms": total_ms},
         "took_ms": total_ms,
     }
+    # Both front doors (REST /v1/search and the MCP search_index tool) call
+    # run_search, so recording here covers every search path.
+    _record_search_metric(settings, q, source, mode, resp["degraded"],
+                          response["timings"], len(results))
+    return response
+
+
+def _record_search_metric(settings: Settings, q: str, source: str, mode: str,
+                          degraded: bool, timings: dict, n_results: int) -> None:
+    """Fire-and-forget metric row. Runs on a daemon thread: even a guarded
+    inline INSERT can stall for seconds (pool checkout wait + per-checkout
+    health check) exactly when postgres is struggling — the moments we most
+    want measured without adding user-visible search latency. A lost row
+    (process exit mid-write, pg down) is acceptable; a slow search is not."""
+
+    def _write():
+        try:
+            with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO search_metrics
+                           (source, mode_requested, degraded, q_hash,
+                            embed_ms, search_ms, total_ms, results)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (source, mode, degraded,
+                     hashlib.sha1(q.encode()).hexdigest()[:12],
+                     timings.get("embed_query_ms"), timings.get("search_ms"),
+                     timings.get("total_ms"), n_results),
+                )
+        except Exception:
+            pass  # metrics must never break search
+
+    try:
+        threading.Thread(target=_write, name="search-metric", daemon=True).start()
+    except Exception:
+        pass
+
+
+def get_search_metrics(settings: Settings, minutes: int = 60) -> dict:
+    """Latency percentiles + degradation counts over a trailing window
+    (GET /v1/metrics). An empty window yields zeros, never errors."""
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT count(*),
+                   count(*) FILTER (WHERE degraded),
+                   percentile_cont(0.5)  WITHIN GROUP (ORDER BY total_ms),
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY total_ms),
+                   percentile_cont(0.99) WITHIN GROUP (ORDER BY total_ms),
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY embed_ms),
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY search_ms)
+            FROM search_metrics
+            WHERE ts > now() - make_interval(mins => %s)
+            """,
+            (minutes,),
+        )
+        searches, degraded, p50, p95, p99, embed_p95, search_p95 = cur.fetchone()
+        cur.execute(
+            """SELECT source, count(*) FROM search_metrics
+               WHERE ts > now() - make_interval(mins => %s) GROUP BY source""",
+            (minutes,),
+        )
+        by_source = dict(cur.fetchall())
+
+    def ms(v):  # percentile_cont returns float, NULL on an empty window
+        return round(v) if v is not None else 0
+
+    return {
+        "window_minutes": minutes,
+        "searches": searches,
+        "degraded": degraded,
+        "degraded_pct": round(100.0 * degraded / searches, 1) if searches else 0.0,
+        "p50_ms": ms(p50),
+        "p95_ms": ms(p95),
+        "p99_ms": ms(p99),
+        "embed_p95_ms": ms(embed_p95),
+        "search_p95_ms": ms(search_p95),
+        "by_source": by_source,
+    }
+
+
+def prune_search_metrics(conn: psycopg.Connection, days: int = 30) -> int:
+    """Retention cap for search_metrics (called by `windex daily`)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM search_metrics WHERE ts < now() - make_interval(days => %s)",
+            (days,),
+        )
+        deleted = cur.rowcount
+    conn.commit()
+    return deleted
 
 
 def get_document(settings: Settings, doc_id: str) -> dict | None:
@@ -85,6 +178,25 @@ def get_document(settings: Settings, doc_id: str) -> dict | None:
             if col is not None:
                 doc["text"] = table.column(col)[0].as_py()
     return doc
+
+
+# 1h search p95 + degraded count for the dashboard tile, cached 60s: the SSE
+# loop calls get_stats every ~2s per viewer and percentile scans shouldn't
+# rerun per tick (the tile only needs minute-fresh numbers).
+_metrics_cache: dict = {}
+_METRICS_TTL = 60.0
+
+
+def _search_metrics_summary(settings: Settings) -> dict:
+    now = time.monotonic()
+    hit = _metrics_cache.get(settings.pg_dsn)
+    if hit and now - hit[0] < _METRICS_TTL:
+        return hit[1]
+    m = get_search_metrics(settings, minutes=60)
+    result = {"search_p95_ms": m["p95_ms"], "degraded_recent": m["degraded"],
+              "searches_1h": m["searches"]}
+    _metrics_cache[settings.pg_dsn] = (now, result)
+    return result
 
 
 # PG aggregates are cached briefly: the dashboard polls every 4s, and some of
@@ -346,5 +458,7 @@ def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
             "hn": flags.get("hn_stage", "idle"),
         },
         "downloading_bytes_on_disk": in_flight,
+        # search-performance tile: 1h p95 + degraded fallbacks (60s-cached)
+        **_search_metrics_summary(settings),
     }
     return stats

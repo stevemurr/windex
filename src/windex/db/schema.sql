@@ -190,3 +190,23 @@ CREATE TABLE IF NOT EXISTS control (
     key   text PRIMARY KEY,
     value text NOT NULL
 );
+
+-- Search-performance metrics: one narrow row per run_search call (REST and MCP
+-- both route through service.run_search). No query text by design — privacy
+-- and row width; q_hash (sha1 prefix) still surfaces repeated-query patterns.
+-- `windex daily` caps retention at 30 days.
+CREATE TABLE IF NOT EXISTS search_metrics (
+    ts             timestamptz NOT NULL DEFAULT now(),
+    source         text NOT NULL,              -- news | github | … | all
+    mode_requested text NOT NULL,              -- hybrid | dense | lexical (as asked, pre-degrade)
+    degraded       boolean NOT NULL DEFAULT false,  -- hybrid fell back to keyword-only
+    q_hash         text,                       -- sha1(query)[:12]; never the query itself
+    embed_ms       integer,
+    search_ms      integer,
+    total_ms       integer,
+    results        integer
+);
+CREATE INDEX IF NOT EXISTS search_metrics_ts_idx ON search_metrics (ts);
+-- degradations are the debugging needle; keep them findable at any table size
+CREATE INDEX IF NOT EXISTS search_metrics_degraded_ts_idx
+    ON search_metrics (ts) WHERE degraded;
