@@ -1,9 +1,9 @@
 # windex
 
 Self-hosted web index for search agents: CC-News (fresh daily) + GitHub projects (metadata +
-README). Hybrid search (dense + BM25, RRF) over Qdrant, metadata/state in Postgres, served
-over REST (`/v1`) and MCP. Everything open source and self-hosted; bring your own embedding
-model behind an OpenAI/TEI-style endpoint.
+README) + Wikipedia articles (weekly CirrusSearch dumps). Hybrid search (dense + BM25, RRF)
+over Qdrant, metadata/state in Postgres, served over REST (`/v1`) and MCP. Everything open
+source and self-hosted; bring your own embedding model behind an OpenAI/TEI-style endpoint.
 
 ## Quickstart
 
@@ -37,6 +37,22 @@ uv run windex gh hydrate
 uv run windex gh embed
 ```
 
+## Wikipedia (weekly CirrusSearch dumps, pre-extracted plain text)
+
+Targets the CirrusSearch *index* dumps
+(`dumps.wikimedia.org/other/cirrus_search_index/`): 64 bzip2 shards per weekly
+`enwiki_content` snapshot, gated on the `_SUCCESS` marker. Shards stream through
+a format-isolated reader (`wiki/reader.py`) so the upstream can be swapped. Each
+snapshot is a full index; the `documents.text_hash` ledger keeps a weekly
+re-ingest to the changed-article delta instead of re-embedding ~7M articles.
+
+```sh
+uv run windex wiki sync      # record the newest complete snapshot's 64 shards
+uv run windex wiki ingest    # stream shards → clean parquet + ledger (delta only)
+uv run windex wiki embed     # embed staged articles into the wiki collection
+uv run windex wiki status
+```
+
 ## Serve
 
 ```sh
@@ -60,10 +76,11 @@ is ever mutated by a rebuild.
 
 | Lost / corrupted | Source of truth | Rebuild |
 |---|---|---|
-| Vector index (Qdrant) | staged parquet + Postgres ledger | `windex reindex all` then `windex ccnews embed-loop` + `windex gh embed` — no re-crawl, no re-extraction |
+| Vector index (Qdrant) | staged parquet + Postgres ledger | `windex reindex all` then `windex ccnews embed-loop` + `windex gh embed` + `windex wiki embed` — no re-crawl, no re-extraction |
 | Embedding model swap | same | same (new collection per model, alias flips when ready) |
 | Postgres | pg_dump backups + watermark re-sync | restore dump; or re-run `ccnews sync` + `run` (dedup makes re-processing idempotent) |
-| Everything | the public datasets | `init-db` → `ccnews sync/run` → `gh sync-hours/scan/discover/hydrate` → embed — the full flow is the recovery procedure |
+| Wikipedia articles | staged parquet under `wiki/clean/` + documents ledger | `windex reindex wiki` then `windex wiki embed`; or re-run `wiki sync` + `ingest` (text_hash ledger re-ingests only the delta) |
+| Everything | the public datasets | `init-db` → `ccnews sync/run` → `gh sync-hours/scan/discover/hydrate` → `wiki sync/ingest` → embed — the full flow is the recovery procedure |
 
 Battle-tested 2026-07-16: an external-drive detach corrupted the news collection;
 `reindex` + the embed loop rebuilt it from parquet with zero re-crawling.

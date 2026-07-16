@@ -44,6 +44,15 @@ def test_search_validates_params(client):
     assert client.get("/v1/search", params={"q": "x", "source": "bogus"}).status_code == 422
 
 
+def test_search_accepts_wiki_source(client, monkeypatch):
+    monkeypatch.setattr(
+        service_mod, "index_search",
+        lambda *a, **k: {"results": [], "degraded": False,
+                         "timings": {"embed_query_ms": 0, "search_ms": 0}},
+    )
+    assert client.get("/v1/search", params={"q": "x", "source": "wiki"}).status_code == 200
+
+
 def test_docs_endpoint_handles_slash_ids_and_404(client, pg, settings):
     text_ref = "repos/clean/t.parquet"
     path = settings.staging_dir / text_ref

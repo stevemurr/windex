@@ -47,6 +47,20 @@ def _repo_filter(min_stars: int | None, language: str | None):
     return conds
 
 
+def _wiki_filter(published_after: datetime | None, published_before: datetime | None):
+    # Wikipedia payloads index published_at (revision timestamp), so the same
+    # date-window filter as news applies when requested.
+    conds = []
+    if published_after or published_before:
+        conds.append(
+            qm.FieldCondition(
+                key="published_at",
+                range=qm.DatetimeRange(gte=published_after, lte=published_before),
+            )
+        )
+    return conds
+
+
 def _query_collection(
     client: QdrantClient,
     collection: str,
@@ -127,6 +141,8 @@ def search(
         targets.append(("news", qidx.alias_name("news"), _news_filter(published_after, published_before)))
     if source in ("github", "all"):
         targets.append(("github", qidx.alias_name("repos"), _repo_filter(min_stars, language)))
+    if source in ("wiki", "all"):
+        targets.append(("wiki", qidx.alias_name("wiki"), _wiki_filter(published_after, published_before)))
     t_search = time.monotonic()
     for _, alias, conds in targets:
         if alias not in aliases and alias not in existing:

@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     news_language: str = "en"
     minhash_window_days: int = 14
     repo_star_threshold: int = 10
+    # Wikipedia (CirrusSearch index bz2 dumps). One dump file = one shard (64
+    # per weekly snapshot); each shard streams to its own clean parquet so the
+    # embed pass (which reads a text_ref whole) stays bounded. chunk_rows is the
+    # row-group / commit / pause-check granularity within a shard.
+    wiki_dump: str = "enwiki"
+    wiki_chunk_rows: int = 2_000
 
     github_tokens: str = ""  # comma-separated PATs for hydration
 
@@ -62,12 +68,21 @@ class Settings(BaseSettings):
     def repos_staging_dir(self) -> Path:
         return self.staging_dir / "repos"
 
+    @property
+    def wiki_downloads_dir(self) -> Path:
+        return self.downloads_dir / "wiki"
+
+    @property
+    def wiki_staging_dir(self) -> Path:
+        return self.staging_dir / "wiki"
+
     def all_dirs(self) -> list[Path]:
         return [
             self.ccnews_downloads_dir,
             self.gharchive_downloads_dir,
             self.news_staging_dir,
             self.repos_staging_dir,
+            self.wiki_staging_dir,
         ]
 
     def github_token_list(self) -> list[str]:

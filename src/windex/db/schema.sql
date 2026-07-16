@@ -1,8 +1,8 @@
 -- windex schema. Idempotent: applied via `windex init-db` on every deploy.
 
 CREATE TABLE IF NOT EXISTS documents (
-    id             text PRIMARY KEY,          -- stable API id: news:<hash> | gh:owner/repo
-    source         text NOT NULL,             -- news | github
+    id             text PRIMARY KEY,          -- stable API id: news:<hash> | gh:owner/repo | wiki:<page_id>
+    source         text NOT NULL,             -- news | github | wiki
     url            text NOT NULL,
     canonical_url  text,
     title          text,
@@ -52,6 +52,20 @@ CREATE TABLE IF NOT EXISTS gharchive_files (
     processed_at timestamptz
 );
 CREATE INDEX IF NOT EXISTS gharchive_files_status_idx ON gharchive_files (status);
+
+-- Freshness watermark for Wikipedia CirrusSearch dumps: one row per shard file
+-- of the newest _SUCCESS-complete weekly snapshot. Each snapshot is a full
+-- index, so sync re-baselines from the newest date; the documents.text_hash
+-- ledger keeps re-ingests to the changed-article delta.
+CREATE TABLE IF NOT EXISTS wiki_dumps (
+    name         text PRIMARY KEY,            -- enwiki_content-YYYYMMDD-NNNNN.json.bz2
+    dump_date    text,                        -- YYYYMMDD snapshot the shard belongs to
+    status       text NOT NULL DEFAULT 'pending',  -- pending | processing | done | failed
+    bytes        bigint,                      -- shard size (bandwidth accounting)
+    doc_counts   jsonb,                       -- per-shard in/staged/skipped stats
+    processed_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS wiki_dumps_status_idx ON wiki_dumps (status);
 
 -- Rolling-window LSH index for near-dup detection across daily batches.
 CREATE TABLE IF NOT EXISTS minhash_bands (

@@ -38,7 +38,8 @@ def pg(pg_dsn):
     conn = psycopg.connect(pg_dsn)
     with conn.cursor() as cur:
         cur.execute(
-            "TRUNCATE documents, warc_files, repos, gharchive_files, minhash_bands, control"
+            "TRUNCATE documents, warc_files, repos, gharchive_files, minhash_bands, "
+            "control, wiki_dumps"
         )
     conn.commit()
     yield conn
