@@ -123,6 +123,39 @@ def test_search_surfaces_docs_result_fields(client, monkeypatch):
     assert res["url"].startswith("https://docs.python.org/") and "Foundation" in res["attribution"]
 
 
+def test_search_hn_source_and_min_points_passthrough(client, monkeypatch):
+    captured = {}
+
+    def fake_search(settings, q, **kw):
+        captured.update(kw)
+        return {"results": [], "degraded": False, "timings": {"embed_query_ms": 0, "search_ms": 0}}
+
+    monkeypatch.setattr(service_mod, "index_search", fake_search)
+    r = client.get("/v1/search",
+                   params={"q": "rust web framework", "source": "hn", "min_points": 50})
+    assert r.status_code == 200
+    assert captured["source"] == "hn" and captured["min_points"] == 50
+    assert client.get("/v1/search",
+                      params={"q": "x", "source": "hn", "min_points": -1}).status_code == 422
+
+
+def test_search_surfaces_hn_result_fields(client, monkeypatch):
+    canned = {
+        "results": [{"doc_id": "hn:101", "score": 0.8,
+                     "url": "https://news.ycombinator.com/item?id=101",
+                     "target_url": "https://example.com/post",
+                     "title": "Show HN: windex", "snippet": "Show HN: windex",
+                     "source": "hn", "points": 42, "num_comments": 7,
+                     "author": "alice", "published_at": "2026-07-15T08:00:00Z"}],
+        "degraded": False, "timings": {"embed_query_ms": 1, "search_ms": 1},
+    }
+    monkeypatch.setattr(service_mod, "index_search", lambda *a, **k: canned)
+    res = client.get("/v1/search", params={"q": "x", "source": "hn"}).json()["results"][0]
+    assert res["id"] == "hn:101" and res["points"] == 42 and res["num_comments"] == 7
+    assert res["url"].startswith("https://news.ycombinator.com/")  # discussion is canonical
+    assert res["target_url"] == "https://example.com/post" and res["author"] == "alice"
+
+
 def test_search_surfaces_arxiv_result_fields(client, monkeypatch):
     canned = {
         "results": [{"doc_id": "arxiv:2401.1", "score": 0.9,

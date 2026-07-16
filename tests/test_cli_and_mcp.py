@@ -36,7 +36,7 @@ def test_cli_ensure_collections(settings, qclient, monkeypatch):
     r = runner.invoke(app, ["ensure-collections"])
     assert r.exit_code == 0 and "news_current" in r.output and "wiki_current" in r.output
     assert "arxiv_current" in r.output and "smallweb_current" in r.output
-    assert "docs_current" in r.output
+    assert "docs_current" in r.output and "hn_current" in r.output
 
 
 def test_cli_wiki_status(settings, pg, monkeypatch):
@@ -87,6 +87,24 @@ def test_cli_docs_status(settings, pg, monkeypatch):
     pg.commit()
     r = runner.invoke(app, ["docs", "status"])
     assert r.exit_code == 0 and "done" in r.output and "pending" in r.output
+
+
+def test_cli_hn_status(settings, pg, monkeypatch):
+    _use_test_settings(monkeypatch, settings)
+    with pg.cursor() as cur:
+        cur.execute(
+            "INSERT INTO hn_windows (from_ts, until_ts, status) VALUES "
+            "(1159660800, 1162339200, 'done'),"       # 2006-10 backfill month
+            "(1784073600, 1784332800, 'pending')"     # trailing window
+        )
+        cur.execute(
+            "INSERT INTO documents (id, source, url, status) VALUES "
+            "('hn:1', 'hn', 'https://news.ycombinator.com/item?id=1', 'embedded')"
+        )
+    pg.commit()
+    r = runner.invoke(app, ["hn", "status"])
+    assert r.exit_code == 0 and "done" in r.output and "pending" in r.output
+    assert "embedded" in r.output
 
 
 def test_reindex_resets_statuses_and_recreates_collections(settings, pg, qclient, monkeypatch):

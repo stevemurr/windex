@@ -74,6 +74,30 @@ def test_build_argv_docs_jobs():
         ["reindex", "docs", "--yes"]
 
 
+def test_build_argv_hn_jobs():
+    assert jobs.build_argv(jobs.JOBS["hn-harvest"], {"days": 3})[1:] == \
+        ["hn", "harvest", "--days", "3"]
+    argv = jobs.build_argv(jobs.JOBS["hn-backfill"], {"from_year": 2006, "to_year": 2020})
+    assert argv[1:] == ["hn", "backfill", "--from-year", "2006", "--to-year", "2020"]
+    with pytest.raises(ValueError, match="out of range"):
+        jobs.build_argv(jobs.JOBS["hn-backfill"], {"from_year": 1999})
+    with pytest.raises(ValueError, match="out of range"):
+        jobs.build_argv(jobs.JOBS["hn-harvest"], {"days": 9999})
+    assert jobs.build_argv(jobs.JOBS["hn-embed"], {"limit": 5000})[1:] == \
+        ["hn", "embed", "--limit", "5000"]
+    # reindex now accepts hn as a source
+    assert jobs.build_argv(jobs.JOBS["reindex"], {"source": "hn"})[1:] == \
+        ["reindex", "hn", "--yes"]
+    # harvest/backfill launch different subcommands; their pgrep patterns must
+    # not cross-match (stopping one would kill the other)
+    harvest_cmd = " ".join(jobs.build_argv(jobs.JOBS["hn-harvest"], {}))
+    backfill_cmd = " ".join(jobs.build_argv(jobs.JOBS["hn-backfill"], {}))
+    assert jobs.JOBS["hn-harvest"].pattern in harvest_cmd
+    assert jobs.JOBS["hn-harvest"].pattern not in backfill_cmd
+    assert jobs.JOBS["hn-backfill"].pattern in backfill_cmd
+    assert jobs.JOBS["hn-backfill"].pattern not in harvest_cmd
+
+
 def test_arxiv_harvest_and_backfill_patterns_are_unambiguous():
     # both jobs launch `windex arxiv harvest`; their pgrep patterns must not
     # cross-match, or stopping one would kill the other (LAN-exposed control).

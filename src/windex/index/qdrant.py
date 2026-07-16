@@ -5,7 +5,7 @@ from qdrant_client import models as qm
 
 DENSE = "dense"
 SPARSE = "bm25"
-SOURCES = ("news", "repos", "wiki", "arxiv", "smallweb", "docs")
+SOURCES = ("news", "repos", "wiki", "arxiv", "smallweb", "docs", "hn")
 
 # payload fields that search filters on, indexed at collection creation
 PAYLOAD_INDEXES = {
@@ -29,6 +29,9 @@ PAYLOAD_INDEXES = {
     "docs": {"doc_id": qm.PayloadSchemaType.KEYWORD,
              "framework": qm.PayloadSchemaType.KEYWORD,
              "version": qm.PayloadSchemaType.KEYWORD},
+    "hn": {"doc_id": qm.PayloadSchemaType.KEYWORD,
+           "points": qm.PayloadSchemaType.INTEGER,  # min_points filter + future ranking boost
+           "published_at": qm.PayloadSchemaType.DATETIME},
 }
 
 

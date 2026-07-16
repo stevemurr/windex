@@ -6,7 +6,7 @@
   <img alt="windex — self-hosted web index" src="assets/banner-light.svg" width="820">
 </picture>
 
-*Fresh public datasets — CC-News, GitHub, Wikipedia, arXiv, the small web — continuously ingested, deduped, embedded with **your** model, and served as hybrid search over REST and MCP.*
+*Fresh public datasets — CC-News, GitHub, Wikipedia, arXiv, the small web, Hacker News — continuously ingested, deduped, embedded with **your** model, and served as hybrid search over REST and MCP.*
 
 ![Python](https://img.shields.io/badge/python-3.11%E2%80%933.12-c15f3c?style=flat-square&labelColor=29261f)
 &nbsp;
@@ -18,7 +18,8 @@
 
 A search index for agents, on your hardware. Everything runs self-hosted; the only external
 touchpoints are the public datasets themselves — Common Crawl's news feed, GH Archive and the
-GitHub API, Wikimedia's dumps, arXiv's OAI feed, and the small-web blogs it politely polls.
+GitHub API, Wikimedia's dumps, arXiv's OAI feed, the Algolia HN Search API, and the
+small-web blogs it politely polls.
 
 ## What it does
 
@@ -60,6 +61,18 @@ GitHub API, Wikimedia's dumps, arXiv's OAI feed, and the small-web blogs it poli
   maintained canonical-URL table), carry the upstream version, and surface each
   docset's upstream license attribution. Which docsets to index is config
   (`WINDEX_DOCS_SLUGS`). See [`docs/devdocs-source.md`](docs/devdocs-source.md).
+- **Hacker News** — stories only, never comments, from the free
+  [Algolia HN Search API](https://hn.algolia.com/api) (clean epoch windows via
+  `numericFilters`; every query is hard-capped at 1000 hits, so busy windows
+  recursively split until they fit), with the
+  [open-index/hacker-news](https://huggingface.co/datasets/open-index/hacker-news)
+  parquet mirror (ODC-By 1.0) as a zero-API-load backfill accelerator over the
+  same month watermarks. One doc per story: the HN discussion page is the
+  canonical link, the external target rides along as `target_url`, and points /
+  comment counts land under an integer payload index (today's `min_points`
+  filter, tomorrow's ranking boost). A trailing re-pull refreshes points *in
+  place* — unchanged text is never re-embedded. See
+  [`docs/hn-source.md`](docs/hn-source.md).
 - **Hybrid search** — dense vectors from *your* embedding model (any OpenAI/TEI-compatible
   endpoint, or in-process sentence-transformers) fused with BM25 sparse vectors via RRF in
   [Qdrant](https://qdrant.tech). Semantic queries and exact-name lookups both work.
@@ -82,6 +95,7 @@ flowchart LR
         AX[arXiv OAI-PMH]
         SW[Small Web feeds]
         DV[DevDocs bundles]
+        HN[Algolia HN API]
     end
     subgraph pipeline [Pipeline]
         EX[extract + filter<br/>datatrove/FineWeb]
@@ -104,6 +118,7 @@ flowchart LR
     AX --> PQ
     SW --> EX
     DV --> PQ
+    HN --> PQ
     DD <--> PG
     EM <--> PG
     QD --> API --> DASH
@@ -211,6 +226,23 @@ uv run windex docs embed     # embed staged pages into the docs collection
 > surfaced as attribution in every payload — windex indexes + links out, it
 > doesn't republish. See [`docs/devdocs-source.md`](docs/devdocs-source.md).
 
+### Ingest Hacker News
+
+```sh
+uv run windex hn backfill              # fast path: monthly parquet mirror, 2006-10 → now (no API load)
+uv run windex hn harvest --days 2      # trailing re-pull: new stories + points refresh (cron this)
+uv run windex hn embed                 # embed staged stories into the hn collection
+```
+
+> **Why a trailing window?** Story text freezes at submission, but points and
+> comment counts drift for days. The re-pull skips unchanged stories via the
+> text-hash ledger and refreshes their `points`/`num_comments` payloads in
+> place (`set_payload`) — score freshness never costs an embedding. Algolia
+> caps every query at 1000 hits, so busy windows recursively halve until they
+> fit (2026-07-15 had 1,172 stories). Backfill months and the daily tail share
+> the same `hn_windows` watermark, so the parquet mirror and the API are
+> interchangeable per window. See [`docs/hn-source.md`](docs/hn-source.md).
+
 ### Keep it fresh
 
 ```sh
@@ -225,12 +257,13 @@ curl "http://127.0.0.1:8100/v1/search?q=fed+rate+cut&source=news&published_after
 curl "http://127.0.0.1:8100/v1/search?q=diffusion+models&source=arxiv&category=cs.LG"
 curl "http://127.0.0.1:8100/v1/search?q=vim+config&source=smallweb&outlet=example.com"
 curl "http://127.0.0.1:8100/v1/search?q=list+comprehension&source=docs&framework=python"
+curl "http://127.0.0.1:8100/v1/search?q=rust+web+framework&source=hn&min_points=50"
 curl "http://127.0.0.1:8100/v1/docs/arxiv:2401.00001"     # stored abstract by stable id
 curl "http://127.0.0.1:8100/v1/stats"                     # totals + freshness watermarks
 ```
 
 Responses carry stable ids (`news:<hash>`, `gh:owner/repo`, `wiki:<page_id>`,
-`arxiv:<paper_id>`, `smallweb:<hash>`, `docs:<slug>/<path>`), snippets, per-source metadata,
+`arxiv:<paper_id>`, `smallweb:<hash>`, `docs:<slug>/<path>`, `hn:<item_id>`), snippets, per-source metadata,
 and timing breakdowns (`embed_query_ms` / `search_ms`). Under heavy indexing load, hybrid
 queries degrade gracefully to keyword search after a deadline rather than stalling — the
 response says so explicitly. Full OpenAPI docs at `/docs`.
@@ -275,6 +308,7 @@ Each layer derives from the one beneath it. The pipeline *is* the recovery proce
 | arXiv metadata | re-run `windex arxiv harvest` — the per-year windows are restartable and the text-hash ledger dedupes |
 | Small Web posts | re-run `windex smallweb poll` — the feeds watermark + text-hash ledger keep re-polls to genuinely new posts |
 | Programming docs | re-run `windex docs sync` + `docs ingest` — full-replace per docset; the text-hash ledger keeps it to the changed-page delta |
+| Hacker News stories | re-run `windex hn backfill` (parquet mirror) or `hn harvest` (Algolia) — the month windows are restartable and interchangeable between the two; the text-hash ledger dedupes |
 | Everything | run the ingestion flow from the top |
 
 Battle-tested: an external-drive failure corrupted the vector store mid-backfill; the index
