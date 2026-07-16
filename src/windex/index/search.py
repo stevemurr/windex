@@ -54,15 +54,13 @@ def _query_collection(
     limit: int,
     conditions: list,
     settings: Settings,
+    query_dense: list[float] | None,
 ) -> list[dict]:
     prefetch = []
     flt = qm.Filter(must=conditions) if conditions else None
-    if mode in ("hybrid", "dense"):
-        from windex.embed import build_embedder
-
-        dense = build_embedder(settings).embed_batch([settings.embed_query_prefix + q])[0]
+    if mode in ("hybrid", "dense") and query_dense is not None:
         prefetch.append(
-            qm.Prefetch(query=dense, using=qidx.DENSE, limit=limit * 4, filter=flt)
+            qm.Prefetch(query=query_dense, using=qidx.DENSE, limit=limit * 4, filter=flt)
         )
     if mode in ("hybrid", "lexical"):
         sparse = next(iter(_bm25_model().query_embed(q)))
@@ -103,6 +101,22 @@ def search(
     client = QdrantClient(url=settings.qdrant_url)
     existing = {c.name for c in client.get_collections().collections}
     aliases = {a.alias_name for a in client.get_aliases().aliases}
+
+    # Embed the query under a deadline: heavy indexing load on the embedding
+    # server must degrade hybrid → lexical, never stall the search.
+    query_dense = None
+    degraded = False
+    if mode in ("hybrid", "dense"):
+        from windex.embed import build_embedder
+
+        try:
+            embedder = build_embedder(settings, timeout=settings.embed_query_timeout)
+            query_dense = embedder.embed_batch([settings.embed_query_prefix + q])[0]
+        except Exception:
+            if mode == "dense":
+                raise  # explicit dense request: fail loudly, don't change semantics
+            degraded = True
+
     results = []
     targets = []
     if source in ("news", "all"):
@@ -113,7 +127,10 @@ def search(
         if alias not in aliases and alias not in existing:
             continue  # collection not built yet — serve what exists
         results.extend(
-            _query_collection(client, alias, q, mode, limit, conds, settings)
+            _query_collection(client, alias, q, mode, limit, conds, settings, query_dense)
         )
     results.sort(key=lambda r: r["score"], reverse=True)
-    return results[:limit]
+    out = results[:limit]
+    for r in out:
+        r["_degraded"] = degraded
+    return out

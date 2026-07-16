@@ -32,12 +32,18 @@ def run_search(
         published_after=published_after, published_before=published_before,
         min_stars=min_stars, language=language,
     )
+    degraded = bool(raw and raw[0].get("_degraded"))
     results = []
     for r in raw:
         item = {"id": r.get("doc_id"), "score": round(r["score"], 4)}
         item.update({k: r[k] for k in RESULT_FIELDS if r.get(k) is not None})
         results.append(item)
-    return {"query": q, "results": results, "took_ms": int((time.monotonic() - t0) * 1000)}
+    return {
+        "query": q,
+        "results": results,
+        "mode": "lexical (embedder busy — degraded from hybrid)" if degraded else mode,
+        "took_ms": int((time.monotonic() - t0) * 1000),
+    }
 
 
 def get_document(settings: Settings, doc_id: str) -> dict | None:

@@ -91,6 +91,17 @@ def test_hybrid_search_uses_fake_dense(qclient, settings, seeded_collection, mon
     assert results and results[0]["doc_id"] == "news:ccc"
 
 
+def test_hybrid_degrades_to_lexical_when_embedder_unreachable(
+    qclient, settings, seeded_collection, monkeypatch
+):
+    monkeypatch.setattr(searchmod.qidx, "alias_name", lambda source: seeded_collection)
+    # settings' embed endpoint points at a dead port — hybrid must still answer
+    results = searchmod.search(settings, "transit bus lanes", source="news",
+                               mode="hybrid", limit=3)
+    assert results and results[0]["doc_id"] == "news:bbb"
+    assert results[0]["_degraded"] is True
+
+
 def test_search_skips_missing_collections(settings, monkeypatch):
     monkeypatch.setattr(searchmod.qidx, "alias_name", lambda source: "does_not_exist")
     assert searchmod.search(settings, "anything", source="github", mode="lexical") == []

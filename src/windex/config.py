@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     embed_concurrency: int = 8  # in-flight requests; GPU servers batch these
     # Prepended to *queries* only (retrieval-instruction models like qwen3-embedding)
     embed_query_prefix: str = ""
+    # Query-time embedding deadline; hybrid search degrades to lexical past it
+    # (indexing load on the GPU server must not stall searches)
+    embed_query_timeout: float = 8.0
 
     # Corpus policy
     news_backfill_days: int = 90

@@ -2,7 +2,7 @@ from windex.config import Settings
 from windex.embed.base import Embedder
 
 
-def build_embedder(settings: Settings) -> Embedder:
+def build_embedder(settings: Settings, timeout: float | None = None) -> Embedder:
     if settings.embed_backend == "st":
         from windex.embed.st import SentenceTransformersEmbedder
 
@@ -17,4 +17,5 @@ def build_embedder(settings: Settings) -> Embedder:
         dim=settings.embed_dim,
         style=style,
         api_key=settings.embed_api_key,
+        **({"timeout": timeout, "retries": 1} if timeout else {}),
     )
