@@ -232,14 +232,19 @@ def get_timeseries(settings: Settings, minutes: int = 60) -> list[dict]:
     with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT g.m, coalesce(d.docs, 0)::bigint, coalesce(b.bytes, 0)::bigint
+            SELECT g.m, coalesce(i.docs, 0)::bigint, coalesce(e.docs, 0)::bigint,
+                   coalesce(b.bytes, 0)::bigint
             FROM generate_series(
                 date_trunc('minute', now()) - make_interval(mins => %s - 1),
                 date_trunc('minute', now()), interval '1 minute') AS g(m)
             LEFT JOIN (
+                SELECT date_trunc('minute', created_at) m, count(*) docs
+                FROM documents WHERE created_at > now() - make_interval(mins => %s)
+                GROUP BY 1) i USING (m)
+            LEFT JOIN (
                 SELECT date_trunc('minute', indexed_at) m, count(*) docs
                 FROM documents WHERE indexed_at > now() - make_interval(mins => %s)
-                GROUP BY 1) d USING (m)
+                GROUP BY 1) e USING (m)
             LEFT JOIN (
                 SELECT date_trunc('minute', processed_at) m, sum(bytes) bytes
                 FROM (
@@ -250,11 +255,12 @@ def get_timeseries(settings: Settings, minutes: int = 60) -> list[dict]:
                 GROUP BY 1) b USING (m)
             ORDER BY g.m
             """,
-            (minutes, minutes, minutes),
+            (minutes, minutes, minutes, minutes),
         )
         return [
-            {"t": m.isoformat(), "docs": docs, "mb": round(nbytes / 1e6, 1)}
-            for m, docs, nbytes in cur.fetchall()
+            {"t": m.isoformat(), "ingested": ingested, "docs": embeds,
+             "mb": round(nbytes / 1e6, 1)}
+            for m, ingested, embeds, nbytes in cur.fetchall()
         ]
 
 

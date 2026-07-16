@@ -9,8 +9,9 @@
     --bg: #faf9f5; --panel: #ffffff; --ink: #29261f; --muted: #7a7568;
     --accent: #c15f3c; --accent-soft: #c15f3c22; --line: #e8e4da; --line-strong: #d9d4c7;
     --ok: #4f7a4f;
-    /* chart marks — CVD-validated pair per mode */
-    --chart-index: #c15f3c; --chart-bw: #3d6ea5;
+    /* chart marks — side-by-side pair is CVD-validated; full-width download
+       chart wears a deliberate neutral (identity carried by its title) */
+    --chart-index: #c15f3c; --chart-embed: #3d6ea5; --chart-bw: #8a8272;
     --serif: ui-serif, "Iowan Old Style", "Palatino", Georgia, serif;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -19,7 +20,7 @@
     :root { --bg:#201f1b; --panel:#2a2925; --ink:#e8e5dd; --muted:#a19b8d;
             --accent:#d97757; --accent-soft:#d9775726; --line:#3a3831; --line-strong:#4a4740;
             --ok:#8fbc8f;
-            --chart-index:#d06b47; --chart-bw:#5a8ed2; }
+            --chart-index:#d06b47; --chart-embed:#5a8ed2; --chart-bw:#98917f; }
   }
   * { box-sizing: border-box; }
   html, body { margin:0; }
@@ -273,10 +274,15 @@
     <div class="charts">
       <div class="chart" id="chartDocs">
         <div class="head"><span class="k">indexed per minute · last hour</span><span class="v" id="rateDocs">—</span></div>
-        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Documents indexed per minute, trailing hour"></svg>
+        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Documents entering the index per minute, trailing hour"></svg>
         <div class="tip"></div>
       </div>
-      <div class="chart" id="chartBw">
+      <div class="chart" id="chartEmbeds">
+        <div class="head"><span class="k">embeds per minute · last hour</span><span class="v" id="rateEmbeds">—</span></div>
+        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Documents embedded per minute, trailing hour"></svg>
+        <div class="tip"></div>
+      </div>
+      <div class="chart" id="chartBw" style="grid-column:1 / -1">
         <div class="head"><span class="k">download MB per minute · last hour</span><span class="v" id="rateBw">—</span></div>
         <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Download megabytes per minute, trailing hour"></svg>
         <div class="tip"></div>
@@ -414,7 +420,7 @@ function renderStats(s) {
       ctl.textContent = "Pause indexing";
     }
     const dpm = act.docs_per_min || 0;
-    document.getElementById("rateDocs").textContent = dpm ? `${num(Math.round(dpm))}/min` : "idle";
+    document.getElementById("rateEmbeds").textContent = dpm ? `${num(Math.round(dpm))}/min` : "idle";
     const mbps = act.download_mb_per_s || 0;
     document.getElementById("rateBw").textContent = mbps ? `${mbps} MB/s avg` : "idle";
     const t = s.totals || {};
@@ -531,8 +537,13 @@ async function refreshCharts() {
 function renderCharts(series) {
   try {
     const css = getComputedStyle(document.documentElement);
-    drawChart("chartDocs", series, "docs", css.getPropertyValue("--chart-index").trim(), v => `${num(Math.round(v))} docs`);
+    drawChart("chartDocs", series, "ingested", css.getPropertyValue("--chart-index").trim(), v => `${num(Math.round(v))} docs`);
+    drawChart("chartEmbeds", series, "docs", css.getPropertyValue("--chart-embed").trim(), v => `${num(Math.round(v))} docs`);
     drawChart("chartBw", series, "mb", css.getPropertyValue("--chart-bw").trim(), v => `${Math.round(v)} MB`);
+    // indexed head: 10-min average from the series itself
+    const tail = series.slice(-10);
+    const avg = tail.reduce((s, p) => s + p.ingested, 0) / Math.max(tail.length, 1);
+    document.getElementById("rateDocs").textContent = avg ? `${num(Math.round(avg))}/min` : "idle";
   } catch (e) { /* charts are best-effort */ }
 }
 

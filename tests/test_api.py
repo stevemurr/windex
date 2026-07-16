@@ -134,8 +134,9 @@ def test_timeseries_zero_filled_with_seeded_activity(client, pg):
     series = client.get("/v1/timeseries", params={"minutes": 30}).json()
     assert len(series) == 30
     assert sum(p["docs"] for p in series) == 2  # 90-minute-old doc excluded
+    assert sum(p["ingested"] for p in series) == 3  # created_at defaults to now()
     assert sum(p["mb"] for p in series) == 500.0
-    assert all(set(p) == {"t", "docs", "mb"} for p in series)
+    assert all(set(p) == {"t", "docs", "ingested", "mb"} for p in series)
 
 
 def test_stats_endpoint_reports_pipeline_state_and_totals(client, pg):
