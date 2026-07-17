@@ -306,3 +306,99 @@ def test_stats_endpoint_reports_pipeline_state_and_totals(client, pg):
     assert t["duplicates_collapsed"] == 1
     assert t["news_outlets"] == 2
     assert t["news_coverage"] == ["2026-07-01", "2026-07-10"]
+
+
+def test_stats_embed_queue_counts_deduped_per_source(client, pg):
+    """The embed queue is a re-projection of the source/status group-by already
+    cached in _pg_heavy — only 'deduped' rows are waiting for a vector."""
+    with pg.cursor() as cur:
+        cur.execute(
+            """INSERT INTO documents (id, source, url, status) VALUES
+               ('wiki:1', 'wiki', 'u1', 'deduped'),
+               ('wiki:2', 'wiki', 'u2', 'deduped'),
+               ('wiki:3', 'wiki', 'u3', 'embedded'),
+               ('hn:1', 'hn', 'u4', 'deduped'),
+               ('news:d', 'news', 'u5', 'duplicate'),
+               ('gh:o/r', 'github', 'u6', 'embedded')"""
+        )
+    pg.commit()
+    q = client.get("/v1/stats").json()["queues"]["embed"]
+    assert q["by_source"]["wiki"] == 2          # embedded row excluded
+    assert q["by_source"]["hn"] == 1
+    assert q["by_source"]["github"] == 0        # caught up, still in the contract
+    assert q["by_source"]["news"] == 0          # 'duplicate' is not a queue state
+    assert q["total"] == 3
+
+
+def test_stats_index_queue_reports_per_source_watermarks_with_units(client, pg):
+    """Each watermark table counts its own unit of work; the payload names that
+    unit so nothing downstream is tempted to add the rows together."""
+    with pg.cursor() as cur:
+        cur.execute(
+            "INSERT INTO warc_files (path, status) VALUES "
+            "('a.warc.gz', 'done'), ('b.warc.gz', 'pending'), ('c.warc.gz', 'processing')"
+        )
+        cur.execute(
+            "INSERT INTO wiki_dumps (name, status) VALUES ('w1', 'done'), ('w2', 'failed')"
+        )
+        cur.execute(
+            "INSERT INTO arxiv_windows (from_date, until_date, status) VALUES "
+            "('2024-01-01', '2024-12-31', 'pending')"
+        )
+        cur.execute("INSERT INTO docsets (slug, status) VALUES ('python~3.14', 'pending')")
+        cur.execute(
+            "INSERT INTO hn_windows (from_ts, until_ts, status) VALUES (0, 100, 'done')"
+        )
+        cur.execute("INSERT INTO gharchive_files (name, status) VALUES ('h1', 'pending')")
+    pg.commit()
+    idx = client.get("/v1/stats").json()["queues"]["index"]
+
+    assert idx["news"] == {"unit": "WARC files", "pending": 1,
+                           "processing": 1, "failed": 0, "done": 1}
+    assert idx["wiki"]["failed"] == 1 and idx["wiki"]["done"] == 1
+    assert idx["arxiv"]["pending"] == 1 and idx["arxiv"]["unit"] == "date windows"
+    assert idx["docs"]["pending"] == 1 and idx["docs"]["unit"] == "docsets"
+    assert idx["hn"]["done"] == 1 and idx["github"]["pending"] == 1
+    # every source names its unit, and no two sources share one
+    units = [v["unit"] for v in idx.values()]
+    assert len(units) == len(set(units)) == 7
+
+
+def test_stats_index_queue_reports_zeros_for_empty_watermark_tables(client, pg):
+    """An empty watermark table yields no GROUP BY rows. Every source must still
+    report zeros — a source that vanishes from the payload would silently drop
+    its row from the dashboard on a fresh deploy."""
+    idx = client.get("/v1/stats").json()["queues"]["index"]
+    assert set(idx) == set(service_mod.QUEUE_UNITS)
+    assert all(
+        idx[s]["pending"] == idx[s]["processing"] == idx[s]["failed"] == idx[s]["done"] == 0
+        for s in idx
+    )
+
+
+def test_stats_index_queue_treats_feeds_as_first_poll_backlog(client, pg):
+    """feeds is a poll ROTATION, not a pending/done watermark: it has no 'done'
+    status, so its queue is active feeds never polled. Dead feeds are not work."""
+    with pg.cursor() as cur:
+        cur.execute(
+            """INSERT INTO feeds (url, host, status, last_polled) VALUES
+               ('https://a.example/f', 'a.example', 'active', NULL),
+               ('https://b.example/f', 'b.example', 'active', NULL),
+               ('https://c.example/f', 'c.example', 'active', now()),
+               ('https://d.example/f', 'd.example', 'dead', NULL)"""
+        )
+    pg.commit()
+    sw = client.get("/v1/stats").json()["queues"]["index"]["smallweb"]
+    assert sw["pending"] == 2      # active + never polled
+    assert sw["done"] == 1         # active + polled at least once
+    assert sw["unit"] == "feeds"   # not comparable to WARC files, and says so
+
+
+def test_stats_index_queue_never_totals_across_units(client, pg):
+    """Regression guard for the honesty contract: the index queue must stay a
+    per-source mapping. A cross-source total would silently equate a WARC file
+    with an arXiv window."""
+    body = client.get("/v1/stats").json()["queues"]
+    assert "total" not in body["index"]
+    assert set(body["index"]) <= set(service_mod.QUEUE_UNITS)
+    assert "total" in body["embed"]  # docs ARE one unit, so this total is real

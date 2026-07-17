@@ -91,6 +91,72 @@
   .comp .empty { padding:1.6rem 0 1.9rem; }
   @media (max-width:560px) { .comp .body { flex-direction:column; align-items:center; }
     .chart.comp svg { width:100%; max-width:300px; } .clegend { width:100%; } }
+  /* --- queues: embed backlog (ETA hero + per-source bars) and index queue
+     (per-source progress meters). Bars and meters reuse each source's --comp-*
+     hue so a source reads the same here as in the composition donut above.
+     Every row is direct-labeled with its source name AND its exact count, so
+     identity never rests on hue alone — that is also the standing relief for
+     the donut palette's two sub-3:1 contrast WARNs (docs gold, hn indigo) and
+     for the dark hn↔repos normal-vision ΔE 14.1 waiver documented at
+     --comp-hn. These panels sort by magnitude, so which hues end up adjacent
+     is data-dependent; the all-pairs validator run is therefore the gate, and
+     the text label is what actually carries identity. */
+  .qpanel .head { margin-bottom:.15rem; }
+  /* hero figure: the page's numerals are serif everywhere (wordmark, stat
+     tiles, donut centre), so the hero wears the same face — a sans hero would
+     be the off-brand one here. Proportional figures, never tabular: tabular
+     makes a display-size number look loose. */
+  .qeta { padding:.45rem 0 .8rem; }
+  .qeta .etav { font:600 3rem/1.05 var(--serif); letter-spacing:-.02em; }
+  .qeta .etak { color:var(--muted); font-size:.75rem; margin-top:.2rem; }
+  .qeta .etak b { color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums; }
+  .qbar, .qrow, .qhead { display:grid; gap:.55rem; align-items:center; padding:.22rem 0; }
+  .qbar  { grid-template-columns:.6rem 4.6rem 1fr 5.2rem; }
+  /* the unit column is sized to hold "date windows ⚠ 1 failed" on one line */
+  .qrow, .qhead { grid-template-columns:.6rem 4.6rem 1fr 2.4rem 4.2rem minmax(5.4rem,9rem); }
+  .qhead { padding-bottom:.35rem; border-bottom:1px solid var(--line); margin-bottom:.2rem; }
+  .qhead span { color:var(--muted); font-size:.68rem; letter-spacing:.04em;
+                text-transform:uppercase; }
+  .qhead .qhprog { grid-column:3 / 5; }
+  .qhead .qhnum { text-align:right; }
+  .qsw { width:.6rem; height:.6rem; border-radius:3px; }
+  .qname { font-size:.78rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .qtrack { display:flex; height:8px; background:var(--line); border-radius:99px;
+            min-width:0; }
+  .qfill { border-radius:99px; min-width:2px; }
+  .qfill + .qfill { margin-left:2px; }   /* 2px surface gap between segments */
+  .qfill.run { opacity:.45; }            /* in-flight work, same hue as done */
+  .qnum { font-size:.78rem; font-variant-numeric:tabular-nums; text-align:right; }
+  .qpct { font-size:.72rem; color:var(--muted); font-variant-numeric:tabular-nums;
+          text-align:right; }
+  .qunit { font-size:.68rem; color:var(--muted); line-height:1.32; }
+  /* status ships with an icon AND its label, never colour alone. nowrap keeps
+     the chip whole: it may wrap to its own line, but never mid-chip ("⚠ 2" /
+     "failed"), and it is never clipped. */
+  .qunit .qfail { color:var(--accent); white-space:nowrap; }
+  .qnote { color:var(--muted); font-size:.7rem; line-height:1.4; margin:0 0 .6rem; }
+  .qbar:focus-visible, .qrow:focus-visible { outline:2px solid var(--accent);
+                                             outline-offset:2px; border-radius:6px; }
+  /* Narrow: the bar drops to its own line under the name/count. Every cell is
+     placed EXPLICITLY — grid's sparse auto-flow never backtracks, so letting it
+     place cells around the wrapped track dumped the count into the 10px swatch
+     column (measured). Explicit areas keep the order deterministic. */
+  @media (max-width:560px) {
+    .qhead { display:none; }
+    .qbar  { grid-template-columns:.6rem 1fr 5.2rem; row-gap:.25rem; padding:.4rem 0; }
+    .qbar .qsw    { grid-area:1 / 1; }
+    .qbar .qname  { grid-area:1 / 2; }
+    .qbar .qnum   { grid-area:1 / 3; }
+    .qbar .qtrack { grid-area:2 / 2 / 3 / 4; }
+    .qrow  { grid-template-columns:.6rem 1fr 4.6rem; row-gap:.25rem; padding:.45rem 0; }
+    .qrow .qsw    { grid-area:1 / 1; }
+    .qrow .qname  { grid-area:1 / 2; }
+    .qrow .qnum   { grid-area:1 / 3; }
+    .qrow .qtrack { grid-area:2 / 2; }
+    .qrow .qpct   { grid-area:2 / 3; }
+    .qrow .qunit  { grid-area:3 / 2 / 4 / 4; }
+    .qeta .etav { font-size:2.5rem; }
+  }
   @keyframes pulse { 50% { opacity:.35; } }
   @media (prefers-reduced-motion: reduce) { #liveDot.busy i { animation:none; } }
 
@@ -349,6 +415,36 @@
       </div>
     </div>
     <div class="rows" id="stats"></div>
+    <h2 style="margin-top:1.6rem">Queues</h2>
+    <div class="charts">
+      <div class="chart qpanel" id="chartEmbedQ" style="grid-column:1 / -1">
+        <div class="head">
+          <span class="k">embed queue · docs extracted, waiting for a vector</span>
+          <span class="v" id="embedQTotal">—</span>
+        </div>
+        <div class="qeta">
+          <div class="etav" id="etaValue">—</div>
+          <div class="etak" id="etaNote">measuring…</div>
+        </div>
+        <div id="embedQBars" role="group" aria-label="Embed backlog by source"></div>
+        <div class="tip"></div>
+      </div>
+      <div class="chart qpanel" id="chartIndexQ" style="grid-column:1 / -1">
+        <div class="head">
+          <span class="k">index queue · upstream work not yet extracted</span>
+          <span class="v" id="indexQSrcs">—</span>
+        </div>
+        <p class="qnote">Every source counts a different unit of work — a WARC file is not an
+          arXiv window is not a feed. These rows are never added up or ranked against each
+          other; only <em>progress</em> (each source against its own total) compares.</p>
+        <div class="qhead" aria-hidden="true">
+          <span></span><span>source</span><span class="qhprog">progress</span>
+          <span class="qhnum">queued</span><span>unit of work</span>
+        </div>
+        <div id="indexQRows" role="group" aria-label="Index queue by source"></div>
+        <div class="tip"></div>
+      </div>
+    </div>
     <h2 style="margin-top:1.6rem">Logs</h2>
     <div id="logpanel">
       <div class="lbar">
@@ -481,18 +577,26 @@ async function refresh() {
   }
 }
 
-// --- index composition: donut of searchable vectors per source, fed by the
-//     same stats payload as the tiles. Adding a source = one entry here plus a
-//     --comp-<name> hex per theme block (colors are fixed per source, never cycled).
+// --- per-source registry: the one place a source's identity lives. `src` is the
+//     postgres/queue key, `alias` the qdrant alias, `label` the display name, and
+//     the CSS hue is derived from the alias (--comp-<alias minus _current>). The
+//     donut, the embed-queue bars and the index-queue meters all read from here,
+//     so a source wears the same color everywhere on the page. Adding a source =
+//     one entry here plus a --comp-<name> hex per theme block (colors are fixed
+//     per source, never cycled, never assigned by rank).
 const COMP_SOURCES = [
-  { alias: "news_current", label: "news" },
-  { alias: "repos_current", label: "github" },
-  { alias: "wiki_current", label: "wiki" },
-  { alias: "arxiv_current", label: "arxiv" },
-  { alias: "smallweb_current", label: "small web" },
-  { alias: "docs_current", label: "docs" },
-  { alias: "hn_current", label: "hn" },
+  { src: "news", alias: "news_current", label: "news" },
+  { src: "github", alias: "repos_current", label: "github" },
+  { src: "wiki", alias: "wiki_current", label: "wiki" },
+  { src: "arxiv", alias: "arxiv_current", label: "arxiv" },
+  { src: "smallweb", alias: "smallweb_current", label: "small web" },
+  { src: "docs", alias: "docs_current", label: "docs" },
+  { src: "hn", alias: "hn_current", label: "hn" },
 ];
+const compCss = s => s.alias.replace(/_current$/, "");
+// shared share-formatter: the donut and the embed-queue bars quote shares the
+// same way, so a "<1%" means the same thing in both.
+const pctText = p => p >= 0.095 ? `${Math.round(p * 100)}%` : p >= 0.01 ? `${(p * 100).toFixed(1)}%` : "<1%";
 let compKey = null;
 
 function renderComposition(vectors) {
@@ -500,7 +604,7 @@ function renderComposition(vectors) {
     const root = $("chartComp"), svg = root.querySelector("svg"),
           tip = root.querySelector(".tip"), body = root.querySelector(".body");
     const parts = COMP_SOURCES
-      .map(s => ({ ...s, css: s.alias.replace(/_current$/, ""), n: Number(vectors?.[s.alias]) || 0 }))
+      .map(s => ({ ...s, css: compCss(s), n: Number(vectors?.[s.alias]) || 0 }))
       .filter(p => p.n > 0);   // zero-count sources are omitted entirely
     const total = parts.reduce((sum, p) => sum + p.n, 0);
     const key = parts.map(p => `${p.alias}:${p.n}`).join(",");
@@ -513,7 +617,6 @@ function renderComposition(vectors) {
 
     const CX = 150, CY = 92, R0 = 40, R1 = 63, TAU = 2 * Math.PI;
     const pt = (r, a) => `${(CX + r * Math.cos(a)).toFixed(2)} ${(CY + r * Math.sin(a)).toFixed(2)}`;
-    const pctText = p => p >= 0.095 ? `${Math.round(p * 100)}%` : p >= 0.01 ? `${(p * 100).toFixed(1)}%` : "<1%";
     let a = -TAU / 4, paths = "";
     for (const p of parts) {
       const span = p.n / total * TAU;
@@ -586,6 +689,150 @@ function renderComposition(vectors) {
   } catch (e) { /* composition is best-effort */ }
 }
 
+// --- queues: the operator's three questions are how deep, is it draining, and
+//     when is it empty — none of which a pie can answer, so the embed queue
+//     leads with an ETA hero and ranks its sources as bars (a 5000:1 spread
+//     between wiki and docs leaves the small sources invisible in a ring, and a
+//     ring has nowhere to put their counts). The index queue is a table: each
+//     source's watermark counts a different unit, so nothing there is summed.
+//
+//     Both halves ride data ALREADY on the wire — the backlog off the `stats`
+//     event (~2s), the rate off `timeseries` (~16s) — so the ETA costs no
+//     query. They arrive separately, hence the cached halves below.
+let lastQueues = null, lastEmbedPerMin = null, lastPaused = false;
+let embedQKey = null, indexQKey = null;
+
+// Coarse by design: the input is a 60-minute mean over a bursty embedder
+// (measured 0.5–3.5 docs/s depending on the window), so more precision than
+// this would be false confidence.
+function etaFmt(mins) {
+  if (mins < 90) return `~${Math.max(1, Math.round(mins))} min`;
+  if (mins < 2880) return `~${Math.round(mins / 60)} hours`;
+  if (mins < 129600) return `~${Math.round(mins / 1440)} days`;
+  return `~${(mins / 43200).toFixed(1)} months`;
+}
+
+// Hover/focus tip for a queue row. It only ever ADDS facts the row has no room
+// for (share, per-source ETA, done/total) — every number it shows that matters
+// is already text in the row, so the tip never gates a value.
+function wireTip(root, tip, sel, text) {
+  root.querySelectorAll(sel).forEach((el, i) => {
+    const show = () => {
+      tip.textContent = text(i);
+      tip.style.display = "block";
+      const r = root.getBoundingClientRect(), b = el.getBoundingClientRect();
+      tip.style.left = `${Math.max(60, Math.min(b.left - r.left + b.width / 2, r.width - 60))}px`;
+      tip.style.top = `${b.top - r.top + 2}px`;
+    };
+    const hide = () => { tip.style.display = "none"; };
+    el.onmouseenter = show; el.onmouseleave = hide;
+    el.onfocus = show; el.onblur = hide;
+  });
+}
+
+function renderEmbedQueue(embed) {
+  const root = $("chartEmbedQ"), tip = root.querySelector(".tip");
+  const bySrc = embed.by_source || {};
+  const total = Number(embed.total) || 0;
+  // row ORDER follows magnitude (the deepest pile is the story); each source's
+  // COLOUR still follows the entity, so a filter or a reorder never repaints it
+  const parts = COMP_SOURCES
+    .map(s => ({ ...s, css: compCss(s), n: Number(bySrc[s.src]) || 0 }))
+    .filter(p => p.n > 0)
+    .sort((a, b) => b.n - a.n);
+  const rate = lastEmbedPerMin;
+  const key = [total, lastPaused, Math.round(rate ?? -1),
+               parts.map(p => `${p.src}:${p.n}`).join(",")].join("|");
+  if (key === embedQKey) return;   // unchanged → keep DOM (and hover) stable
+  embedQKey = key;
+
+  $("embedQTotal").textContent = total ? `${num(total)} docs` : "—";
+  let etav, etak;
+  if (!total) { etav = "clear"; etak = "nothing is waiting for a vector"; }
+  else if (lastPaused) { etav = "paused"; etak = `<b>${num(total)}</b> docs held — resume indexing to drain`; }
+  else if (!rate) { etav = "stalled"; etak = "no embeds in the last hour — the queue is not draining"; }
+  else { etav = etaFmt(total / rate);
+         etak = `to drain at the last hour's mean rate · <b>${num(Math.round(rate))}</b>/min`; }
+  $("etaValue").textContent = etav;
+  $("etaNote").innerHTML = etak;
+
+  const max = parts.length ? parts[0].n : 1;
+  $("embedQBars").innerHTML = parts.map(p => {
+    // linear scale: wiki and hn ARE the backlog and the bars should say so.
+    // Sub-pixel sources bottom out at the 2px min-width in .qfill — "some" not
+    // "none" — and their exact count sits beside them in text regardless.
+    const share = total ? pctText(p.n / total) : "—";
+    return `<div class="qbar" tabindex="0" role="img"
+      aria-label="${esc(p.label)}: ${num(p.n)} docs waiting, ${share} of the backlog">
+      <i class="qsw" style="background:var(--comp-${p.css})"></i>
+      <span class="qname">${esc(p.label)}</span>
+      <span class="qtrack"><span class="qfill"
+        style="width:${(p.n / max * 100).toFixed(2)}%;background:var(--comp-${p.css})"></span></span>
+      <span class="qnum">${num(p.n)}</span>
+    </div>`;
+  }).join("");
+  wireTip(root, tip, ".qbar", i => {
+    const p = parts[i];
+    const eta = rate && !lastPaused ? ` · ${etaFmt(p.n / rate)} on its own` : "";
+    return `${p.label} · ${num(p.n)} waiting · ${pctText(p.n / total)} of backlog${eta}`;
+  });
+}
+
+function renderIndexQueue(index) {
+  const root = $("chartIndexQ"), tip = root.querySelector(".tip");
+  const rows = COMP_SOURCES
+    .map(s => ({ ...s, css: compCss(s), q: index[s.src] }))
+    .filter(r => r.q);
+  const key = rows.map(r =>
+    `${r.src}:${r.q.pending},${r.q.processing},${r.q.failed},${r.q.done}`).join("|");
+  if (key === indexQKey) return;
+  indexQKey = key;
+  // no total across rows — the units don't add. The only honest headline is how
+  // many sources still have work.
+  const queued = rows.filter(r => r.q.pending > 0 || r.q.failed > 0).length;
+  $("indexQSrcs").textContent = rows.length ? `${queued} of ${rows.length} queued` : "—";
+  $("indexQRows").innerHTML = rows.map(r => {
+    const q = r.q;
+    const total = q.pending + q.processing + q.failed + q.done;
+    // failed counts in the denominator: a source with stuck work must never
+    // read 100% done. It is flagged as text, not as a slice of the meter —
+    // the meter is progress, the label is status.
+    const donePct = total ? q.done / total * 100 : 0;
+    const runPct = total ? q.processing / total * 100 : 0;
+    const fail = q.failed ? ` <span class="qfail">⚠ ${num(q.failed)} failed</span>` : "";
+    const aria = `${r.label}: ${num(q.done)} of ${num(total)} ${q.unit} done, ` +
+      `${num(q.pending)} queued${q.failed ? `, ${num(q.failed)} failed` : ""}`;
+    return `<div class="qrow" tabindex="0" role="img" aria-label="${esc(aria)}">
+      <i class="qsw" style="background:var(--comp-${r.css})"></i>
+      <span class="qname">${esc(r.label)}</span>
+      <span class="qtrack">${
+        q.done ? `<span class="qfill" style="width:${donePct.toFixed(2)}%;background:var(--comp-${r.css})"></span>` : ""
+      }${
+        q.processing ? `<span class="qfill run" style="width:${runPct.toFixed(2)}%;background:var(--comp-${r.css})"></span>` : ""
+      }</span>
+      <span class="qpct">${Math.round(donePct)}%</span>
+      <span class="qnum">${num(q.pending)}</span>
+      <span class="qunit">${esc(q.unit)}${fail}</span>
+    </div>`;
+  }).join("");
+  wireTip(root, tip, ".qrow", i => {
+    const q = rows[i].q;
+    const total = q.pending + q.processing + q.failed + q.done;
+    const bits = [`${num(q.done)} done`, `${num(q.pending)} pending`];
+    if (q.processing) bits.push(`${num(q.processing)} running`);
+    if (q.failed) bits.push(`${num(q.failed)} failed`);
+    return `${rows[i].label} · ${bits.join(" · ")} · of ${num(total)} ${q.unit}`;
+  });
+}
+
+function renderQueues() {
+  try {
+    if (!lastQueues) return;
+    renderEmbedQueue(lastQueues.embed || {});
+    renderIndexQueue(lastQueues.index || {});
+  } catch (e) { /* queues are best-effort */ }
+}
+
 function renderStats(s) {
   try {
     const w = s.warc_files || {}, d = (s.documents || {}).news || {}, r = s.repos || {},
@@ -603,6 +850,10 @@ function renderStats(s) {
               || (st.github && st.github !== "idle");
     const queued = (w.pending || 0) + (g.pending || 0) + backlog;
     const inflight = act.downloading_bytes_on_disk || 0;
+    // queues ride the stats payload; the ETA's other half lands on `timeseries`
+    lastQueues = s.queues || null;
+    lastPaused = act.control === "paused";
+    renderQueues();
     $("liveDot").className = busy ? "busy" : "";
     // pill states the dominant phase; the stages line has the full detail
     let label;
@@ -749,6 +1000,12 @@ function renderCharts(series) {
     const tail = series.slice(-10);
     const avg = tail.reduce((s, p) => s + p.ingested, 0) / Math.max(tail.length, 1);
     document.getElementById("rateDocs").textContent = avg ? `${num(Math.round(avg))}/min` : "idle";
+    // ETA rate: the mean over the WHOLE 60-minute window, matching the "embeds
+    // per minute · last hour" chart above. The embedder is bursty (idle minutes
+    // between batches), so a short tail window swings the ETA by ~6x — the full
+    // window is the steadiest honest rate we have, and the hero says which one.
+    lastEmbedPerMin = series.reduce((s, p) => s + p.docs, 0) / Math.max(series.length, 1);
+    renderQueues();
   } catch (e) { /* charts are best-effort */ }
 }
 

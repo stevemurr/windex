@@ -209,6 +209,20 @@ _PG_STATS_TTL = 10.0
 _pg_heavy_cache: dict = {}
 _PG_HEAVY_TTL = 600.0
 
+# Index-queue units. Each source's watermark table counts a different unit of
+# work — a WARC file is not an arXiv window is not a feed — so these counts are
+# NEVER summed or compared across sources; the unit rides along in the payload
+# so /v1/stats is self-describing and the dashboard can say so out loud.
+QUEUE_UNITS = {
+    "news": "WARC files",
+    "github": "archive hours",
+    "wiki": "dump shards",
+    "arxiv": "date windows",
+    "smallweb": "feeds",
+    "docs": "docsets",
+    "hn": "time windows",
+}
+
 
 def _pg_heavy(settings: Settings, ttl: float = _PG_HEAVY_TTL) -> dict:
     now = time.monotonic()
@@ -282,6 +296,31 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
                   WHERE processed_at > now() - interval '30 minutes')"""
         )
         bytes_30m = cur.fetchone()[0]
+        # Index queue: the five watermark tables not already counted above
+        # (warc_files/gharchive_files are reused from `warcs`/`hours` rather
+        # than re-scanned). All tiny and status-indexed — index-only scans,
+        # ~5ms for the whole UNION — so they belong in this 10s tier. feeds is
+        # a poll ROTATION, not a pending/done watermark: it is never "done", so
+        # its queue is the first-sweep backlog (an active feed never fetched).
+        cur.execute(
+            """
+            SELECT 'wiki'::text, status::text, count(*) FROM wiki_dumps GROUP BY status
+            UNION ALL
+            SELECT 'arxiv', status::text, count(*) FROM arxiv_windows GROUP BY status
+            UNION ALL
+            SELECT 'docs', status::text, count(*) FROM docsets GROUP BY status
+            UNION ALL
+            SELECT 'hn', status::text, count(*) FROM hn_windows GROUP BY status
+            UNION ALL
+            SELECT 'smallweb',
+                   (CASE WHEN last_polled IS NULL THEN 'pending' ELSE 'done' END)::text,
+                   count(*)
+            FROM feeds WHERE status = 'active' GROUP BY 2
+            """
+        )
+        marks: dict = {"news": warcs, "github": hours}
+        for src, status, n in cur.fetchall():
+            marks.setdefault(src, {})[status] = n
     outlets = heavy["outlets"]
     cov_min, cov_max = heavy["cov"]
     news = docs.get("news", {})
@@ -291,11 +330,36 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
     smallweb = docs.get("smallweb", {})
     progdocs = docs.get("docs", {})
     hn = docs.get("hn", {})
+    # Embed queue = documents awaiting a vector, per source. This is a pure
+    # re-projection of the source/status group-by already cached in _pg_heavy
+    # (600s TTL) — it adds no query. Zero-backlog sources are kept here (the
+    # contract stays complete); the dashboard is what drops them from the chart.
+    embed_backlog = {src: st.get("deduped", 0) for src, st in docs.items()}
     result = {
         "documents": docs,
         "repos": repos,
         "warc_files": warcs,
         "gharchive_files": hours,
+        "queues": {
+            "embed": {
+                "by_source": embed_backlog,
+                "total": sum(embed_backlog.values()),
+            },
+            # Per-source and NEVER totalled: every row counts a different unit.
+            # Keyed off QUEUE_UNITS, not off what the query returned: an empty
+            # watermark table yields no GROUP BY rows, and a source must report
+            # zeros rather than disappear from the contract.
+            "index": {
+                src: {
+                    "unit": unit,
+                    "pending": marks.get(src, {}).get("pending", 0),
+                    "processing": marks.get(src, {}).get("processing", 0),
+                    "failed": marks.get(src, {}).get("failed", 0),
+                    "done": marks.get(src, {}).get("done", 0),
+                }
+                for src, unit in QUEUE_UNITS.items()
+            },
+        },
         "totals": {
             "indexed_pages": news.get("embedded", 0) + gh.get("embedded", 0)
             + wiki.get("embedded", 0) + arxiv.get("embedded", 0)
