@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # embed_concurrency is per-process, so N jobs multiply it: 6 jobs x 8 put ~48
     # requests at one GPU and a query embed took 67s vs its 8s deadline. See
     # embed/budget.py. Live queries are never budgeted.
-    embed_global_budget: int = 32
+    embed_global_budget: int = 8
     # Pause per worker between batches: creates idle gaps on the embedding
     # server so live queries aren't stuck behind indexing (0 = full speed)
     embed_throttle_seconds: float = 0.0

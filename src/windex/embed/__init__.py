@@ -7,24 +7,32 @@ from windex.embed.base import Embedder
 # other keys are per-process. Before it existed, "polite" could not bound the
 # fleet as advertised — 6 jobs x 2 still queued 12 deep at one endpoint.
 #
-# These numbers are PROVISIONAL, and deliberately not derived from the queueing
-# argument that motivated the budget. Measured 2026-07-17 against the live
-# endpoint: with indexing PAUSED and the queue fully drained, a single two-word
-# embed still took 28s. So its latency is per-request, not queue depth, and no
-# budget can bring a query embed under the 8s deadline while that holds — the
-# breaker (index/embed_breaker.py) is what makes that survivable, not this.
-# Throughput, meanwhile, still rises with concurrency (48 in-flight -> 9.6
-# docs/s; 8 in-flight -> 3.8), so a tight cap costs backlog speed and buys
-# nothing today. `full` is therefore set to bound the fleet only enough to stay
-# off the cliff where requests time out and jobs die, not to protect a query
-# latency that is unreachable anyway. Re-tune once the endpoint serves a single
-# embed in ~ms (and once the second endpoint lands — slots are keyed per
-# endpoint, so each gets its own budget).
+# These numbers are PROVISIONAL and conservative, pending a valid measurement.
+#
+# History worth keeping, because it nearly got written in as fact: on 2026-07-17
+# a probe "with indexing paused and the queue drained" returned 28s for a single
+# two-word embed, and that was read as proof the endpoint had a per-request
+# latency floor no budget could fix. The measurement was invalid. `indexing`
+# pauses at PASS boundaries, so in-flight passes keep draining their queued work
+# for minutes afterward (observed: connections fell 21 -> 6 over two minutes) —
+# the endpoint was still flooded when it was probed as "idle". A truly idle
+# endpoint was never measured.
+#
+# Ground truth came from the box: the endpoint is FAST, and windex flooded it
+# into a stall. Unbounded in-flight work (7 loops x 8 concurrency) plus a retry
+# storm — every timeout raising and retrying, adding load — is textbook
+# congestion collapse. So this budget is the fix, not a consolation prize, and
+# the queueing argument that motivated it was right.
+#
+# To pause for real, kill the loops; the flag alone is the polite stop.
+# Re-measure against a genuinely idle endpoint (processes stopped, zero
+# connections to the endpoint, verified) before raising these. Slots are keyed
+# per endpoint, so a second server gets its own budget.
 PROFILES = {
     "polite": {"embed_concurrency": 2, "embed_batch_size": 16,
                "embed_throttle_seconds": 1.0, "embed_global_budget": 4},
     "full": {"embed_concurrency": 8, "embed_batch_size": 32,
-             "embed_throttle_seconds": 0.0, "embed_global_budget": 32},
+             "embed_throttle_seconds": 0.0, "embed_global_budget": 8},
 }
 
 
