@@ -191,7 +191,7 @@ def _post(client: httpx.Client, pool: TokenPool, query: str, retries: int = 5) -
         except httpx.HTTPError:  # dropped/half-closed connections, timeouts
             time.sleep(2**attempt)
             continue
-        if resp.status_code in (502, 503):
+        if resp.status_code in (502, 503, 504):
             time.sleep(2**attempt)
             continue
         if resp.status_code == 403 or resp.status_code == 429:
