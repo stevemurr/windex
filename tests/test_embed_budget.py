@@ -186,3 +186,27 @@ def test_profiles_carry_a_global_budget():
     for name, prof in PROFILES.items():
         assert "embed_global_budget" in prof, f"{name} profile has no fleet budget"
     assert PROFILES["polite"]["embed_global_budget"] < PROFILES["full"]["embed_global_budget"]
+
+
+def test_bulk_and_query_sign_with_their_tier_keys():
+    """The gateway enforces different limits per key: bulk is capped at 6
+    concurrent (429s past it), interactive queues and never 429s. Crossing the
+    keys silently breaks one side or the other."""
+    s = Settings(_env_file=None, embed_backend="http-openai", embed_dim=4,
+                 embed_api_key="legacy", embed_bulk_api_key="bulk-key",
+                 embed_query_api_key="query-key")
+    bulk = build_embedder(s, bulk=True)
+    assert bulk.inner._client.headers["authorization"] == "Bearer bulk-key"
+    query = build_embedder(s, timeout=8.0)
+    assert query._client.headers["authorization"] == "Bearer query-key"
+
+
+def test_tier_keys_fall_back_to_the_single_key():
+    # A single-key server (WINDEX_EMBED_API_KEY only) must keep working on
+    # both paths.
+    s = Settings(_env_file=None, embed_backend="http-openai", embed_dim=4,
+                 embed_api_key="only-key")
+    assert (build_embedder(s, bulk=True).inner._client.headers["authorization"]
+            == "Bearer only-key")
+    assert (build_embedder(s, timeout=8.0)._client.headers["authorization"]
+            == "Bearer only-key")

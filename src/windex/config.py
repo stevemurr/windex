@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     embed_backend: Literal["http-tei", "http-openai", "st"] = "http-tei"
     embed_endpoint: str = "http://127.0.0.1:8080"
     embed_api_key: str = ""
+    # Tiered gateway keys. bulk = indexing: the server hard-caps this key's
+    # concurrency (currently 6 in flight; keep embed_global_budget <= that) and
+    # REJECTS the excess with 429 rather than queueing it. query = interactive
+    # search: no concurrency cap; excess requests queue server-side and stay
+    # fast while indexing runs. Each falls back to embed_api_key when unset, so
+    # a single-key server needs only the one variable.
+    embed_bulk_api_key: str = ""
+    embed_query_api_key: str = ""
     embed_model: str = "placeholder"
     embed_dim: int = 0
     embed_max_tokens: int = 512
@@ -25,7 +33,10 @@ class Settings(BaseSettings):
     # embed_concurrency is per-process, so N jobs multiply it: 6 jobs x 8 put ~48
     # requests at one GPU and a query embed took 67s vs its 8s deadline. See
     # embed/budget.py. Live queries are never budgeted.
-    embed_global_budget: int = 12
+    # MUST NOT exceed the bulk key's server-side concurrency cap (6): the
+    # gateway 429s past it, it doesn't queue. Keep the two equal — lower wastes
+    # paid-for slots, higher guarantees rejection churn.
+    embed_global_budget: int = 6
     # Pause per worker between batches: creates idle gaps on the embedding
     # server so live queries aren't stuck behind indexing (0 = full speed)
     embed_throttle_seconds: float = 0.0

@@ -51,7 +51,10 @@ SLOT_ROOT = Path.home() / ".windex" / "embed-slots"
 # A wait longer than this means something is wrong (a real batch is seconds,
 # and 67s under the pathological load this exists to fix). Proceed anyway
 # rather than stall a backfill forever on a slot that never frees — a throttle
-# that can wedge the pipeline is worse than no throttle.
+# that can wedge the pipeline is worse than no throttle. Since the gateway
+# grew a per-key cap on the bulk key, proceeding unbudgeted means eating a
+# 429 (rejected, retried with backoff by HttpEmbedder) — not piling queue
+# onto the GPU, which is what this timeout used to risk.
 WAIT_TIMEOUT = 900.0
 POLL = 0.2
 

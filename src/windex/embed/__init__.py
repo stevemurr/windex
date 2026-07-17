@@ -27,11 +27,14 @@ from windex.embed.base import Embedder
 # Live queries are never budgeted (index/search.py), but they still queue behind
 # whatever a slot is already chewing — which is why batch size, not budget, is
 # what gets a query under its 8s deadline while indexing runs.
+# "full" sat at the measured knee (12) until the gateway grew per-key tiers:
+# the bulk key now hard-caps at 6 concurrent and 429s the rest, so 6 is the
+# binding limit (and the flat throughput curve above says it costs little).
 PROFILES = {
     "polite": {"embed_concurrency": 2, "embed_batch_size": 8,
                "embed_throttle_seconds": 1.0, "embed_global_budget": 4},
     "full": {"embed_concurrency": 8, "embed_batch_size": 8,
-             "embed_throttle_seconds": 0.0, "embed_global_budget": 12},
+             "embed_throttle_seconds": 0.0, "embed_global_budget": 6},
 }
 
 
@@ -47,10 +50,12 @@ def with_runtime_profile(conn, settings: Settings) -> Settings:
 
 def build_embedder(settings: Settings, timeout: float | None = None,
                    bulk: bool = False) -> Embedder:
-    """bulk=True wraps the embedder in the fleet-wide budget (embed/budget.py).
-    Live queries pass bulk=False so a search never queues behind a backfill —
+    """bulk=True signs with the gateway's bulk key and wraps the embedder in
+    the fleet-wide budget (embed/budget.py). Live queries pass bulk=False:
+    they sign with the interactive key (uncapped, queues instead of 429ing)
+    and never take a budget slot, so a search never queues behind a backfill —
     that asymmetry is the point."""
-    inner = _build_inner(settings, timeout)
+    inner = _build_inner(settings, timeout, bulk)
     if bulk and settings.embed_global_budget > 0:
         from windex.embed.budget import BudgetedEmbedder
 
@@ -58,7 +63,8 @@ def build_embedder(settings: Settings, timeout: float | None = None,
     return inner
 
 
-def _build_inner(settings: Settings, timeout: float | None = None) -> Embedder:
+def _build_inner(settings: Settings, timeout: float | None = None,
+                 bulk: bool = False) -> Embedder:
     if settings.embed_backend == "st":
         from windex.embed.st import SentenceTransformersEmbedder
 
@@ -67,11 +73,12 @@ def _build_inner(settings: Settings, timeout: float | None = None) -> Embedder:
     from windex.embed.http import HttpEmbedder
 
     style = "tei" if settings.embed_backend == "http-tei" else "openai"
+    tier_key = settings.embed_bulk_api_key if bulk else settings.embed_query_api_key
     return HttpEmbedder(
         endpoint=settings.embed_endpoint,
         model_id=settings.embed_model,
         dim=settings.embed_dim,
         style=style,
-        api_key=settings.embed_api_key,
+        api_key=tier_key or settings.embed_api_key,
         **({"timeout": timeout, "retries": 1} if timeout else {}),
     )
