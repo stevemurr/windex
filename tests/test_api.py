@@ -222,13 +222,23 @@ def test_events_stream_emits_sse(client, pg):
 
 def test_throttle_profile_endpoint_and_overlay(client, pg, settings):
     from windex import db as wdb
-    from windex.embed import with_runtime_profile
+    from windex.embed import PROFILES, with_runtime_profile
 
     assert client.post("/v1/throttle/full").json() == {"embed_profile": "full"}
     assert with_runtime_profile(pg, settings).embed_concurrency == 8
     assert client.post("/v1/throttle/polite").json() == {"embed_profile": "polite"}
     eff = with_runtime_profile(pg, settings)
-    assert (eff.embed_concurrency, eff.embed_batch_size, eff.embed_throttle_seconds) == (2, 16, 1.0)
+    # Assert the contract, not the tuning: polite must be gentler than full on
+    # every axis and bound the fleet, so the values stay free to move as the
+    # endpoint is measured (batch went 16 -> 8 on 2026-07-17 when throughput
+    # proved flat past saturation and batch size turned out to be the lever on
+    # query latency).
+    full = PROFILES["full"]
+    assert eff.embed_concurrency <= full["embed_concurrency"]
+    assert eff.embed_batch_size <= full["embed_batch_size"]
+    assert eff.embed_throttle_seconds >= full["embed_throttle_seconds"]
+    assert eff.embed_global_budget <= full["embed_global_budget"]
+    assert (eff.embed_concurrency, eff.embed_throttle_seconds) == (2, 1.0)
     client.post("/v1/throttle/env")
     assert with_runtime_profile(pg, settings) is settings  # env = untouched
     assert client.post("/v1/throttle/ludicrous").status_code == 422

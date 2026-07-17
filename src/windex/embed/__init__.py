@@ -7,31 +7,30 @@ from windex.embed.base import Embedder
 # other keys are per-process. Before it existed, "polite" could not bound the
 # fleet as advertised — 6 jobs x 2 still queued 12 deep at one endpoint.
 #
-# These numbers are PROVISIONAL and conservative, pending a valid measurement.
+# Measured 2026-07-17 against a VERIFIED-idle endpoint (loops killed, zero
+# connections confirmed by lsof — not the flag, which only pauses at pass
+# boundaries and left an earlier probe reading a flood as "idle"):
+#   single embed 0.12-0.21s, a 16-doc batch 0.40s. The endpoint is fast.
 #
-# History worth keeping, because it nearly got written in as fact: on 2026-07-17
-# a probe "with indexing paused and the queue drained" returned 28s for a single
-# two-word embed, and that was read as proof the endpoint had a per-request
-# latency floor no budget could fix. The measurement was invalid. `indexing`
-# pauses at PASS boundaries, so in-flight passes keep draining their queued work
-# for minutes afterward (observed: connections fell 21 -> 6 over two minutes) —
-# the endpoint was still flooded when it was probed as "idle". A truly idle
-# endpoint was never measured.
+# Under load, throughput is FLAT across in-flight depth: budget 4 -> 6.9 docs/s,
+# budget 8 -> 8.5, ~48 (unbounded) -> 9.6. The GPU saturates around 8; past that
+# every extra request is pure queue, and enough of it collapses the endpoint —
+# that is what windex did to the box tonight (unbounded in-flight plus a retry
+# storm, each timeout retrying and adding load: congestion collapse).
 #
-# Ground truth came from the box: the endpoint is FAST, and windex flooded it
-# into a stall. Unbounded in-flight work (7 loops x 8 concurrency) plus a retry
-# storm — every timeout raising and retrying, adding load — is textbook
-# congestion collapse. So this budget is the fix, not a consolation prize, and
-# the queueing argument that motivated it was right.
+# So concurrency past saturation buys nothing, and batch size is the lever that
+# matters for latency: a slot holds one request's worth of GPU time, and real
+# docs are up to embed_max_tokens (2048) each, so batch 32 parks ~10x more work
+# in front of a live query than the 200-token probe above suggests. Batch 8 at
+# budget 8 = 64 docs in flight instead of 256, for the same saturated GPU.
 #
-# To pause for real, kill the loops; the flag alone is the polite stop.
-# Re-measure against a genuinely idle endpoint (processes stopped, zero
-# connections to the endpoint, verified) before raising these. Slots are keyed
-# per endpoint, so a second server gets its own budget.
+# Live queries are never budgeted (index/search.py), but they still queue behind
+# whatever a slot is already chewing — which is why batch size, not budget, is
+# what gets a query under its 8s deadline while indexing runs.
 PROFILES = {
-    "polite": {"embed_concurrency": 2, "embed_batch_size": 16,
+    "polite": {"embed_concurrency": 2, "embed_batch_size": 8,
                "embed_throttle_seconds": 1.0, "embed_global_budget": 4},
-    "full": {"embed_concurrency": 8, "embed_batch_size": 32,
+    "full": {"embed_concurrency": 8, "embed_batch_size": 8,
              "embed_throttle_seconds": 0.0, "embed_global_budget": 8},
 }
 
