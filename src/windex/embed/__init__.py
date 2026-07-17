@@ -31,7 +31,7 @@ PROFILES = {
     "polite": {"embed_concurrency": 2, "embed_batch_size": 8,
                "embed_throttle_seconds": 1.0, "embed_global_budget": 4},
     "full": {"embed_concurrency": 8, "embed_batch_size": 8,
-             "embed_throttle_seconds": 0.0, "embed_global_budget": 16},
+             "embed_throttle_seconds": 0.0, "embed_global_budget": 12},
 }
 
 
