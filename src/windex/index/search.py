@@ -14,16 +14,23 @@ from windex.index import qdrant as qidx
 
 Mode = Literal["hybrid", "dense", "lexical"]
 
-_bm25 = None
+_client: QdrantClient | None = None
 
 
-def _bm25_model():
-    global _bm25
-    if _bm25 is None:
-        from fastembed import SparseTextEmbedding
+def _qdrant(settings: Settings) -> QdrantClient:
+    """One process-wide client: it holds an httpx connection pool, and building
+    one per request meant a fresh pool (and handshake) for every search."""
+    global _client
+    if _client is None:
+        _client = QdrantClient(url=settings.qdrant_url)
+    return _client
 
-        _bm25 = SparseTextEmbedding("Qdrant/bm25")
-    return _bm25
+
+def _sparse_vector(q: str) -> qm.SparseVector:
+    sparse = next(iter(_bm25_model().query_embed(q)))
+    return qm.SparseVector(indices=sparse.indices.tolist(), values=sparse.values.tolist())
+
+from windex.index.sparse import bm25_model as _bm25_model
 
 
 def _news_filter(published_after: datetime | None, published_before: datetime | None):
@@ -131,6 +138,7 @@ def _query_collection(
     conditions: list,
     settings: Settings,
     query_dense: list[float] | None,
+    query_sparse: qm.SparseVector | None = None,
 ) -> list[dict]:
     prefetch = []
     flt = qm.Filter(must=conditions) if conditions else None
@@ -147,12 +155,9 @@ def _query_collection(
                         filter=flt, params=dense_params)
         )
     if mode in ("hybrid", "lexical"):
-        sparse = next(iter(_bm25_model().query_embed(q)))
         prefetch.append(
             qm.Prefetch(
-                query=qm.SparseVector(
-                    indices=sparse.indices.tolist(), values=sparse.values.tolist()
-                ),
+                query=query_sparse if query_sparse is not None else _sparse_vector(q),
                 using=qidx.SPARSE,
                 limit=limit * 4,
                 filter=flt,
@@ -186,7 +191,7 @@ def search(
     framework: str | None = None,
     min_points: int | None = None,
 ) -> list[dict]:
-    client = QdrantClient(url=settings.qdrant_url)
+    client = _qdrant(settings)
     existing = {c.name for c in client.get_collections().collections}
     aliases = {a.alias_name for a in client.get_aliases().aliases}
 
@@ -227,12 +232,16 @@ def search(
     if source in ("hn", "all"):
         targets.append(("hn", qidx.alias_name("hn"),
                         _hn_filter(min_points, published_after, published_before)))
+    # Encode the query once, not once per target collection (source=all fans out
+    # to 7 collections and re-encoded the same string for each).
+    query_sparse = _sparse_vector(q) if mode in ("hybrid", "lexical") else None
     t_search = time.monotonic()
     for _, alias, conds in targets:
         if alias not in aliases and alias not in existing:
             continue  # collection not built yet — serve what exists
         results.extend(
-            _query_collection(client, alias, q, mode, limit, conds, settings, query_dense)
+            _query_collection(client, alias, q, mode, limit, conds, settings,
+                              query_dense, query_sparse)
         )
     search_ms = (time.monotonic() - t_search) * 1000
     results.sort(key=lambda r: r["score"], reverse=True)

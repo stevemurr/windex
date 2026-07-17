@@ -37,9 +37,9 @@ def _readmes(readme_dir: Path) -> dict[int, str]:
 
 def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 100_000) -> int:
     embedder = build_embedder(settings)
-    from fastembed import SparseTextEmbedding
+    from windex.index.sparse import bm25_model
 
-    bm25 = SparseTextEmbedding("Qdrant/bm25")
+    bm25 = bm25_model()
     client = QdrantClient(url=settings.qdrant_url, timeout=120)
     collection = qidx.ensure_collection(client, "repos", settings.embed_model, settings.embed_dim)
 

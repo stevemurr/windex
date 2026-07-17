@@ -284,8 +284,12 @@ def _existing(cur: psycopg.Cursor, ids: list[str]) -> dict[str, tuple[str, str]]
     """id -> (text_hash, status) for existing hn ledger rows."""
     if not ids:
         return {}
+        # No `source =` predicate: ids are namespaced (hn:, wiki:, …) so an id
+        # list can't match another source. Including it makes the planner pick
+        # documents_source_published_idx (est. rows=1 — rare sources are absent
+        # from the MCV list) and scan every row of the source: 244s vs 63ms.
     cur.execute(
-        "SELECT id, text_hash, status FROM documents WHERE source = 'hn' AND id = ANY(%s)",
+        "SELECT id, text_hash, status FROM documents WHERE id = ANY(%s)",
         (ids,),
     )
     return {r[0]: (r[1], r[2]) for r in cur.fetchall()}

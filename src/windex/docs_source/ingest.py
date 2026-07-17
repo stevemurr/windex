@@ -193,7 +193,11 @@ def _existing_hashes(cur: psycopg.Cursor, ids: list[str]) -> dict[str, str]:
         return {}
     cur.execute(
         "SELECT id, text_hash FROM documents "
-        "WHERE source = 'docs' AND status <> 'deleted' AND id = ANY(%s)",
+        # No `source =` predicate: ids are namespaced (hn:, wiki:, …) so an id
+        # list can't match another source. Including it makes the planner pick
+        # documents_source_published_idx (est. rows=1 — rare sources are absent
+        # from the MCV list) and scan every row of the source: 244s vs 63ms.
+        "WHERE status <> 'deleted' AND id = ANY(%s)",
         (ids,),
     )
     return dict(cur.fetchall())
@@ -217,7 +221,7 @@ def apply_tombstones(conn: psycopg.Connection, settings: Settings, doc_ids: list
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE documents SET status = 'deleted', embedded_model = NULL, "
-            "indexed_at = NULL WHERE source = 'docs' AND id = ANY(%s)",
+            "indexed_at = NULL WHERE id = ANY(%s)",  # see note above: no source predicate
             (doc_ids,),
         )
         marked = cur.rowcount or 0

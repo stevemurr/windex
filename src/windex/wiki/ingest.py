@@ -67,7 +67,11 @@ def _existing_hashes(cur: psycopg.Cursor, ids: list[str]) -> dict[str, str]:
     if not ids:
         return {}
     cur.execute(
-        "SELECT id, text_hash FROM documents WHERE source = 'wiki' AND id = ANY(%s)",
+        # No `source =` predicate: ids are namespaced (hn:, wiki:, …) so an id
+        # list can't match another source. Including it makes the planner pick
+        # documents_source_published_idx (est. rows=1 — rare sources are absent
+        # from the MCV list) and scan every row of the source: 244s vs 63ms.
+        "SELECT id, text_hash FROM documents WHERE id = ANY(%s)",
         (ids,),
     )
     return dict(cur.fetchall())

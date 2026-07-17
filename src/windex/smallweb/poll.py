@@ -293,7 +293,11 @@ def _parse_ts(value: str | None) -> datetime | None:
 def _existing_ids(cur: psycopg.Cursor, ids: list[str]) -> set[str]:
     if not ids:
         return set()
-    cur.execute("SELECT id FROM documents WHERE source = 'smallweb' AND id = ANY(%s)", (ids,))
+        # No `source =` predicate: ids are namespaced (hn:, wiki:, …) so an id
+        # list can't match another source. Including it makes the planner pick
+        # documents_source_published_idx (est. rows=1 — rare sources are absent
+        # from the MCV list) and scan every row of the source: 244s vs 63ms.
+    cur.execute("SELECT id FROM documents WHERE id = ANY(%s)", (ids,))
     return {r[0] for r in cur.fetchall()}
 
 

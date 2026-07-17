@@ -206,7 +206,7 @@ def _search_metrics_summary(settings: Settings) -> dict:
 _pg_stats_cache: dict = {}
 _PG_STATS_TTL = 10.0
 _pg_heavy_cache: dict = {}
-_PG_HEAVY_TTL = 60.0
+_PG_HEAVY_TTL = 600.0
 
 
 def _pg_heavy(settings: Settings, ttl: float = _PG_HEAVY_TTL) -> dict:
@@ -221,9 +221,13 @@ def _pg_heavy(settings: Settings, ttl: float = _PG_HEAVY_TTL) -> dict:
         docs: dict = {}
         for source, status, n in cur.fetchall():
             docs.setdefault(source, {})[status] = n
+        # count(*) over GROUP BY, not count(DISTINCT ...): the latter sorts every
+        # news row against work_mem and spills ~10MB/s of temp files to the
+        # external drive. HashAggregate does the same job without the sort.
         cur.execute(
-            """SELECT count(DISTINCT split_part(split_part(canonical_url, '://', 2), '/', 1))
-               FROM documents WHERE source = 'news'"""
+            """SELECT count(*) FROM (
+                   SELECT split_part(split_part(canonical_url, '://', 2), '/', 1)
+                   FROM documents WHERE source = 'news' GROUP BY 1) t"""
         )
         outlets = cur.fetchone()[0]
         cur.execute(
@@ -385,9 +389,20 @@ def get_worker_activity(settings: Settings) -> dict:
             "tasks_done": done, "tasks_total": total, "workers": workers[:32]}
 
 
+_timeseries_cache: dict = {}
+_TIMESERIES_TTL = 30.0
+
+
 def get_timeseries(settings: Settings, minutes: int = 60) -> list[dict]:
     """Per-minute indexing and download volumes for the trailing window,
-    zero-filled — feeds the dashboard charts."""
+    zero-filled — feeds the dashboard charts. Cached: the created_at half is a
+    full scan (the backlog index is partial), and the SSE loop calls this once
+    per connected viewer."""
+    key = (settings.pg_dsn, minutes)
+    now = time.monotonic()
+    hit = _timeseries_cache.get(key)
+    if hit and now - hit[0] < _TIMESERIES_TTL:
+        return hit[1]
     with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -416,11 +431,13 @@ def get_timeseries(settings: Settings, minutes: int = 60) -> list[dict]:
             """,
             (minutes, minutes, minutes, minutes),
         )
-        return [
+        rows = [
             {"t": m.isoformat(), "ingested": ingested, "docs": embeds,
              "mb": round(nbytes / 1e6, 1)}
             for m, ingested, embeds, nbytes in cur.fetchall()
         ]
+    _timeseries_cache[key] = (now, rows)
+    return rows
 
 
 def get_control(settings: Settings) -> str:

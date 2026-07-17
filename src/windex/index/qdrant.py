@@ -76,8 +76,13 @@ def ensure_collection(client: QdrantClient, source: str, model_id: str, dim: int
                 scalar=qm.ScalarQuantizationConfig(type=qm.ScalarType.INT8, always_ram=False)
             ),
         )
+    # Only create what's missing: this runs on every embed_pending() pass across
+    # 7 concurrent embed processes, and each call takes a collection lock that
+    # competes with search (measured 2246 calls, ~45ms avg, 637ms max).
+    existing_fields = set(client.get_collection(name).payload_schema or {})
     for field, schema in PAYLOAD_INDEXES.get(source, {}).items():
-        client.create_payload_index(name, field_name=field, field_schema=schema)
+        if field not in existing_fields:
+            client.create_payload_index(name, field_name=field, field_schema=schema)
     if not _alias_target(client, alias_name(source)):
         flip_alias(client, source, name)
     return name

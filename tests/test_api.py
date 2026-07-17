@@ -13,6 +13,7 @@ def client(settings, monkeypatch):
     monkeypatch.setattr(app_mod, "get_settings", lambda: settings)
     service_mod._pg_stats_cache.clear()  # stats are TTL-cached; tests need fresh reads
     service_mod._pg_heavy_cache.clear()
+    service_mod._timeseries_cache.clear()
     return TestClient(app)
 
 
