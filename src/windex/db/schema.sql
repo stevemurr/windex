@@ -1,8 +1,8 @@
 -- windex schema. Idempotent: applied via `windex init-db` on every deploy.
 
 CREATE TABLE IF NOT EXISTS documents (
-    id             text PRIMARY KEY,          -- stable API id: news:<hash> | gh:owner/repo | wiki:<page_id> | arxiv:<paper_id> | smallweb:<hash> | docs:<slug>/<path>
-    source         text NOT NULL,             -- news | github | wiki | arxiv | smallweb | docs
+    id             text PRIMARY KEY,          -- stable API id: news:<hash> | gh:owner/repo | wiki:<page_id> | arxiv:<paper_id> | smallweb:<hash> | docs:<slug>/<path> | hn:<item_id> | hf:<path>
+    source         text NOT NULL,             -- news | github | wiki | arxiv | smallweb | docs | hn | hf
     url            text NOT NULL,
     canonical_url  text,
     title          text,
@@ -161,6 +161,54 @@ CREATE TABLE IF NOT EXISTS hn_windows (
     PRIMARY KEY (from_ts, until_ts)
 );
 CREATE INDEX IF NOT EXISTS hn_windows_status_idx ON hn_windows (status);
+
+-- Freshness watermark for Hugging Face docs/courses (huggingface.co): one row
+-- per doc root from sitemap-doc.xml (52 — the shard is COMPLETE, unlike the
+-- models/datasets/spaces/papers shards, which are recency windows and must never
+-- be used as a frontier; see docs/huggingface-source.md).
+--
+-- The per-root llms.txt (a titled index of every page as a .md link) is THE
+-- freshness signal: a root is pending when its llms_hash differs from the
+-- ingested_hash the crawl last completed. That gate is load-bearing rather than
+-- an optimization — HF's `pages` rate-limit bucket is 1 req/3s, so a naive
+-- re-sweep would cost 3.3 HOURS every night, and a conditional GET wouldn't help
+-- (a 304 still spends a request). Hashing 52 llms.txt files costs ~3 minutes.
+--
+-- Pending-ness deliberately does NOT consult `status` (see hf/sync.py:
+-- pending_roots): status is progress reporting, so a job killed mid-root leaves
+-- a row in 'processing' that is still pending and simply re-crawls. There is no
+-- stale claim to reclaim.
+CREATE TABLE IF NOT EXISTS hf_roots (
+    root          text PRIMARY KEY,            -- docs/transformers | learn/agents-course
+    kind          text NOT NULL,               -- docs | learn
+    url           text NOT NULL,               -- sitemap loc
+    lastmod       text,                        -- sitemap lastmod (progress only)
+    llms_hash     text,                        -- sha1 of llms.txt (NULL = no llms.txt)
+    ingested_hash text,                        -- llms_hash last fully crawled (NULL = never)
+    pages         integer,                     -- .md links llms.txt lists
+    version       text,                        -- observed vX.Y.Z (recorded, NOT in doc ids)
+    license       text,                        -- per-root upstream license ("" = unchecked)
+    status        text NOT NULL DEFAULT 'pending',  -- pending | processing | done | partial | failed | no_llms
+    doc_counts    jsonb,                       -- per-root pages/staged/skipped/failed stats
+    processed_at  timestamptz
+);
+CREATE INDEX IF NOT EXISTS hf_roots_status_idx ON hf_roots (status);
+
+-- Freshness watermark for the Hugging Face blog: one row per post from
+-- sitemap-blog.xml (829, spanning 2020-02-14 → today — the complete archive).
+-- The sitemap's lastmod is the watermark; a post whose lastmod advances past
+-- ingested_lastmod is pending again (an edited post re-extracts, and the
+-- documents.text_hash ledger decides whether that costs a re-embed). Slugs are
+-- not always flat: org-authored posts are namespaced (nvidia/some-post).
+CREATE TABLE IF NOT EXISTS hf_posts (
+    slug             text PRIMARY KEY,         -- blog slug, may contain '/' (nvidia/foo)
+    url              text NOT NULL,
+    lastmod          text NOT NULL DEFAULT '', -- sitemap lastmod (upstream watermark)
+    ingested_lastmod text,                     -- lastmod last fully crawled (NULL = never)
+    status           text NOT NULL DEFAULT 'pending',  -- pending | done | failed
+    processed_at     timestamptz
+);
+CREATE INDEX IF NOT EXISTS hf_posts_status_idx ON hf_posts (status);
 
 -- Rolling-window LSH index for near-dup detection across daily batches.
 CREATE TABLE IF NOT EXISTS minhash_bands (

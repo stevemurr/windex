@@ -152,7 +152,7 @@ def test_embed_jobs_use_the_supervised_loop():
     from windex.cli import EMBED_SOURCES
 
     embed_jobs = [j for j in JOBS.values() if j.name.endswith("-embed") or j.name == "embed-loop"]
-    assert len(embed_jobs) == 7
+    assert len(embed_jobs) == 8  # one per embeddable source
     for j in embed_jobs:
         assert j.argv[0] == "embed-loop", f"{j.name} is not supervised: {j.argv}"
         assert j.argv[1] in EMBED_SOURCES, f"{j.name} targets unknown source {j.argv[1]}"

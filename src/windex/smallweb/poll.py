@@ -123,12 +123,13 @@ class RobotsCache:
     concurrently; a rare duplicate fetch for one host is harmless)."""
 
     def __init__(self, client: httpx.Client, ttl: float, agent: str = ROBOT_AGENT,
-                 clock=time.monotonic, logger=None):
+                 clock=time.monotonic, logger=None, user_agent: str = USER_AGENT):
         self.client = client
         self.ttl = ttl
         self.agent = agent
         self._clock = clock
         self._log = logger or console.print
+        self.user_agent = user_agent
         self._cache: dict[str, tuple[RobotFileParser | None, float]] = {}
         self._lock = threading.Lock()
 
@@ -136,7 +137,7 @@ class RobotsCache:
         robots_url = urlunsplit((scheme or "https", netloc, "/robots.txt", "", ""))
         rp = RobotFileParser()
         try:
-            resp = self.client.get(robots_url, headers={"User-Agent": USER_AGENT})
+            resp = self.client.get(robots_url, headers={"User-Agent": self.user_agent})
         except Exception as exc:
             self._log(f"[yellow]smallweb: robots fetch failed for {netloc} "
                       f"({exc}); allowing[/yellow]")
@@ -194,24 +195,62 @@ class HostRateLimiter:
 
 
 class PageFetcher:
-    """Fetch a post page politely: robots → per-host interval → bounded GET
-    (HTML content-type only, ~max_bytes cap). Returns decoded HTML or None."""
+    """Fetch a page politely: robots → per-host interval → bounded GET
+    (content-type allowlist, ~max_bytes cap). Returns the decoded body or None.
 
-    def __init__(self, client: httpx.Client, settings: Settings):
+    The keyword overrides exist for windex's OTHER fetch-based source (hf/),
+    which points at a single host and therefore needs different politeness
+    *configuration* while reusing this exact machinery — see hf/fetch.py. The
+    defaults are smallweb's and are unchanged:
+
+      * ``allowed_types`` — HTML-only by default. HF serves its doc pages as
+        ``text/markdown`` and llms.txt as ``text/plain``; the old hardcoded
+        `"html" not in content-type` test dropped those silently, which would
+        have discarded 3,175 of that source's 4,014 pages without an error.
+      * ``limiter`` — smallweb's plain interval limiter suits ~37.6k hosts; a
+        one-host crawl wants one that reads the host's published rate-limit
+        headers (hf.fetch.PagesRateLimiter).
+      * ``on_response`` — a hook called once the response headers are in, so
+        such a limiter can observe the budget it just spent.
+      * ``user_agent`` — the UA this fetcher identifies as, for both the page
+        and its robots.txt. Every windex source declares its own honest,
+        descriptive UA constant; hardcoding smallweb's here would quietly make
+        another source's constant dead code that still looks live.
+    """
+
+    def __init__(self, client: httpx.Client, settings: Settings, *,
+                 robots_ttl: float | None = None, host_interval: float | None = None,
+                 max_bytes: int | None = None,
+                 allowed_types: tuple[str, ...] = ("html",),
+                 limiter: "HostRateLimiter | None" = None,
+                 on_response=None, user_agent: str = USER_AGENT):
         self.client = client
-        self.robots = RobotsCache(client, settings.smallweb_robots_ttl)
-        self.limiter = HostRateLimiter(settings.smallweb_host_interval)
-        self.max_bytes = settings.smallweb_max_page_bytes
+        self.user_agent = user_agent
+        self.robots = RobotsCache(
+            client, settings.smallweb_robots_ttl if robots_ttl is None else robots_ttl,
+            user_agent=user_agent,
+        )
+        self.limiter = limiter or HostRateLimiter(
+            settings.smallweb_host_interval if host_interval is None else host_interval
+        )
+        self.max_bytes = settings.smallweb_max_page_bytes if max_bytes is None else max_bytes
+        self.allowed_types = allowed_types
+        self.on_response = on_response
 
     def fetch(self, url: str) -> str | None:
         if not self.robots.allowed(url):
             return None
         self.limiter.wait(urlsplit(url).netloc.lower())
         try:
-            with self.client.stream("GET", url, headers={"User-Agent": USER_AGENT}) as resp:
+            with self.client.stream("GET", url, headers={"User-Agent": self.user_agent}) as resp:
+                if self.on_response is not None:
+                    # Before the status check: a 429/5xx carries the rate-limit
+                    # headers too, and that is exactly when they matter most.
+                    self.on_response(resp)
                 if resp.status_code != 200:
                     return None
-                if "html" not in resp.headers.get("content-type", "").lower():
+                ctype = resp.headers.get("content-type", "").lower()
+                if not any(t in ctype for t in self.allowed_types):
                     return None
                 clen = resp.headers.get("content-length")
                 if clen and clen.isdigit() and int(clen) > self.max_bytes:

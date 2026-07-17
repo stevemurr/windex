@@ -371,6 +371,7 @@
       <label><input type="radio" name="source" value="smallweb">Small Web</label>
       <label><input type="radio" name="source" value="docs">Docs</label>
       <label><input type="radio" name="source" value="hn">HN</label>
+      <label><input type="radio" name="source" value="hf">HF</label>
     </div>
     <span class="mode">
       <select id="mode" class="pillselect" aria-label="Retrieval mode">
@@ -592,6 +593,7 @@ const COMP_SOURCES = [
   { src: "smallweb", alias: "smallweb_current", label: "small web" },
   { src: "docs", alias: "docs_current", label: "docs" },
   { src: "hn", alias: "hn_current", label: "hn" },
+  { src: "hf", alias: "hf_current", label: "hugging face" },
 ];
 const compCss = s => s.alias.replace(/_current$/, "");
 // shared share-formatter: the donut and the embed-queue bars quote shares the

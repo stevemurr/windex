@@ -73,6 +73,20 @@ small-web blogs it politely polls.
   filter, tomorrow's ranking boost). A trailing re-pull refreshes points *in
   place* — unchanged text is never re-embedded. See
   [`docs/hn-source.md`](docs/hn-source.md).
+- **Hugging Face** — the canonical docs for the ML stack (transformers, diffusers,
+  peft, trl, timm, smolagents, …) plus 14 courses and the HF blog: ~4,000 pages,
+  and *only* those. HF publishes a per-root [`llms.txt`](https://huggingface.co/docs/transformers/llms.txt)
+  and serves every doc page as clean **markdown**, so there is no scraping to do —
+  and `llms.txt` is the *only* enumeration, since the docs nav is client-rendered.
+  Its hash is the freshness watermark: a refresh re-hashes 52 files (~3 min) and
+  re-pulls only what changed. Deliberately **excluded** on measured evidence: the
+  other ~3.9M pages — Spaces extract to 220 chars (client-rendered mount points),
+  dataset pages extract the viewer *table* rather than prose, `/papers/<id>` **is**
+  the arXiv id (already indexed here), and model pages can't be enumerated (the
+  models sitemap is a rolling 0.2%). windex's second fetch-based source and the
+  first pointed at a *single host*, so it self-throttles off HF's own published
+  `ratelimit` header (the `pages` bucket: 1 req/3s) instead of reusing Small Web's
+  many-hosts config. See [`docs/huggingface-source.md`](docs/huggingface-source.md).
 - **Hybrid search** — dense vectors from *your* embedding model (any OpenAI/TEI-compatible
   endpoint, or in-process sentence-transformers) fused with BM25 sparse vectors via RRF in
   [Qdrant](https://qdrant.tech). Semantic queries and exact-name lookups both work.
@@ -244,6 +258,29 @@ uv run windex hn embed                 # embed staged stories into the hn collec
 > the same `hn_windows` watermark, so the parquet mirror and the API are
 > interchangeable per window. See [`docs/hn-source.md`](docs/hn-source.md).
 
+### Ingest Hugging Face
+
+```sh
+uv run windex hf sync     # sitemap → 52 doc roots + 829 blog posts, then re-hash every llms.txt
+uv run windex hf crawl    # pull .md for CHANGED roots + new blog posts (~3.3h cold, minutes warm)
+uv run windex hf embed    # embed staged pages into the hf collection
+```
+
+> **The hash gate is load-bearing, not an optimization.** HF's `pages` rate-limit
+> bucket is 1 req/3s (published on every response as
+> `ratelimit-policy: "fixed window";"pages";q=100;w=300`), so a naive re-sweep of
+> 4,014 pages would cost 3.3 hours *every night* — and a conditional GET wouldn't
+> help, because a 304 still spends a request. Instead `hf sync` re-hashes the 52
+> `llms.txt` files (~55 requests, ~3 min) and `hf crawl` touches only the roots
+> whose hash moved; a quiet day is ~60 requests. The crawler self-throttles off
+> the live `ratelimit: "pages";r=98;t=83` counter rather than open-loop sleeping,
+> so it stretches automatically when something else has spent the shared per-IP
+> budget. Doc pages need no extraction at all (HF serves `text/markdown`); only
+> the blog goes through trafilatura. Ids omit the version
+> (`hf:docs/transformers/quicktour`) so a version bump upserts rather than forks,
+> and link to the unversioned canonical URL the page itself declares. See
+> [`docs/huggingface-source.md`](docs/huggingface-source.md).
+
 ### Keep it fresh
 
 Every job is idempotent — a rerun is a no-op, a crashed run resumes from its watermark.
@@ -256,6 +293,7 @@ Every job is idempotent — a rerun is a no-op, a crashed run resumes from its w
 30 4 * * *  windex hn harvest --days 2 && windex hn embed     # trailing window also refreshes points
 0  5 * * 0  windex wiki sync && windex wiki ingest && windex wiki embed    # weekly dumps
 30 5 * * *  windex docs sync && windex docs ingest && windex docs embed    # devdocs mtime-gated
+0  6 * * *  windex hf sync && windex hf crawl && windex hf embed           # llms.txt hash-gated (~60 req on a quiet day)
 45 5 * * *  windex maintain                                   # vacuum/analyze churn tables
 15 6 * * 0  windex maintain --reindex                         # weekly: rebuild bloat-flagged indexes
 ```
@@ -269,12 +307,14 @@ curl "http://127.0.0.1:8100/v1/search?q=diffusion+models&source=arxiv&category=c
 curl "http://127.0.0.1:8100/v1/search?q=vim+config&source=smallweb&outlet=example.com"
 curl "http://127.0.0.1:8100/v1/search?q=list+comprehension&source=docs&framework=python"
 curl "http://127.0.0.1:8100/v1/search?q=rust+web+framework&source=hn&min_points=50"
+curl "http://127.0.0.1:8100/v1/search?q=text+generation+pipeline&source=hf&root=transformers"
 curl "http://127.0.0.1:8100/v1/docs/arxiv:2401.00001"     # stored abstract by stable id
 curl "http://127.0.0.1:8100/v1/stats"                     # totals + freshness watermarks
 ```
 
 Responses carry stable ids (`news:<hash>`, `gh:owner/repo`, `wiki:<page_id>`,
-`arxiv:<paper_id>`, `smallweb:<hash>`, `docs:<slug>/<path>`, `hn:<item_id>`), snippets, per-source metadata,
+`arxiv:<paper_id>`, `smallweb:<hash>`, `docs:<slug>/<path>`, `hn:<item_id>`,
+`hf:docs/<root>/<path>` | `hf:blog/<slug>`), snippets, per-source metadata,
 and timing breakdowns (`embed_query_ms` / `search_ms`). Under heavy indexing load, hybrid
 queries degrade gracefully to keyword search after a deadline rather than stalling — the
 response says so explicitly. Full OpenAPI docs at `/docs`.
@@ -303,6 +343,7 @@ Everything is environment-driven (`WINDEX_*`, see `.env.example`). The important
 | `WINDEX_GITHUB_TOKENS` | Comma-separated no-scope PATs for hydration |
 | `WINDEX_NEWS_BACKFILL_DAYS`, `WINDEX_REPO_STAR_THRESHOLD` | Corpus policy |
 | `WINDEX_DOCS_SLUGS` | Which DevDocs docsets to index (comma-separated slugs) |
+| `WINDEX_HF_ROOTS` | Which Hugging Face doc roots to index (empty = all 52) |
 
 Model choice is config, not code: collections are named per model and served behind aliases,
 so a swap is re-embed from parquet + alias flip.
@@ -320,6 +361,7 @@ Each layer derives from the one beneath it. The pipeline *is* the recovery proce
 | Small Web posts | re-run `windex smallweb poll` — the feeds watermark + text-hash ledger keep re-polls to genuinely new posts |
 | Programming docs | re-run `windex docs sync` + `docs ingest` — full-replace per docset; the text-hash ledger keeps it to the changed-page delta |
 | Hacker News stories | re-run `windex hn backfill` (parquet mirror) or `hn harvest` (Algolia) — the month windows are restartable and interchangeable between the two; the text-hash ledger dedupes |
+| Hugging Face pages | re-run `windex hf sync` + `hf crawl` — the llms.txt hash gate re-pulls only changed roots (an unchanged root costs zero requests); a killed crawl leaves its roots pending |
 | Everything | run the ingestion flow from the top |
 
 Battle-tested: an external-drive failure corrupted the vector store mid-backfill; the index

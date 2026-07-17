@@ -109,6 +109,25 @@ class Settings(BaseSettings):
     hn_request_interval: float = 0.4
     hn_incremental_days: int = 2
 
+    # Hugging Face docs/courses/blog (huggingface.co). windex's second FETCH-based
+    # source and the first pointed at a SINGLE host, which is why none of the
+    # smallweb_* knobs are reused: concurrency is inert behind one host's limiter,
+    # and smallweb's 10s stranger-blog interval would cost 11 hours for 4,014
+    # pages. HF publishes its own budget instead — the `pages` bucket governing
+    # /docs/*, /blog/* and .md is q=100;w=300 = 1 req/3s — and the limiter
+    # self-throttles off the live `ratelimit:` header (hf/fetch.py).
+    # hf_roots is the seed list: which doc roots to index, comma-separated.
+    # EMPTY = all 52 roots from sitemap-doc.xml, which is only ~3,175 pages —
+    # unlike DevDocs there is no reason to be selective.
+    hf_sitemap_url: str = "https://huggingface.co/sitemap.xml"
+    hf_base_url: str = "https://huggingface.co"
+    hf_roots: str = ""                      # "" = every root in sitemap-doc.xml
+    hf_request_interval: float = 3.0        # HF's own number (pages bucket: 100/300s)
+    hf_robots_ttl: float = 3600.0           # per-host robots.txt cache TTL
+    hf_max_page_bytes: int = 4_000_000      # a big doc page is ~1.3MB of HTML
+    hf_request_timeout: float = 30.0
+    hf_blog_batch: int = 100                # posts per staged parquet / pause-checked batch
+
     github_tokens: str = ""  # comma-separated PATs for hydration
 
     # Threads draining Qdrant upserts in the embed pass. The embed workers hand
@@ -177,6 +196,10 @@ class Settings(BaseSettings):
     def hn_staging_dir(self) -> Path:
         return self.staging_dir / "hn"
 
+    @property
+    def hf_staging_dir(self) -> Path:
+        return self.staging_dir / "hf"
+
     def all_dirs(self) -> list[Path]:
         return [
             self.ccnews_downloads_dir,
@@ -190,6 +213,7 @@ class Settings(BaseSettings):
             self.docs_staging_dir,
             self.hn_downloads_dir,
             self.hn_staging_dir,
+            self.hf_staging_dir,
         ]
 
     def github_token_list(self) -> list[str]:
@@ -197,6 +221,10 @@ class Settings(BaseSettings):
 
     def docs_slug_list(self) -> list[str]:
         return [s.strip() for s in self.docs_slugs.split(",") if s.strip()]
+
+    def hf_root_list(self) -> list[str]:
+        """Configured HF doc roots; [] means "every root the sitemap lists"."""
+        return [s.strip() for s in self.hf_roots.split(",") if s.strip()]
 
 
 def get_settings() -> Settings:

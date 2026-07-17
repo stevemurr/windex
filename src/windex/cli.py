@@ -563,6 +563,91 @@ def hn_status() -> None:
         console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
 
 
+hf_app = typer.Typer(no_args_is_help=True,
+                     help="Hugging Face ingestion (huggingface.co docs, courses, blog)")
+app.add_typer(hf_app, name="hf")
+
+
+@hf_app.command("sync")
+def hf_sync(
+    refresh: bool = typer.Option(True, help="Re-fetch + hash every root's llms.txt (~52 requests)"),
+) -> None:
+    """Sitemap → doc roots + blog posts, then re-hash each root's llms.txt.
+
+    The cheap half of the cycle: ~55 requests, ~3 minutes at HF's 1 req/3s. The
+    llms.txt hash is what tells `hf crawl` which roots actually changed, so a
+    quiet day costs this and nothing else. Only the doc and blog sitemap shards
+    are read — the models/datasets/spaces/papers shards are recency windows, not
+    catalogs, and using one as a frontier would silently index a random slice of
+    the Hub (docs/huggingface-source.md).
+    """
+    from windex.hf import sync as hfsync
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        stats = hfsync.sync(conn, settings, refresh=refresh)
+        pending = hfsync.pending_roots(conn, settings.hf_root_list())
+        posts = hfsync.pending_posts(conn, 10_000)
+    console.print(stats)
+    console.print(f"[green]{len(pending)} roots + {len(posts)} blog posts pending crawl[/green]")
+
+
+@hf_app.command("crawl")
+def hf_crawl(
+    max_roots: int = typer.Option(None, help="Stop after N doc roots (default: all pending)"),
+    max_posts: int = typer.Option(None, help="Stop after N blog posts (default: all pending)"),
+) -> None:
+    """Pull .md pages for changed doc roots + new blog posts → clean parquet.
+
+    ~3.3h cold (4,014 pages at HF's published 1 req/3s), minutes warm — an
+    unchanged root costs ONE request thanks to the llms.txt hash gate.
+    Idempotent and resumable: a killed run leaves its unfinished roots pending.
+    """
+    from windex.hf import crawl as hfcrawl
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        stats = hfcrawl.crawl(conn, settings, max_roots=max_roots, max_posts=max_posts)
+    console.print(stats)
+
+
+@hf_app.command("embed")
+def hf_embed(limit: int = 100_000) -> None:
+    """Embed staged Hugging Face pages into Qdrant. Respects the dashboard pause flag."""
+    from windex.hf.embed_index import embed_pending
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        if db.get_control(conn, "indexing", "running") == "paused":
+            console.print("[yellow]paused — skipping embed[/yellow]")
+            raise typer.Exit(0)
+        n = embed_pending(conn, settings, limit=limit)
+    console.print(f"[green]embedded {n} pages[/green]")
+
+
+@hf_app.command("status")
+def hf_status() -> None:
+    """Root/blog watermarks + document pipeline counts."""
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT status, count(*) FROM hf_roots GROUP BY status ORDER BY status")
+        console.print({r[0]: r[1] for r in cur.fetchall()}, "hf_roots")
+        cur.execute(
+            """SELECT count(*) FROM hf_roots WHERE llms_hash IS NOT NULL
+               AND (ingested_hash IS NULL OR llms_hash IS DISTINCT FROM ingested_hash)"""
+        )
+        console.print(f"roots pending crawl: {cur.fetchone()[0]}")
+        cur.execute(
+            """SELECT count(*) FROM hf_posts
+               WHERE ingested_lastmod IS NULL OR lastmod > ingested_lastmod"""
+        )
+        console.print(f"blog posts pending crawl: {cur.fetchone()[0]}")
+        cur.execute(
+            "SELECT status, count(*) FROM documents WHERE source='hf' GROUP BY status ORDER BY status"
+        )
+        console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
+
+
 EMBED_SOURCES = {
     "ccnews": "windex.ccnews.embed_index",
     "wiki": "windex.wiki.embed_index",
@@ -571,6 +656,7 @@ EMBED_SOURCES = {
     "docs": "windex.docs_source.embed_index",
     "smallweb": "windex.smallweb.embed_index",
     "gh": "windex.github.embed_index",
+    "hf": "windex.hf.embed_index",
 }
 
 
@@ -673,7 +759,7 @@ def maintain(
 
 @app.command()
 def reindex(
-    source: str = typer.Argument("all", help="news | repos | wiki | arxiv | smallweb | docs | hn | all"),
+    source: str = typer.Argument("all", help="news | repos | wiki | arxiv | smallweb | docs | hn | hf | all"),
     drop_collections: bool = typer.Option(True, help="Recreate Qdrant collections from scratch"),
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation"),
 ) -> None:
@@ -763,11 +849,22 @@ def reindex(
                    WHERE source='hn' AND status='embedded'"""
             )
             console.print(f"[green]hn: {cur.rowcount} docs queued for re-embed[/green]")
+        if source in ("hf", "all"):
+            if drop_collections:
+                name = qidx.collection_name("hf", settings.embed_model)
+                if client.collection_exists(name):
+                    client.delete_collection(name)
+                qidx.ensure_collection(client, "hf", settings.embed_model, settings.embed_dim)
+            cur.execute(
+                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
+                   WHERE source='hf' AND status='embedded'"""
+            )
+            console.print(f"[green]hf: {cur.rowcount} docs queued for re-embed[/green]")
         conn.commit()
     console.print(
         "run `windex ccnews embed-loop`, `windex gh embed`, `windex wiki embed`, "
         "`windex arxiv embed`, `windex smallweb embed`, `windex docs embed`, "
-        "`windex hn embed` to repopulate"
+        "`windex hn embed`, `windex hf embed` to repopulate"
     )
 
 

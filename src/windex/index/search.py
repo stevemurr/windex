@@ -113,6 +113,27 @@ def _hn_filter(min_points: int | None, published_after: datetime | None,
     return conds
 
 
+def _hf_filter(root: str | None, kind: str | None, published_after: datetime | None,
+               published_before: datetime | None):
+    # HF payloads index root (transformers, agents-course, blog) and kind
+    # (docs|learn|blog) as keywords, so root filtering mirrors how github filters
+    # language. published_at is blog-only — a date window therefore narrows to
+    # blog posts by construction, which is what asking for one means here.
+    conds = []
+    if root:
+        conds.append(qm.FieldCondition(key="root", match=qm.MatchValue(value=root)))
+    if kind:
+        conds.append(qm.FieldCondition(key="kind", match=qm.MatchValue(value=kind)))
+    if published_after or published_before:
+        conds.append(
+            qm.FieldCondition(
+                key="published_at",
+                range=qm.DatetimeRange(gte=published_after, lte=published_before),
+            )
+        )
+    return conds
+
+
 def _arxiv_filter(category: str | None, published_after: datetime | None,
                   published_before: datetime | None):
     # arXiv indexes primary_category (keyword) and published_at (submission date),
@@ -191,6 +212,8 @@ def search(
     outlet: str | None = None,
     framework: str | None = None,
     min_points: int | None = None,
+    root: str | None = None,
+    kind: str | None = None,
 ) -> list[dict]:
     client = _qdrant(settings)
     existing = {c.name for c in client.get_collections().collections}
@@ -251,8 +274,11 @@ def search(
     if source in ("hn", "all"):
         targets.append(("hn", qidx.alias_name("hn"),
                         _hn_filter(min_points, published_after, published_before)))
+    if source in ("hf", "all"):
+        targets.append(("hf", qidx.alias_name("hf"),
+                        _hf_filter(root, kind, published_after, published_before)))
     # Encode the query once, not once per target collection (source=all fans out
-    # to 7 collections and re-encoded the same string for each).
+    # to 8 collections and re-encoded the same string for each).
     query_sparse = _sparse_vector(q) if mode in ("hybrid", "lexical") else None
     t_search = time.monotonic()
     for _, alias, conds in targets:
