@@ -4,13 +4,27 @@ from windex.embed.base import Embedder
 # Dashboard-selectable throughput profiles (control-table key: embed_profile).
 # "polite" keeps the GPU responsive for live queries; "full" drains backlogs.
 # embed_global_budget is the fleet-wide in-flight cap (embed/budget.py); the
-# other keys are per-process. Before it existed, "polite" could not keep the GPU
-# responsive for live queries as advertised — 6 jobs x 2 still queued 12 deep.
+# other keys are per-process. Before it existed, "polite" could not bound the
+# fleet as advertised — 6 jobs x 2 still queued 12 deep at one endpoint.
+#
+# These numbers are PROVISIONAL, and deliberately not derived from the queueing
+# argument that motivated the budget. Measured 2026-07-17 against the live
+# endpoint: with indexing PAUSED and the queue fully drained, a single two-word
+# embed still took 28s. So its latency is per-request, not queue depth, and no
+# budget can bring a query embed under the 8s deadline while that holds — the
+# breaker (index/embed_breaker.py) is what makes that survivable, not this.
+# Throughput, meanwhile, still rises with concurrency (48 in-flight -> 9.6
+# docs/s; 8 in-flight -> 3.8), so a tight cap costs backlog speed and buys
+# nothing today. `full` is therefore set to bound the fleet only enough to stay
+# off the cliff where requests time out and jobs die, not to protect a query
+# latency that is unreachable anyway. Re-tune once the endpoint serves a single
+# embed in ~ms (and once the second endpoint lands — slots are keyed per
+# endpoint, so each gets its own budget).
 PROFILES = {
     "polite": {"embed_concurrency": 2, "embed_batch_size": 16,
-               "embed_throttle_seconds": 1.0, "embed_global_budget": 2},
+               "embed_throttle_seconds": 1.0, "embed_global_budget": 4},
     "full": {"embed_concurrency": 8, "embed_batch_size": 32,
-             "embed_throttle_seconds": 0.0, "embed_global_budget": 8},
+             "embed_throttle_seconds": 0.0, "embed_global_budget": 32},
 }
 
 
