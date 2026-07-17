@@ -143,3 +143,16 @@ def test_mcp_tools_wrap_service(settings, monkeypatch):
     doc_fn = getattr(mcp_mod.get_document, "fn", mcp_mod.get_document)
     assert search_fn("query text")["query"] == "query text"
     assert "error" in doc_fn("news:missing")
+
+
+def test_cli_maintain(settings, pg, monkeypatch):
+    _use_test_settings(monkeypatch, settings)
+    r = runner.invoke(app, ["maintain"])
+    assert r.exit_code == 0
+    assert "vacuum analyze minhash_bands" in r.output
+    assert "vacuum analyze documents" in r.output
+    assert "skipping reindex" in r.output
+    # --reindex path: tables are tiny in tests, so the >50MB size gate means
+    # no index qualifies — the pass must still complete cleanly.
+    r = runner.invoke(app, ["maintain", "--reindex"])
+    assert r.exit_code == 0 and "vacuum analyze search_metrics" in r.output

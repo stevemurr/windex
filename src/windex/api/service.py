@@ -200,14 +200,18 @@ def _search_metrics_summary(settings: Settings) -> dict:
 
 
 # PG aggregates are cached briefly: the dashboard polls every 4s, and some of
-# these queries turn into full scans at backfill scale.
+# these queries turn into full scans at backfill scale. Two tiers (see
+# docs/store-tuning.md): full-heap aggregates refresh at 60s; cheap live
+# signals at 10s.
 _pg_stats_cache: dict = {}
 _PG_STATS_TTL = 10.0
+_pg_heavy_cache: dict = {}
+_PG_HEAVY_TTL = 60.0
 
 
-def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
+def _pg_heavy(settings: Settings, ttl: float = _PG_HEAVY_TTL) -> dict:
     now = time.monotonic()
-    hit = _pg_stats_cache.get(settings.pg_dsn)
+    hit = _pg_heavy_cache.get(settings.pg_dsn)
     if hit and now - hit[0] < ttl:
         return hit[1]
     with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
@@ -217,16 +221,6 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
         docs: dict = {}
         for source, status, n in cur.fetchall():
             docs.setdefault(source, {})[status] = n
-        cur.execute("SELECT status, count(*) FROM warc_files GROUP BY status")
-        warcs = dict(cur.fetchall())
-        cur.execute("SELECT max(path) FROM warc_files WHERE status = 'done'")
-        latest_warc = cur.fetchone()[0]
-        cur.execute("SELECT status, count(*) FROM gharchive_files GROUP BY status")
-        hours = dict(cur.fetchall())
-        cur.execute("SELECT max(name) FROM gharchive_files WHERE status = 'done'")
-        latest_hour = cur.fetchone()[0]
-        cur.execute("SELECT status, count(*) FROM repos GROUP BY status")
-        repos = dict(cur.fetchall())
         cur.execute(
             """SELECT count(DISTINCT split_part(split_part(canonical_url, '://', 2), '/', 1))
                FROM documents WHERE source = 'news'"""
@@ -237,6 +231,29 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
                FROM documents WHERE source = 'news' AND status = 'embedded'"""
         )
         cov_min, cov_max = cur.fetchone()
+    result = {"docs": docs, "outlets": outlets, "cov": (cov_min, cov_max)}
+    _pg_heavy_cache[settings.pg_dsn] = (now, result)
+    return result
+
+
+def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
+    now = time.monotonic()
+    hit = _pg_stats_cache.get(settings.pg_dsn)
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    heavy = _pg_heavy(settings)
+    docs = heavy["docs"]
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT status, count(*) FROM warc_files GROUP BY status")
+        warcs = dict(cur.fetchall())
+        cur.execute("SELECT max(path) FROM warc_files WHERE status = 'done'")
+        latest_warc = cur.fetchone()[0]
+        cur.execute("SELECT status, count(*) FROM gharchive_files GROUP BY status")
+        hours = dict(cur.fetchall())
+        cur.execute("SELECT max(name) FROM gharchive_files WHERE status = 'done'")
+        latest_hour = cur.fetchone()[0]
+        cur.execute("SELECT status, count(*) FROM repos GROUP BY status")
+        repos = dict(cur.fetchall())
         # "actively indexing" signal: anything landed in the last 2 minutes
         cur.execute(
             "SELECT count(*) FROM documents WHERE indexed_at > now() - interval '2 minutes'"
@@ -260,6 +277,8 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
                   WHERE processed_at > now() - interval '30 minutes')"""
         )
         bytes_30m = cur.fetchone()[0]
+    outlets = heavy["outlets"]
+    cov_min, cov_max = heavy["cov"]
     news = docs.get("news", {})
     gh = docs.get("github", {})
     wiki = docs.get("wiki", {})

@@ -45,6 +45,18 @@ CREATE TABLE IF NOT EXISTS repos (
 CREATE INDEX IF NOT EXISTS repos_status_idx ON repos (status);
 CREATE INDEX IF NOT EXISTS repos_stars_idx ON repos (stars);
 
+-- Shard ledger for the GitHub Search discovery sweep: one row per completed
+-- leaf shard, so a crashed sweep resumes without re-paginating finished
+-- windows (the in-memory split deque is not a checkpoint — 2026-07-16 crash).
+CREATE TABLE IF NOT EXISTS gh_shards (
+    from_date      date NOT NULL,
+    to_date        date NOT NULL,
+    star_threshold integer NOT NULL,             -- done at T=10 is not done at T=5
+    repos          integer DEFAULT 0,
+    processed_at   timestamptz DEFAULT now(),
+    PRIMARY KEY (from_date, to_date, star_threshold)
+);
+
 -- Freshness watermark for GH Archive: one row per hourly file.
 CREATE TABLE IF NOT EXISTS gharchive_files (
     name         text PRIMARY KEY,            -- 2026-07-14-23.json.gz
@@ -183,6 +195,9 @@ ALTER TABLE documents SET (autovacuum_vacuum_scale_factor = 0.05,
 
 -- Bandwidth accounting (dashboard rate metrics)
 ALTER TABLE warc_files ADD COLUMN IF NOT EXISTS bytes bigint;
+-- First-seen-by-discovery timestamp (never updated on conflict); NULL for rows
+-- that predate the column or arrived via the archive scan / tail.
+ALTER TABLE repos ADD COLUMN IF NOT EXISTS discovered_at timestamptz;
 ALTER TABLE gharchive_files ADD COLUMN IF NOT EXISTS bytes bigint;
 
 -- Control plane (dashboard start/pause; workers poll between batches)

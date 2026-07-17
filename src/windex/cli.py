@@ -168,6 +168,7 @@ def gh_sync_hours(
 def gh_discover(
     created_from: str = typer.Option("2025-10-01", help="Sweep repos created since (YYYY-MM-DD)"),
     created_to: str = typer.Option(None, help="Sweep upper bound (default today)"),
+    fresh: bool = typer.Option(False, help="Clear the shard ledger for this range and re-sweep"),
 ) -> None:
     """Search-API sweep for repos ≥ star threshold (post-2025-10 star discovery)."""
     from datetime import date
@@ -182,6 +183,7 @@ def gh_discover(
             star_threshold=settings.repo_star_threshold,
             created_from=date.fromisoformat(created_from),
             created_to=date.fromisoformat(created_to) if created_to else None,
+            fresh=fresh,
         )
     console.print(stats)
 
@@ -555,6 +557,50 @@ def hn_status() -> None:
             "SELECT status, count(*) FROM documents WHERE source='hn' GROUP BY status ORDER BY status"
         )
         console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
+
+
+@app.command()
+def maintain(
+    reindex: bool = typer.Option(False, help="Also REINDEX CONCURRENTLY bloat-flagged indexes (weekly, off-peak)"),
+    density_threshold: float = typer.Option(70.0, help="REINDEX when avg leaf density falls below this %"),
+) -> None:
+    """Store maintenance (docs/store-tuning.md): VACUUM/ANALYZE the churn tables
+    so rolling deletes and status-flip UPDATEs don't bloat unbounded; with
+    --reindex, rebuild btree indexes whose measured leaf density dropped below
+    the threshold — gated on measurement, never blind, one index at a time."""
+    settings = get_settings()
+    conn = db.connect(settings.pg_dsn)
+    conn.autocommit = True  # VACUUM/REINDEX CONCURRENTLY refuse transaction blocks
+    churn_tables = ("minhash_bands", "documents", "feeds", "search_metrics")
+    for table in churn_tables:
+        conn.execute(f"VACUUM (ANALYZE) {table}")
+        console.print(f"[green]vacuum analyze {table}[/green]")
+    if not reindex:
+        console.print("skipping reindex (pass --reindex for the weekly pass)")
+        return
+    conn.execute("CREATE EXTENSION IF NOT EXISTS pgstattuple")
+    rows = conn.execute(
+        """SELECT i.indexrelid::regclass::text
+           FROM pg_index i JOIN pg_class c ON i.indrelid = c.oid
+           JOIN pg_am am ON (SELECT relam FROM pg_class WHERE oid = i.indexrelid) = am.oid
+           WHERE c.relname = ANY(%s) AND am.amname = 'btree'
+             AND pg_relation_size(i.indexrelid) > 50 * 1024 * 1024""",
+        (list(churn_tables),),
+    ).fetchall()
+    for (idx,) in rows:
+        try:
+            density = conn.execute(
+                "SELECT avg_leaf_density FROM pgstatindex(%s)", (idx,)
+            ).fetchone()[0]
+        except Exception as exc:
+            console.print(f"[yellow]{idx}: pgstatindex failed ({exc}); skipped[/yellow]")
+            continue
+        if density is not None and density < density_threshold:
+            console.print(f"[yellow]{idx}: leaf density {density:.0f}% < {density_threshold:.0f}% — reindexing[/yellow]")
+            conn.execute(f"REINDEX INDEX CONCURRENTLY {idx}")
+            console.print(f"[green]{idx}: rebuilt[/green]")
+        else:
+            console.print(f"{idx}: leaf density {density:.0f}% — healthy")
 
 
 @app.command()

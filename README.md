@@ -256,6 +256,8 @@ Every job is idempotent — a rerun is a no-op, a crashed run resumes from its w
 30 4 * * *  windex hn harvest --days 2 && windex hn embed     # trailing window also refreshes points
 0  5 * * 0  windex wiki sync && windex wiki ingest && windex wiki embed    # weekly dumps
 30 5 * * *  windex docs sync && windex docs ingest && windex docs embed    # devdocs mtime-gated
+45 5 * * *  windex maintain                                   # vacuum/analyze churn tables
+15 6 * * 0  windex maintain --reindex                         # weekly: rebuild bloat-flagged indexes
 ```
 
 ## Search API

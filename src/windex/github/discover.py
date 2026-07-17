@@ -6,6 +6,7 @@ Events API change collapsed WatchEvents in the public feed (measured ~5100/hr
 results carry full repo objects, so candidates arrive pre-filled with stars and
 metadata; READMEs still come from hydration."""
 
+import logging
 import time
 from collections import deque
 from datetime import date, timedelta
@@ -13,13 +14,28 @@ from datetime import date, timedelta
 import httpx
 import psycopg
 
+log = logging.getLogger("windex.github.discover")
+
 SEARCH = "https://api.github.com/search/repositories"
 PAGE = 100
 CAP = 1000  # search API hard result window per query
+RETRY_BUDGET = 30 * 60  # cumulative seconds of retry waiting before giving up
+# A completed leaf shard is skipped on re-run within this window: long enough
+# to resume a crashed sweep, short enough that a later periodic sweep re-checks
+# the window (repos created then can cross the star threshold afterwards).
+RESUME_DAYS = 7
 
 
-def _get(client: httpx.Client, token: str, params: dict, retries: int = 5) -> dict:
-    for attempt in range(retries):
+def _get(client: httpx.Client, token: str, params: dict, budget: float = RETRY_BUDGET) -> dict:
+    """GET with rate-limit-aware retries. Primary exhaustion (remaining=0)
+    self-heals at x-ratelimit-reset (≤60s). A *secondary* abuse limit survives
+    the reset boundary and signals via retry-after — it needs long escalating
+    waits, so retries are bounded by cumulative wait time, not attempt count
+    (a fixed attempt count burned itself out in seconds on 2026-07-16)."""
+    waited = 0.0
+    sec_hits = 0
+    attempt = 0
+    while True:
         resp = client.get(
             SEARCH,
             params=params,
@@ -29,16 +45,43 @@ def _get(client: httpx.Client, token: str, params: dict, retries: int = 5) -> di
             },
         )
         if resp.status_code in (403, 429):
-            reset = int(resp.headers.get("x-ratelimit-reset", 0))
-            wait = max(reset - time.time(), 0) if reset else 2**attempt * 5
-            time.sleep(min(wait + 1, 120))
-            continue
-        if resp.status_code >= 500:
-            time.sleep(2**attempt)
-            continue
-        resp.raise_for_status()
-        return resp.json()
-    raise RuntimeError("search request failed after retries")
+            retry_after = int(resp.headers.get("retry-after", 0) or 0)
+            remaining = resp.headers.get("x-ratelimit-remaining")
+            reset = int(resp.headers.get("x-ratelimit-reset", 0) or 0)
+            if remaining == "0":
+                # primary bucket empty: refills at reset, no escalation needed
+                wait = max(reset - time.time(), 0) + 1
+            else:
+                # secondary/abuse limit: honor retry-after, floor 60s, double
+                # on each consecutive hit — short waits don't clear it
+                wait = min(max(retry_after, 60) * (2**sec_hits), 900)
+                sec_hits += 1
+            log.warning(
+                "github search 403/429 (attempt %d): remaining=%s reset=%s "
+                "retry-after=%s -> waiting %.0fs; body=%r",
+                attempt, remaining, reset, retry_after, wait, resp.text[:200],
+            )
+        elif resp.status_code >= 500:
+            wait = min(2**attempt * 5, 300)
+            log.warning(
+                "github search %d (attempt %d): waiting %.0fs",
+                resp.status_code, attempt, wait,
+            )
+        else:
+            resp.raise_for_status()
+            return resp.json()
+        if waited + wait > budget:
+            log.error(
+                "github search retry budget exhausted (%.0fs waited, last status %d)",
+                waited, resp.status_code,
+            )
+            raise RuntimeError(
+                f"search request failed after {waited:.0f}s of retry waiting "
+                f"(last status {resp.status_code})"
+            )
+        time.sleep(wait)
+        waited += wait
+        attempt += 1
 
 
 def _upsert(conn: psycopg.Connection, items: list[dict]) -> int:
@@ -48,8 +91,8 @@ def _upsert(conn: psycopg.Connection, items: list[dict]) -> int:
             cur.execute(
                 """
                 INSERT INTO repos (repo_id, full_name, stars, description,
-                                   primary_language, pushed_at, status)
-                VALUES (%s, %s, %s, %s, %s, %s, 'candidate')
+                                   primary_language, pushed_at, status, discovered_at)
+                VALUES (%s, %s, %s, %s, %s, %s, 'candidate', now())
                 ON CONFLICT (repo_id) DO UPDATE SET
                     stars = EXCLUDED.stars,
                     full_name = EXCLUDED.full_name,
@@ -73,19 +116,54 @@ def _upsert(conn: psycopg.Connection, items: list[dict]) -> int:
     return new
 
 
+def _shard_done(conn: psycopg.Connection, a: date, b: date, threshold: int) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT 1 FROM gh_shards
+               WHERE from_date = %s AND to_date = %s AND star_threshold = %s
+                 AND processed_at > now() - make_interval(days => %s)""",
+            (a, b, threshold, RESUME_DAYS),
+        )
+        return cur.fetchone() is not None
+
+
+def _mark_shard(conn: psycopg.Connection, a: date, b: date, threshold: int, repos: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO gh_shards (from_date, to_date, star_threshold, repos)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (from_date, to_date, star_threshold)
+               DO UPDATE SET repos = EXCLUDED.repos, processed_at = now()""",
+            (a, b, threshold, repos),
+        )
+    conn.commit()
+
+
 def sweep(
     conn: psycopg.Connection,
     tokens: list[str],
     star_threshold: int,
     created_from: date,
     created_to: date | None = None,
+    fresh: bool = False,
 ) -> dict:
     if not tokens:
         raise ValueError("no GitHub tokens configured (WINDEX_GITHUB_TOKENS)")
     created_to = created_to or date.today()
     from windex import db as wdb
 
-    stats = {"shards": 0, "repos_seen": 0, "repos_new": 0, "capped_shards": 0}
+    pace = 2.1 / max(len(tokens), 1)  # 30 search req/min/token
+    if fresh:
+        with conn.cursor() as cur:
+            cur.execute(
+                """DELETE FROM gh_shards
+                   WHERE star_threshold = %s AND from_date >= %s AND to_date <= %s""",
+                (star_threshold, created_from, created_to),
+            )
+        conn.commit()
+
+    stats = {"shards": 0, "shards_skipped": 0, "repos_seen": 0, "repos_new": 0,
+             "capped_shards": 0}
     shards: deque[tuple[date, date]] = deque([(created_from, created_to)])
     tok_i = 0
     with wdb.stage(conn, "gh_stage", "discovery sweep (search API)"), httpx.Client(
@@ -93,10 +171,18 @@ def sweep(
     ) as client:
         while shards:
             a, b = shards.popleft()
+            if _shard_done(conn, a, b, star_threshold):
+                stats["shards_skipped"] += 1
+                continue
             token = tokens[tok_i % len(tokens)]
             tok_i += 1
             q = f"stars:>={star_threshold} created:{a}..{b}"
             first = _get(client, token, {"q": q, "per_page": PAGE, "page": 1})
+            # Pace EVERY request, split decisions included: the BFS descent of
+            # a cold sweep fires ~100+ page-1 queries, and unpaced they burst
+            # past 30/min and trip GitHub's secondary limit (the 2026-07-16
+            # crash). Leaf pagination below paces the same way.
+            time.sleep(pace)
             total = first.get("total_count", 0)
             if total > CAP and (b - a).days >= 1:
                 mid = a + (b - a) / 2
@@ -114,8 +200,8 @@ def sweep(
                 items.extend(
                     _get(client, token, {"q": q, "per_page": PAGE, "page": page}).get("items", [])
                 )
-                time.sleep(2.1 / max(len(tokens), 1))  # 30 search req/min/token
+                time.sleep(pace)
             stats["repos_seen"] += len(items)
             stats["repos_new"] += _upsert(conn, items)
-            time.sleep(2.1 / max(len(tokens), 1))
+            _mark_shard(conn, a, b, star_threshold, len(items))
     return stats

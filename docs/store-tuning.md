@@ -20,14 +20,15 @@ Read-only inspection under full five-source ingest load. Headline findings:
 - Partial index `documents_embed_backlog_idx (source, created_at) WHERE status='deduped'`
   (in schema.sql; built CONCURRENTLY in prod).
 - bgwriter stats reset for before/after measurement.
+- search.py: quantization `rescore=false` + explicit `hnsw_ef=96` in query params.
+- service.py: stats cache split — full-scan aggregates (source/status group-by,
+  outlets distinct, coverage) at 60s TTL; cheap live signals stay 10s.
+- `windex maintain`: VACUUM ANALYZE the churn tables nightly; `--reindex` weekly
+  rebuilds btree indexes >50MB whose pgstatindex leaf density < 70%, CONCURRENTLY,
+  one at a time (crontab lines in README). Never during backfill bursts.
 
 ## Pending (code changes)
-- search.py: quantization `rescore=false` (+ explicit `hnsw_ef` 64-128) in query params.
-- service.py: split stats cache TTL — full-scan aggregates (source/status group-by,
-  outlets distinct) to 60s; cheap live signals stay 10s. Later: incremental rollup table.
-- `windex maintain` nightly job: bloat-gated (`>20%`) VACUUM ANALYZE minhash_bands +
-  documents after prune_bands; REINDEX CONCURRENTLY only flagged indexes, one at a
-  time, off-peak. Never during backfill bursts.
+- Stats: incremental rollup table if the 60s heavy pass ever hurts.
 - During backlog embed: qdrant max_optimization_threads=1 + bounded max_segment_size
   (avoid 81s optimizer stalls); revert to defaults at steady state.
 - Verify-then-drop: documents_status_idx (superseded by partial), canonical_url_idx
