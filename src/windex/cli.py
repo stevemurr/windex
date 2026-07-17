@@ -176,9 +176,11 @@ def gh_discover(
     from windex.github import discover
 
     settings = get_settings()
-    with db.connect(settings.pg_dsn) as conn:
+    # Reconnecting so a transient postgres drop mid-sweep is retried on a fresh
+    # connection rather than crashing the whole run (2026-07-17 incident).
+    with db.Reconnecting(settings.pg_dsn) as rc:
         stats = discover.sweep(
-            conn,
+            rc,
             tokens=settings.github_token_list(),
             star_threshold=settings.repo_star_threshold,
             created_from=date.fromisoformat(created_from),

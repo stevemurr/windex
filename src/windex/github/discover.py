@@ -10,9 +10,13 @@ import logging
 import time
 from collections import deque
 from datetime import date, timedelta
+from typing import TYPE_CHECKING
 
 import httpx
 import psycopg
+
+if TYPE_CHECKING:
+    from windex import db as wdb
 
 log = logging.getLogger("windex.github.discover")
 
@@ -139,28 +143,45 @@ def _mark_shard(conn: psycopg.Connection, a: date, b: date, threshold: int, repo
     conn.commit()
 
 
+def _clear_shards(conn: psycopg.Connection, threshold: int, a: date, b: date) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """DELETE FROM gh_shards
+               WHERE star_threshold = %s AND from_date >= %s AND to_date <= %s""",
+            (threshold, a, b),
+        )
+    conn.commit()
+
+
 def sweep(
-    conn: psycopg.Connection,
+    conn: "psycopg.Connection | wdb.Reconnecting",
     tokens: list[str],
     star_threshold: int,
     created_from: date,
     created_to: date | None = None,
     fresh: bool = False,
 ) -> dict:
+    """Sweep the GitHub Search API for repos ≥ star_threshold.
+
+    `conn` may be a plain connection or a db.Reconnecting. With the latter (the
+    production path — see cli.gh_discover), every DB op runs through run() so a
+    transient postgres disconnect (a host↔container port-forward blip) is retried
+    on a fresh connection instead of crashing the whole sweep (2026-07-17
+    incident). The ops are idempotent — a read and two ON CONFLICT upserts — and
+    the sweep is resumable regardless via the gh_shards leaf-shard ledger, so
+    re-running any op is safe."""
     if not tokens:
         raise ValueError("no GitHub tokens configured (WINDEX_GITHUB_TOKENS)")
     created_to = created_to or date.today()
     from windex import db as wdb
 
+    # run(fn) executes fn(connection), transparently reconnecting+retrying when
+    # conn is a Reconnecting; a plain connection just runs it once (tests).
+    run = conn.run if isinstance(conn, wdb.Reconnecting) else (lambda fn: fn(conn))
+
     pace = 2.1 / max(len(tokens), 1)  # 30 search req/min/token
     if fresh:
-        with conn.cursor() as cur:
-            cur.execute(
-                """DELETE FROM gh_shards
-                   WHERE star_threshold = %s AND from_date >= %s AND to_date <= %s""",
-                (star_threshold, created_from, created_to),
-            )
-        conn.commit()
+        run(lambda c: _clear_shards(c, star_threshold, created_from, created_to))
 
     stats = {"shards": 0, "shards_skipped": 0, "repos_seen": 0, "repos_new": 0,
              "capped_shards": 0}
@@ -171,7 +192,7 @@ def sweep(
     ) as client:
         while shards:
             a, b = shards.popleft()
-            if _shard_done(conn, a, b, star_threshold):
+            if run(lambda c: _shard_done(c, a, b, star_threshold)):
                 stats["shards_skipped"] += 1
                 continue
             token = tokens[tok_i % len(tokens)]
@@ -202,6 +223,6 @@ def sweep(
                 )
                 time.sleep(pace)
             stats["repos_seen"] += len(items)
-            stats["repos_new"] += _upsert(conn, items)
-            _mark_shard(conn, a, b, star_threshold, len(items))
+            stats["repos_new"] += run(lambda c: _upsert(c, items))
+            run(lambda c: _mark_shard(c, a, b, star_threshold, len(items)))
     return stats
