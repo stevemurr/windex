@@ -559,6 +559,70 @@ def hn_status() -> None:
         console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
 
 
+EMBED_SOURCES = {
+    "ccnews": "windex.ccnews.embed_index",
+    "wiki": "windex.wiki.embed_index",
+    "hn": "windex.hn.embed_index",
+    "arxiv": "windex.arxiv.embed_index",
+    "docs": "windex.docs_source.embed_index",
+    "smallweb": "windex.smallweb.embed_index",
+    "gh": "windex.github.embed_index",
+}
+
+
+@app.command("embed-loop")
+def embed_loop(
+    source: str = typer.Argument(..., help=f"one of: {', '.join(EMBED_SOURCES)}"),
+    interval: int = 30,
+    max_consecutive_failures: int = 10,
+) -> None:
+    """Supervised embed drainer for any source — the unattended entrypoint.
+
+    `windex <src> embed` is a one-shot pass: it raises on the first embedding
+    failure and the process dies, silently stopping that source until a human
+    notices. On 2026-07-17 a saturated embedder killed 5 of 6 backfills that way
+    within minutes; only ccnews survived, because it alone ran under a loop.
+    A ~15-day backfill cannot depend on the embedder never hiccuping, so every
+    source gets the same supervision: back off, retry, and circuit-break (exit 2)
+    rather than spin against something that is genuinely down.
+    """
+    import importlib
+    import time as time_mod
+
+    if source not in EMBED_SOURCES:
+        console.print(f"[red]unknown source '{source}'[/red] — pick one of: "
+                      f"{', '.join(EMBED_SOURCES)}")
+        raise typer.Exit(1)
+    embed_pending = importlib.import_module(EMBED_SOURCES[source]).embed_pending
+
+    settings = get_settings()
+    failures = 0
+    while True:
+        try:
+            with db.connect(settings.pg_dsn) as conn:
+                if db.get_control(conn, "indexing", "running") == "paused":
+                    console.print("paused — waiting")
+                    time_mod.sleep(interval)
+                    continue
+                n = embed_pending(conn, settings)
+            failures = 0
+            console.print(f"[{source}] embedded {n} docs")
+            if n == 0:
+                # Nothing staged: idle rather than exit. Upstream ingest may
+                # still be running, and a drained queue is not a finished one.
+                time_mod.sleep(interval)
+        except Exception as exc:
+            failures += 1
+            console.print(
+                f"[red][{source}] embed cycle failed "
+                f"({failures}/{max_consecutive_failures}): {exc}[/red]"
+            )
+            if failures >= max_consecutive_failures:
+                console.print("[red]circuit breaker tripped — exiting[/red]")
+                raise typer.Exit(2)
+            time_mod.sleep(min(interval * failures, 300))
+
+
 @app.command()
 def maintain(
     reindex: bool = typer.Option(False, help="Also REINDEX CONCURRENTLY bloat-flagged indexes (weekly, off-peak)"),

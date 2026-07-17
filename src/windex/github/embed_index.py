@@ -36,7 +36,7 @@ def _readmes(readme_dir: Path) -> dict[int, str]:
 
 
 def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 100_000) -> int:
-    embedder = build_embedder(settings)
+    embedder = build_embedder(settings, bulk=True)
     from windex.index.sparse import bm25_model
 
     bm25 = bm25_model()

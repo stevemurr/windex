@@ -82,7 +82,7 @@ def _embedded(pg) -> set[str]:
 def test_overlap_embeds_every_doc_exactly_once(pg, settings, fake_embedder, monkeypatch):
     """Prefetch + no per-ref barrier must not drop or duplicate work, including
     across text_ref boundaries and a ragged final batch."""
-    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
     fake = FakeQdrant()
     monkeypatch.setattr(embed_pipeline, "QdrantClient", lambda **kw: fake)
     monkeypatch.setattr(embed_pipeline.qidx, "ensure_collection", lambda *a, **k: "c")
@@ -107,7 +107,7 @@ def test_status_never_commits_before_vectors_land(pg, pg_dsn, settings, fake_emb
     flight. This is the property wait=False would destroy — with a non-durable
     upsert the status commit races ahead, and a crash in that window strands
     documents marked embedded whose vectors do not exist."""
-    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
     gate = threading.Event()
     landed: list[str] = []
     lock = threading.Lock()
@@ -155,7 +155,7 @@ def test_crash_mid_pass_leaves_no_doc_embedded_without_vectors(pg, settings, fak
     """Crash recovery: when Qdrant dies mid-pass, no document may be marked
     'embedded' whose vectors never landed, and the remainder must stay
     re-runnable."""
-    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
     seen: list[str] = []
 
     def die_after_two(points):
@@ -188,7 +188,7 @@ def test_unreadable_staging_raises_instead_of_silently_short_passing(
     background thread, so its failure must still reach the caller — embed-loop
     circuit-breaks on a raise, but would spin forever on a pass that quietly
     returns 0."""
-    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
     fake = FakeQdrant()
     monkeypatch.setattr(embed_pipeline, "QdrantClient", lambda **kw: fake)
     monkeypatch.setattr(embed_pipeline.qidx, "ensure_collection", lambda *a, **k: "c")
@@ -203,7 +203,7 @@ def test_unreadable_staging_raises_instead_of_silently_short_passing(
 
 def test_upserts_always_use_wait_true(pg, settings, fake_embedder, monkeypatch):
     """wait=False would make the status commit a lie. Guard it explicitly."""
-    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
     fake = FakeQdrant()
     monkeypatch.setattr(embed_pipeline, "QdrantClient", lambda **kw: fake)
     monkeypatch.setattr(embed_pipeline.qidx, "ensure_collection", lambda *a, **k: "c")
@@ -218,7 +218,7 @@ def test_pause_stops_the_pass_and_leaves_the_rest_pending(pg, settings, fake_emb
                                                           monkeypatch):
     """The dashboard pause button must still take effect mid-pass, and what it
     interrupts must remain re-runnable."""
-    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
     fake = FakeQdrant()
     monkeypatch.setattr(embed_pipeline, "QdrantClient", lambda **kw: fake)
     monkeypatch.setattr(embed_pipeline.qidx, "ensure_collection", lambda *a, **k: "c")
@@ -248,7 +248,7 @@ def test_pause_stops_the_pass_and_leaves_the_rest_pending(pg, settings, fake_emb
 def test_runtime_profile_bounds_inflight_batches(pg, settings, fake_embedder, monkeypatch):
     """Throttle profiles must still cap concurrency: the prefetch is sized from
     embed_concurrency, so 'polite' must not become a firehose."""
-    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
     fake = FakeQdrant()
     monkeypatch.setattr(embed_pipeline, "QdrantClient", lambda **kw: fake)
     monkeypatch.setattr(embed_pipeline.qidx, "ensure_collection", lambda *a, **k: "c")

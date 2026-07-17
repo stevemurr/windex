@@ -156,3 +156,41 @@ def test_cli_maintain(settings, pg, monkeypatch):
     # no index qualifies — the pass must still complete cleanly.
     r = runner.invoke(app, ["maintain", "--reindex"])
     assert r.exit_code == 0 and "vacuum analyze search_metrics" in r.output
+
+
+def test_embed_loop_rejects_unknown_source(settings, monkeypatch):
+    _use_test_settings(monkeypatch, settings)
+    r = runner.invoke(app, ["embed-loop", "nonesuch"])
+    assert r.exit_code == 1 and "unknown source" in r.output
+
+
+def test_embed_loop_covers_every_embeddable_source():
+    """Each source must be reachable by the supervised loop — an unsupervised
+    one-shot pass dies on the first embedder hiccup (2026-07-17: 5 of 6
+    backfills died within minutes that way)."""
+    import importlib
+
+    from windex.cli import EMBED_SOURCES
+
+    assert set(EMBED_SOURCES) == {"ccnews", "wiki", "hn", "arxiv", "docs", "smallweb", "gh"}
+    for src, mod in EMBED_SOURCES.items():
+        assert hasattr(importlib.import_module(mod), "embed_pending"), src
+
+
+def test_embed_loop_retries_then_circuit_breaks(settings, pg, monkeypatch):
+    """A transient failure must not kill the loop; a persistent one must not
+    spin forever."""
+    import windex.wiki.embed_index as wiki_embed
+
+    calls = []
+
+    def boom(conn, s, limit=100_000):
+        calls.append(1)
+        raise RuntimeError("embedding request failed after 3 attempts")
+
+    _use_test_settings(monkeypatch, settings)
+    monkeypatch.setattr(wiki_embed, "embed_pending", boom)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    r = runner.invoke(app, ["embed-loop", "wiki", "--max-consecutive-failures", "3"])
+    assert r.exit_code == 2, "should circuit-break, not raise or hang"
+    assert len(calls) == 3, f"should retry to the limit, got {len(calls)} attempts"

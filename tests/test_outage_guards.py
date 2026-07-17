@@ -44,7 +44,7 @@ def test_embed_pending_fails_fast_when_qdrant_down(pg, settings, fake_embedder, 
     import windex.ccnews.embed_index as news_embed
     import windex.embed.pipeline as embed_pipeline
 
-    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
     dead = Settings(
         _env_file=None, data_root=settings.data_root, pg_dsn=settings.pg_dsn,
         qdrant_url="http://127.0.0.1:16333",  # nothing listens here

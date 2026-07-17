@@ -33,8 +33,8 @@ def test_build_argv_wiki_jobs():
     assert argv[1:] == ["wiki", "ingest", "--max-files", "3"]
     with pytest.raises(ValueError, match="out of range"):
         jobs.build_argv(jobs.JOBS["wiki-ingest"], {"max_files": 999})
-    argv = jobs.build_argv(jobs.JOBS["wiki-embed"], {"limit": 5000})
-    assert argv[1:] == ["wiki", "embed", "--limit", "5000"]
+    argv = jobs.build_argv(jobs.JOBS["wiki-embed"], {})
+    assert argv[1:] == ["embed-loop", "wiki"]
 
 
 def test_build_argv_arxiv_jobs():
@@ -44,8 +44,7 @@ def test_build_argv_arxiv_jobs():
     assert argv[1:] == ["arxiv", "harvest", "--from-year", "2005", "--to-year", "2024"]
     with pytest.raises(ValueError, match="out of range"):
         jobs.build_argv(jobs.JOBS["arxiv-backfill"], {"from_year": 1990})
-    assert jobs.build_argv(jobs.JOBS["arxiv-embed"], {"limit": 5000})[1:] == \
-        ["arxiv", "embed", "--limit", "5000"]
+    assert jobs.build_argv(jobs.JOBS["arxiv-embed"], {})[1:] == ["embed-loop", "arxiv"]
 
 
 def test_build_argv_smallweb_jobs():
@@ -54,8 +53,7 @@ def test_build_argv_smallweb_jobs():
     assert argv[1:] == ["smallweb", "poll", "--max-feeds", "500"]
     with pytest.raises(ValueError, match="out of range"):
         jobs.build_argv(jobs.JOBS["smallweb-poll"], {"max_feeds": 999999})
-    assert jobs.build_argv(jobs.JOBS["smallweb-embed"], {"limit": 5000})[1:] == \
-        ["smallweb", "embed", "--limit", "5000"]
+    assert jobs.build_argv(jobs.JOBS["smallweb-embed"], {})[1:] == ["embed-loop", "smallweb"]
     # reindex now accepts smallweb as a source
     assert jobs.build_argv(jobs.JOBS["reindex"], {"source": "smallweb"})[1:] == \
         ["reindex", "smallweb", "--yes"]
@@ -67,8 +65,7 @@ def test_build_argv_docs_jobs():
     assert argv[1:] == ["docs", "ingest", "--max-docsets", "5"]
     with pytest.raises(ValueError, match="out of range"):
         jobs.build_argv(jobs.JOBS["docs-ingest"], {"max_docsets": 9999})
-    assert jobs.build_argv(jobs.JOBS["docs-embed"], {"limit": 5000})[1:] == \
-        ["docs", "embed", "--limit", "5000"]
+    assert jobs.build_argv(jobs.JOBS["docs-embed"], {})[1:] == ["embed-loop", "docs"]
     # reindex now accepts docs as a source
     assert jobs.build_argv(jobs.JOBS["reindex"], {"source": "docs"})[1:] == \
         ["reindex", "docs", "--yes"]
@@ -83,8 +80,7 @@ def test_build_argv_hn_jobs():
         jobs.build_argv(jobs.JOBS["hn-backfill"], {"from_year": 1999})
     with pytest.raises(ValueError, match="out of range"):
         jobs.build_argv(jobs.JOBS["hn-harvest"], {"days": 9999})
-    assert jobs.build_argv(jobs.JOBS["hn-embed"], {"limit": 5000})[1:] == \
-        ["hn", "embed", "--limit", "5000"]
+    assert jobs.build_argv(jobs.JOBS["hn-embed"], {})[1:] == ["embed-loop", "hn"]
     # reindex now accepts hn as a source
     assert jobs.build_argv(jobs.JOBS["reindex"], {"source": "hn"})[1:] == \
         ["reindex", "hn", "--yes"]
@@ -147,3 +143,28 @@ def test_jobs_endpoints(client, monkeypatch):
 
     monkeypatch.setattr(jobs, "_pids", lambda pattern: [999])
     assert client.post("/v1/jobs/ccnews-sync/start", json={}).status_code == 409
+
+
+def test_embed_jobs_use_the_supervised_loop():
+    """Every embed job must run under embed-loop, not a one-shot pass: an
+    unsupervised pass dies on the first embedder hiccup (2026-07-17)."""
+    from windex.api.jobs import JOBS
+    from windex.cli import EMBED_SOURCES
+
+    embed_jobs = [j for j in JOBS.values() if j.name.endswith("-embed") or j.name == "embed-loop"]
+    assert len(embed_jobs) == 7
+    for j in embed_jobs:
+        assert j.argv[0] == "embed-loop", f"{j.name} is not supervised: {j.argv}"
+        assert j.argv[1] in EMBED_SOURCES, f"{j.name} targets unknown source {j.argv[1]}"
+
+
+def test_job_patterns_match_their_own_argv():
+    """The console decides 'running' by pgrep on `pattern`. If it drifts from
+    argv, the dashboard reports idle while the job is working — exactly the
+    decoupling the user hit on 2026-07-17."""
+    from windex.api.jobs import JOBS, build_argv
+
+    for j in JOBS.values():
+        argv = build_argv(j, {})
+        cmdline = " ".join(["windex", *argv[1:]])
+        assert j.pattern in cmdline, f"{j.name}: pattern {j.pattern!r} won't match {cmdline!r}"

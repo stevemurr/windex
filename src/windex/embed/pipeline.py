@@ -237,7 +237,7 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, spec: SourceSpec
     if not refs:
         return 0
 
-    embedder = build_embedder(settings)
+    embedder = build_embedder(settings, bulk=True)
     from windex.index.sparse import bm25_model
 
     bm25 = bm25_model()

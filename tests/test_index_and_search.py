@@ -87,7 +87,7 @@ def test_hybrid_search_uses_fake_dense(qclient, settings, seeded_collection, mon
     monkeypatch.setattr(searchmod.qidx, "alias_name", lambda source: seeded_collection)
     import windex.embed as embed_mod
 
-    monkeypatch.setattr(embed_mod, "build_embedder", lambda s, timeout=None: fake_embedder)
+    monkeypatch.setattr(embed_mod, "build_embedder", lambda s, timeout=None, **kw: fake_embedder)
     resp = searchmod.search(settings, "semiconductor datacenter earnings", source="news",
                             mode="hybrid", limit=3)
     assert resp["results"] and resp["results"][0]["doc_id"] == "news:ccc"
