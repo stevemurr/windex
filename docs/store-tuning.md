@@ -27,8 +27,45 @@ Read-only inspection under full five-source ingest load. Headline findings:
   rebuilds btree indexes >50MB whose pgstatindex leaf density < 70%, CONCURRENTLY,
   one at a time (crontab lines in README). Never during backfill bursts.
 
+- Ledger probes: dropped the redundant `source = 'x'` predicate from the
+  `id = ANY(...)` probes in all 7 sources. It forced
+  documents_source_published_idx (rows=1 estimate — hn/docs/github are absent
+  from the source MCV list) and scanned every row of the source: 244s vs 63ms
+  on the pkey plan. Regression test in tests/test_scaffold.py. Do NOT
+  reintroduce it, and do NOT "fix" this with ANALYZE — a rare source value will
+  always tempt the planner back.
+- Stats: outlets tile rewritten count(DISTINCT ...) -> count(*) over GROUP BY
+  (the sort spilled ~10MB/s of temp files); _PG_HEAVY_TTL 60s -> 600s;
+  get_timeseries cached 30s (uncached full scan, once per SSE viewer).
+- Hot objects: shared BM25 singleton (index/sparse.py) replacing per-pass
+  construction in 7 sources; module-level QdrantClient; query BM25 vector
+  hoisted to once per search; ensure_collection only creates missing payload
+  indexes.
+
+Measured 2026-07-17 after the above (60s deltas, live): disk reads 505 ->
+125 MB/s, temp spill 10 -> 0 MB/s, cache hit 14.9% -> 89.4%, longest active
+query 244s -> 0s. Re-baseline before chasing anything below.
+
 ## Pending (code changes)
-- Stats: incremental rollup table if the 60s heavy pass ever hurts.
+- Stats: incremental rollup table if the 600s heavy pass ever hurts.
+- Query-embed circuit breaker: degraded searches burn a flat 8s
+  (embed_query_timeout) waiting on a GPU saturated by design; p95 9.2s,
+  22% degraded. After N consecutive timeouts skip the dense leg for a cooldown.
+- Qdrant `wait=True` on bulk upserts (client default in all 7 embed paths):
+  354ms avg / 36.5s max per upsert, serial in the embed worker thread. NOT a
+  free flag flip — the pass commits status='embedded' right after, so wait=False
+  risks docs marked embedded whose vectors never landed, never retried.
+  Decoupling upsert from the embed thread is the safer shape.
+- Embed pass starves the GPU: per text_ref the main thread does a full
+  pq.read_table() (no column/filter pushdown; wiki refs avg 332MB) then filters
+  in memory, and cf.as_completed() is a barrier per ref. Prefetch the next ref
+  while the current embeds. get_document() has the right idiom (filters=).
+- shared_buffers: still 128MB, pending_restart=true — the staged 1GB never took
+  effect (needs a PG restart; documents heap cache hit was 5.78%).
+- hn/docs collections still on max_segment_size/max_optimization_threads=null
+  while the other five carry the backfill posture (300000/1).
+- Payload indexes built but never filtered on: news.lang, wiki.title,
+  wiki.incoming_links, repos.pushed_at, doc_id on all seven.
 - During backlog embed: qdrant max_optimization_threads=1 + bounded max_segment_size
   (avoid 81s optimizer stalls); revert to defaults at steady state.
 - Verify-then-drop: documents_status_idx (superseded by partial), canonical_url_idx
