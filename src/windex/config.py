@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     # Query-time embedding deadline; hybrid search degrades to lexical past it
     # (indexing load on the GPU server must not stall searches)
     embed_query_timeout: float = 8.0
+    # Circuit breaker on the *query* embed only (index/embed_breaker.py) — the
+    # bulk embed path is never breakered. Once the GPU is saturated the timeout
+    # above is paid on every search to rediscover a known answer; after this many
+    # consecutive failures the dense leg is skipped outright for the cooldown.
+    # 3: a lone timeout is noise (failures were ~22% when measured), three in a
+    # row is a saturated server. 0 disables the breaker.
+    embed_breaker_threshold: int = 3
+    # 30s: one probe costs at most a timeout (~9s), so probing this often adds
+    # negligible load to the GPU, and hybrid returns within 30s of it recovering.
+    embed_breaker_cooldown: float = 30.0
 
     # Corpus policy
     news_backfill_days: int = 90
