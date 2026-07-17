@@ -9,8 +9,9 @@ mcp = FastMCP(
     "windex",
     instructions="Self-hosted web index: fresh news (CC-News), GitHub projects, "
     "Wikipedia articles, arXiv papers, Small Web personal blogs, programming "
-    "documentation (DevDocs), and Hacker News stories. Use search_index to find "
-    "links; get_document to read a result's full text.",
+    "documentation (DevDocs), Hacker News stories, and Hugging Face docs, "
+    "courses and blog. Use search_index to find links; get_document to read a "
+    "result's full text.",
 )
 
 
@@ -25,16 +26,21 @@ def search_index(
     category: str | None = None,
     outlet: str | None = None,
     framework: str | None = None,
+    root: str | None = None,
+    kind: str | None = None,
 ) -> dict:
     """Search the index. source: news | github | wiki | arxiv | smallweb |
-    docs | hn | all. `category` filters arxiv results by primary category (e.g.
-    cs.LG); `outlet` filters smallweb results by feed host (e.g. example.com);
-    `framework` filters docs results by framework (e.g. python, react);
-    `min_points` filters hn results by score (mirrors github's `min_stars`).
-    Docs results link to the official documentation and carry the upstream
-    version and license attribution; hn results link to the HN discussion page
-    and carry the external link as `target_url`. Returns ranked results with
-    stable ids, URLs, titles, and snippets."""
+    docs | hn | hf | all. `category` filters arxiv results by primary category
+    (e.g. cs.LG); `outlet` filters smallweb results by feed host (e.g.
+    example.com); `framework` filters docs results by framework (e.g. python,
+    react); `min_points` filters hn results by score (mirrors github's
+    `min_stars`); `root` and `kind` filter hf results by doc root (e.g.
+    transformers, diffusers, agents-course) and by page kind (docs | learn |
+    blog). Docs results link to the official documentation and carry the
+    upstream version and license attribution; hn results link to the HN
+    discussion page and carry the external link as `target_url`; hf results are
+    the canonical huggingface.co docs, courses and blog. Returns ranked results
+    with stable ids, URLs, titles, and snippets."""
     from datetime import datetime
 
     return service.run_search(
@@ -48,6 +54,8 @@ def search_index(
         category=category,
         outlet=outlet,
         framework=framework,
+        root=root,
+        kind=kind,
     )
 
 
@@ -55,7 +63,8 @@ def search_index(
 def get_document(doc_id: str) -> dict:
     """Fetch the stored full text and metadata for a search result id
     (news:<hash>, gh:owner/repo, wiki:<page_id>, arxiv:<paper_id>,
-    smallweb:<hash>, docs:<slug>/<path>, or hn:<item_id>)."""
+    smallweb:<hash>, docs:<slug>/<path>, hn:<item_id>, or
+    hf:docs/<root>/<path> | hf:blog/<slug>)."""
     doc = service.get_document(get_settings(), doc_id)
     return doc or {"error": f"unknown document id: {doc_id}"}
 

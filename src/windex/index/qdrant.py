@@ -5,7 +5,7 @@ from qdrant_client import models as qm
 
 DENSE = "dense"
 SPARSE = "bm25"
-SOURCES = ("news", "repos", "wiki", "arxiv", "smallweb", "docs", "hn")
+SOURCES = ("news", "repos", "wiki", "arxiv", "smallweb", "docs", "hn", "hf")
 
 # payload fields that search filters on, indexed at collection creation
 PAYLOAD_INDEXES = {
@@ -31,6 +31,13 @@ PAYLOAD_INDEXES = {
              "version": qm.PayloadSchemaType.KEYWORD},
     "hn": {"doc_id": qm.PayloadSchemaType.KEYWORD,
            "points": qm.PayloadSchemaType.INTEGER,  # min_points filter + future ranking boost
+           "published_at": qm.PayloadSchemaType.DATETIME},
+    # HF docs, courses and blog share one collection; root/kind are what
+    # separate them at query time. published_at is blog-only (reference pages
+    # aren't dated) and simply absent from doc payloads.
+    "hf": {"doc_id": qm.PayloadSchemaType.KEYWORD,
+           "root": qm.PayloadSchemaType.KEYWORD,     # transformers | agents-course | blog
+           "kind": qm.PayloadSchemaType.KEYWORD,     # docs | learn | blog
            "published_at": qm.PayloadSchemaType.DATETIME},
 }
 

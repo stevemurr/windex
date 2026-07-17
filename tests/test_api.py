@@ -369,9 +369,10 @@ def test_stats_index_queue_reports_per_source_watermarks_with_units(client, pg):
     assert idx["arxiv"]["pending"] == 1 and idx["arxiv"]["unit"] == "date windows"
     assert idx["docs"]["pending"] == 1 and idx["docs"]["unit"] == "docsets"
     assert idx["hn"]["done"] == 1 and idx["github"]["pending"] == 1
+    assert idx["hf"]["unit"] == "doc roots"
     # every source names its unit, and no two sources share one
     units = [v["unit"] for v in idx.values()]
-    assert len(units) == len(set(units)) == 7
+    assert len(units) == len(set(units)) == 8
 
 
 def test_stats_index_queue_reports_zeros_for_empty_watermark_tables(client, pg):

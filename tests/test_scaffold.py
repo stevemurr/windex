@@ -52,6 +52,7 @@ def test_every_documents_batch_writer_locks_in_id_order():
         "src/windex/wiki/ingest.py", "src/windex/docs_source/ingest.py",
         "src/windex/hn/harvest.py", "src/windex/arxiv/harvest.py",
         "src/windex/smallweb/poll.py", "src/windex/embed/pipeline.py",
+        "src/windex/hf/crawl.py",
     }
     for path in sorted(writers):
         src = pathlib.Path(path).read_text()

@@ -19,7 +19,8 @@ RESULT_FIELDS = ("url", "title", "snippet", "source", "published_at", "outlet",
                  "stars", "language", "topics", "pushed_at", "lang", "incoming_links",
                  "primary_category", "categories", "authors",
                  "framework", "version", "attribution",
-                 "points", "num_comments", "author", "target_url")
+                 "points", "num_comments", "author", "target_url",
+                 "root", "kind")  # hf: doc root (transformers) and docs|learn|blog
 
 
 def run_search(
@@ -36,13 +37,15 @@ def run_search(
     outlet: str | None = None,
     framework: str | None = None,
     min_points: int | None = None,
+    root: str | None = None,
+    kind: str | None = None,
 ) -> dict:
     t0 = time.monotonic()
     resp = index_search(
         settings, q, source=source, limit=limit, mode=mode,
         published_after=published_after, published_before=published_before,
         min_stars=min_stars, language=language, category=category, outlet=outlet,
-        framework=framework, min_points=min_points,
+        framework=framework, min_points=min_points, root=root, kind=kind,
     )
     results = []
     for r in resp["results"]:
@@ -221,6 +224,7 @@ QUEUE_UNITS = {
     "smallweb": "feeds",
     "docs": "docsets",
     "hn": "time windows",
+    "hf": "doc roots",  # blog posts are a second unit and deliberately not summed in
 }
 
 
@@ -312,6 +316,16 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
             UNION ALL
             SELECT 'hn', status::text, count(*) FROM hn_windows GROUP BY status
             UNION ALL
+            -- hf's unit is the doc root. 'no_llms'/'partial' roll up to their
+            -- nearest queue meaning: a root with no llms.txt can never be
+            -- crawled (it is not pending work), a partial one still is.
+            SELECT 'hf',
+                   (CASE status WHEN 'no_llms' THEN 'done'
+                                WHEN 'partial' THEN 'pending'
+                                ELSE status END)::text,
+                   count(*)
+            FROM hf_roots GROUP BY 2
+            UNION ALL
             SELECT 'smallweb',
                    (CASE WHEN last_polled IS NULL THEN 'pending' ELSE 'done' END)::text,
                    count(*)
@@ -330,6 +344,7 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
     smallweb = docs.get("smallweb", {})
     progdocs = docs.get("docs", {})
     hn = docs.get("hn", {})
+    hf = docs.get("hf", {})
     # Embed queue = documents awaiting a vector, per source. This is a pure
     # re-projection of the source/status group-by already cached in _pg_heavy
     # (600s TTL) — it adds no query. Zero-backlog sources are kept here (the
@@ -364,7 +379,7 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
             "indexed_pages": news.get("embedded", 0) + gh.get("embedded", 0)
             + wiki.get("embedded", 0) + arxiv.get("embedded", 0)
             + smallweb.get("embedded", 0) + progdocs.get("embedded", 0)
-            + hn.get("embedded", 0),
+            + hn.get("embedded", 0) + hf.get("embedded", 0),
             "news_articles": news.get("embedded", 0),
             "github_projects": gh.get("embedded", 0),
             "wiki_articles": wiki.get("embedded", 0),
@@ -372,6 +387,7 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
             "smallweb_posts": smallweb.get("embedded", 0),
             "docs_pages": progdocs.get("embedded", 0),
             "hn_stories": hn.get("embedded", 0),
+            "hf_pages": hf.get("embedded", 0),
             "duplicates_collapsed": news.get("duplicate", 0),
             "news_outlets": outlets,
             "news_coverage": [
@@ -557,6 +573,7 @@ def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
             "smallweb": flags.get("smallweb_stage", "idle"),
             "docs": flags.get("docs_stage", "idle"),
             "hn": flags.get("hn_stage", "idle"),
+            "hf": flags.get("hf_stage", "idle"),
         },
         "downloading_bytes_on_disk": in_flight,
         # why searches are degrading right now: open = we're skipping the dense
