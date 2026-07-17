@@ -96,6 +96,16 @@ class Settings(BaseSettings):
 
     github_tokens: str = ""  # comma-separated PATs for hydration
 
+    # Threads draining Qdrant upserts in the embed pass. The embed workers hand
+    # finished points off to these instead of blocking a GPU slot on PUT /points
+    # (avg 355ms, worst case 36s observed). Upserts stay wait=True — the pass
+    # commits status='embedded' only after the vectors are durable — so this is
+    # about getting the round-trip off the embed thread, not about skipping it.
+    # 0 = match embed_concurrency, which is the upsert parallelism the old
+    # inline-upsert code effectively had; a smaller fixed pool would be a
+    # *narrower* funnel than before whenever Qdrant hits its latency tail.
+    embed_upsert_workers: int = 0
+
     @property
     def downloads_dir(self) -> Path:
         return self.data_root / "downloads"

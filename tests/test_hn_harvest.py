@@ -204,7 +204,9 @@ def test_reharvest_unchanged_skips_but_refreshes_points(pg, settings, qclient, f
 
     # embed into the pytest collection, then pin the alias at it — once real
     # collections exist, hn_current must never resolve to production here
-    monkeypatch.setattr(hn_embed, "build_embedder", lambda s: fake_embedder)
+    import windex.embed.pipeline as embed_pipeline
+
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
     assert hn_embed.embed_pending(pg, settings, limit=10) == 2
     coll = "hn__pytest-model"
     monkeypatch.setattr("windex.index.qdrant.alias_name", lambda source: coll)

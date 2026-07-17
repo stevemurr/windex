@@ -42,8 +42,9 @@ def test_db_connect_fails_fast_on_dead_port():
 
 def test_embed_pending_fails_fast_when_qdrant_down(pg, settings, fake_embedder, monkeypatch, tmp_path):
     import windex.ccnews.embed_index as news_embed
+    import windex.embed.pipeline as embed_pipeline
 
-    monkeypatch.setattr(news_embed, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
     dead = Settings(
         _env_file=None, data_root=settings.data_root, pg_dsn=settings.pg_dsn,
         qdrant_url="http://127.0.0.1:16333",  # nothing listens here

@@ -8,6 +8,7 @@ from qdrant_client import QdrantClient
 from conftest import QDRANT_URL
 
 import windex.arxiv.embed_index as arxiv_embed
+import windex.embed.pipeline as embed_pipeline
 import windex.ccnews.embed_index as news_embed
 import windex.docs_source.embed_index as docs_embed
 import windex.github.embed_index as gh_embed
@@ -21,7 +22,7 @@ def _qdrant_count(name: str) -> int:
 
 
 def test_news_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
-    monkeypatch.setattr(news_embed, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
     text_ref = "news/clean/b1.parquet"
     path = settings.staging_dir / text_ref
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,7 +93,7 @@ def test_gh_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
 
 
 def test_wiki_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
-    monkeypatch.setattr(wiki_embed, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
     text_ref = "wiki/clean/enwiki_content-20260712-00000.parquet"
     path = settings.staging_dir / text_ref
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,7 +137,7 @@ def test_wiki_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
 
 
 def test_arxiv_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
-    monkeypatch.setattr(arxiv_embed, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
     text_ref = "arxiv/clean/2024-01-01_2024-12-31.parquet"
     path = settings.staging_dir / text_ref
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -186,7 +187,7 @@ def test_arxiv_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
 
 
 def test_smallweb_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
-    monkeypatch.setattr(smallweb_embed, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
     text_ref = "smallweb/clean/20260714T090000Z_0000.parquet"
     path = settings.staging_dir / text_ref
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,7 +229,7 @@ def test_smallweb_embed_pending(pg, settings, qclient, fake_embedder, monkeypatc
 
 
 def test_hn_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
-    monkeypatch.setattr(hn_embed, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
     text_ref = "hn/clean/20260715_20260717.parquet"
     path = settings.staging_dir / text_ref
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -279,7 +280,7 @@ def test_hn_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
 
 
 def test_docs_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
-    monkeypatch.setattr(docs_embed, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s: fake_embedder)
     text_ref = "docs/clean/flask.parquet"
     path = settings.staging_dir / text_ref
     path.parent.mkdir(parents=True, exist_ok=True)
