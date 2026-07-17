@@ -347,7 +347,11 @@ def stage_docset(
                 WHERE documents.text_hash IS DISTINCT FROM EXCLUDED.text_hash
                    OR documents.status = 'deleted'
                 """,
-                [(i, u, u, t, h, ref) for (i, u, t, h, ref) in doc_rows],
+                # sorted by id: the embed loop UPDATEs these same rows, and
+                # locking them in a different order deadlocks (killed two wiki
+                # shards 2026-07-16). Every batch writer to `documents` locks
+                # in id order.
+                sorted([(i, u, u, t, h, ref) for (i, u, t, h, ref) in doc_rows]),
             )
         conn.commit()
     except Exception:

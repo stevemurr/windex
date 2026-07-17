@@ -382,8 +382,14 @@ def stage_batch(conn: psycopg.Connection, settings: Settings, items: list[dict],
                       text_hash, status, text_ref)
                    VALUES (%s, 'smallweb', %s, %s, %s, %s, %s, %s, 'deduped', %s)
                    ON CONFLICT (id) DO NOTHING""",
-                [(p["id"], p["url"], p["canon"], p["title"], _parse_ts(p["published"]),
-                  p["lang"], p["thash"], text_ref) for p in survivors],
+                # sorted by id: the embed loop UPDATEs these same rows, and
+                # locking them in a different order deadlocks (killed two wiki
+                # shards 2026-07-16). Every batch writer to `documents` locks
+                # in id order.
+                sorted(
+                    (p["id"], p["url"], p["canon"], p["title"], _parse_ts(p["published"]),
+                     p["lang"], p["thash"], text_ref) for p in survivors
+                ),
             )
             stats["staged"] = len(survivors)
         conn.commit()

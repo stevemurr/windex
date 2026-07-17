@@ -304,6 +304,11 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, spec: SourceSpec
                 # FIFO: only the *commit* waits in order — the pool and the
                 # upsert threads keep running ahead regardless.
                 ids = inflight.popleft().result().result()  # embed → vectors durable
+                # Sorted: this UPDATE and a source's ingest upsert lock the same
+                # `documents` rows, and taking them in different orders deadlocks
+                # — it killed two wiki shards on 2026-07-16 (5% of the corpus).
+                # Every batch writer to `documents` must lock in id order.
+                ids = sorted(ids)
                 with conn.cursor() as cur:
                     cur.execute(
                         """

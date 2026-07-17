@@ -391,11 +391,15 @@ def stage_stories(
                     embedded_model = NULL, indexed_at = NULL
                 WHERE documents.text_hash IS DISTINCT FROM EXCLUDED.text_hash
                 """,
-                [
+                # sorted by id: the embed loop UPDATEs these same rows, and
+                # locking them in a different order deadlocks (killed two wiki
+                # shards 2026-07-16). Every batch writer to `documents` locks
+                # in id order.
+                sorted(
                     (s["id"], s["url"], s["title"], _parse_date(s["created_at"]),
                      s["thash"], text_ref)
                     for s in delta
-                ],
+                ),
             )
         conn.commit()
     except Exception:

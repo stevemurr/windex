@@ -152,6 +152,11 @@ def stage_shard(
             # Change-aware ledger upsert: unchanged articles never reach here
             # (pre-filtered), and the WHERE guards against a race re-embedding an
             # identical revision.
+            # Sorted: the embed loop UPDATEs these same rows by id, and taking
+            # the locks in a different order deadlocks — shards 00006 and 00052
+            # died exactly that way on 2026-07-16. A shard is one transaction of
+            # ~112k rows, so the window is wide.
+            doc_rows.sort(key=lambda r: r[0])
             cur.executemany(
                 """
                 INSERT INTO documents
