@@ -22,7 +22,24 @@ run_or_start() {
     "$@" >/dev/null
     echo "$name: created"
   elif echo "$info" | grep -q '"status":"running"'; then
-    echo "$name: already running"
+    # Don't trust "status":"running" — it lies. Observed 2026-07-16: postgres'
+    # port went dead, `inspect` still said running, `exec` said "container is
+    # not running", and `stop`/`kill`/`start` all no-op'd. The watchdog's
+    # recovery was `stop` + `up`, so it printed "already running" and did
+    # nothing, every 15s, while the whole pipeline was down. A container that
+    # can't exec is wedged no matter what the status field claims: recreate it.
+    # (Data is on bind mounts, so recreating costs nothing.)
+    if container exec "$name" true >/dev/null 2>&1; then
+      echo "$name: already running"
+    else
+      echo "$name: wedged (status=running but not execable) — recreating"
+      container kill "$name" >/dev/null 2>&1 || true
+      container stop "$name" >/dev/null 2>&1 || true
+      container delete --force "$name" >/dev/null 2>&1 || true
+      shift
+      "$@" >/dev/null
+      echo "$name: recreated"
+    fi
   else
     container start "$name" >/dev/null
     echo "$name: started"

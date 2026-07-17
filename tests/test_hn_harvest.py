@@ -366,3 +366,19 @@ def test_month_of_window():
     frm, until = hharvest.month_epochs(2026, 7)
     assert hbackfill.month_of_window(frm, until - 3600) is None      # short of a month
     assert hbackfill.month_of_window(frm + 86400, until) is None     # not the 1st
+
+
+def test_clean_title_and_text_strip_nul_bytes():
+    """Regression (2026-07-17): a real story in the 2023-07 mirror window carries
+    a NUL in its title. PG text columns cannot hold 0x00, so the INSERT raised and
+    the whole month's window failed permanently on every retry. NUL is not
+    whitespace, so the old " ".join(raw.split()) idiom passed it straight through."""
+    from windex.hn.harvest import clean_text, clean_title
+
+    assert clean_title("Show HN:\x00 a thing") == "Show HN: a thing"
+    assert "\x00" not in clean_title("\x00\x00bad\x00")
+    assert clean_title(None) == ""
+    assert "\x00" not in clean_text("<p>hello\x00 world</p>")
+    # normalization must stay identical on both ingest paths or text_hash
+    # diverges between harvest (Algolia) and backfill (parquet mirror)
+    assert clean_title("  spaced   out  ") == "spaced out"

@@ -74,6 +74,15 @@ _P_RE = re.compile(r"(?i)<p[^>]*>")
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
+def clean_title(raw: str | None) -> str:
+    """Titles skip the HTML path but still land in a PG text column, which
+    cannot hold NUL (0x00). str.split() doesn't drop it (NUL isn't whitespace),
+    so a single real story in 2023-07 failed that whole month's window
+    permanently. Both ingest paths must call this — text_hash consistency
+    between them depends on identical normalization."""
+    return " ".join((raw or "").replace("\x00", "").split())
+
+
 def clean_text(fragment: str | None) -> str:
     """HN item text is a small HTML fragment: <p> paragraph breaks, <i>/<a>,
     entity-encoded quotes (&#x27;, &#34; — verified live on both Algolia and the
@@ -81,7 +90,7 @@ def clean_text(fragment: str | None) -> str:
     ingest paths so text_hash stays consistent between them."""
     if not fragment:
         return ""
-    text = _P_RE.sub("\n\n", fragment)
+    text = _P_RE.sub("\n\n", fragment.replace("\x00", ""))
     text = _TAG_RE.sub("", text)
     text = html.unescape(text)
     lines = [" ".join(line.split()) for line in text.split("\n")]
@@ -101,7 +110,7 @@ def story_from_hit(hit: dict) -> dict:
     no external url (verified live: field is null) — target_url stays None and
     the canonical HN discussion page is the doc url either way."""
     item_id = str(hit["objectID"])
-    title = " ".join((hit.get("title") or "").split())
+    title = clean_title(hit.get("title"))
     text = clean_text(hit.get("story_text"))
     return {
         "id": doc_id(item_id),

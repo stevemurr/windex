@@ -38,6 +38,7 @@ from windex.config import Settings
 from windex.hn import USER_AGENT
 from windex.hn.harvest import (
     clean_text,
+    clean_title,
     doc_id,
     item_url,
     mark_window,
@@ -97,7 +98,7 @@ def stories_from_table(table: pa.Table, from_ts: int, until_ts: int) -> list[dic
         epoch = int(t.timestamp()) if isinstance(t, datetime) else int(t or 0)
         if not (from_ts <= epoch < until_ts):
             continue  # defensive: a mirror file should already be month-scoped
-        title = " ".join((row.get("title") or "").split())
+        title = clean_title(row.get("title"))
         text = clean_text(row.get("text"))
         out.append({
             "id": doc_id(row["id"]),
