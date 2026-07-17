@@ -102,3 +102,16 @@ class FakeEmbedder:
 @pytest.fixture()
 def fake_embedder():
     return FakeEmbedder()
+
+
+@pytest.fixture(autouse=True)
+def _reset_query_embed_breaker():
+    """The query-embed breaker is process-global by design (see
+    index/embed_breaker.py). Tests that embed against a dead endpoint leave real
+    failures on it, so a cold breaker per test keeps ordering from deciding
+    whether a later search embeds or short-circuits."""
+    from windex.index.embed_breaker import breaker
+
+    breaker.reset()
+    yield
+    breaker.reset()

@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 
 from windex import db
 from windex.config import Settings
+from windex.index.embed_breaker import breaker
 from windex.index.search import search as index_search
 
 RESULT_FIELDS = ("url", "title", "snippet", "source", "published_at", "outlet",
@@ -494,6 +495,9 @@ def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
             "hn": flags.get("hn_stage", "idle"),
         },
         "downloading_bytes_on_disk": in_flight,
+        # why searches are degrading right now: open = we're skipping the dense
+        # leg on purpose. Live (the metrics tile below is a 1h trailing window).
+        "embed_breaker": breaker.snapshot(settings),
         # search-performance tile: 1h p95 + degraded fallbacks (60s-cached)
         **_search_metrics_summary(settings),
     }

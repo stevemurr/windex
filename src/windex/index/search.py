@@ -11,6 +11,7 @@ from qdrant_client import models as qm
 
 from windex.config import Settings
 from windex.index import qdrant as qidx
+from windex.index.embed_breaker import EmbedBreakerOpen, breaker
 
 Mode = Literal["hybrid", "dense", "lexical"]
 
@@ -196,22 +197,40 @@ def search(
     aliases = {a.alias_name for a in client.get_aliases().aliases}
 
     # Embed the query under a deadline: heavy indexing load on the embedding
-    # server must degrade hybrid → lexical, never stall the search.
+    # server must degrade hybrid → lexical, never stall the search. The breaker
+    # skips the round trip entirely once it's a known-lost cause (embed_breaker.py).
     query_dense = None
     degraded = False
     embed_ms = 0.0
     if mode in ("hybrid", "dense"):
         from windex.embed import build_embedder
 
-        t_embed = time.monotonic()
-        try:
-            embedder = build_embedder(settings, timeout=settings.embed_query_timeout)
-            query_dense = embedder.embed_batch([settings.embed_query_prefix + q])[0]
-        except Exception:
+        if not breaker.allow(settings):
+            # Open breaker: the embed is predicted to time out, so don't spend 9s
+            # (nor add load to the GPU the pipeline needs) rediscovering that.
+            # embed_ms stays 0 — that IS the truth, we never called the embedder.
             if mode == "dense":
-                raise  # explicit dense request: fail loudly, don't change semantics
+                # Explicit dense request still fails loudly rather than quietly
+                # returning lexical results — same contract as a live failure,
+                # just without the doomed wait.
+                raise EmbedBreakerOpen(
+                    "query embedder circuit breaker is open "
+                    "(embedding server unavailable); mode=dense cannot be served"
+                )
             degraded = True
-        embed_ms = (time.monotonic() - t_embed) * 1000
+        else:
+            t_embed = time.monotonic()
+            try:
+                embedder = build_embedder(settings, timeout=settings.embed_query_timeout)
+                query_dense = embedder.embed_batch([settings.embed_query_prefix + q])[0]
+            except Exception as exc:
+                breaker.record_failure(exc, settings)
+                if mode == "dense":
+                    raise  # explicit dense request: fail loudly, don't change semantics
+                degraded = True
+            else:
+                breaker.record_success()
+            embed_ms = (time.monotonic() - t_embed) * 1000
 
     results = []
     targets = []
