@@ -300,3 +300,57 @@ def test_harvest_applies_tombstone_during_run(pg, settings):
     with pg.cursor() as cur:
         cur.execute("SELECT status FROM documents WHERE id='arxiv:2401.5'")
         assert cur.fetchone()[0] == "deleted"
+
+
+def test_plan_backfill_clamps_to_earliest_datestamp(pg):
+    """arXiv rejects a window starting before its earliestDatestamp outright
+    (badArgument: "start date too early"), so the whole year fails and stays
+    failed — losing the year's VALID tail with it. 2005 held ~3.5 months of
+    papers we never fetched because the window asked from 2005-01-01."""
+    from windex.arxiv import harvest as ah
+
+    ah.plan_backfill(pg, 2004, 2007, earliest="2005-09-16")
+    with pg.cursor() as cur:
+        cur.execute("SELECT from_date, until_date FROM arxiv_windows ORDER BY from_date")
+        rows = [(str(a), str(b)) for a, b in cur.fetchall()]
+    assert ("2004-01-01", "2004-12-31") not in rows, "year entirely before the repo existed"
+    assert ("2005-09-16", "2005-12-31") in rows, "clamped to the earliest datestamp, tail kept"
+    assert ("2006-01-01", "2006-12-31") in rows
+    assert ("2007-01-01", "2007-12-31") in rows
+
+
+def test_plan_backfill_unclamped_when_earliest_unknown(pg):
+    """Identify unreachable -> plan as before rather than refuse to work."""
+    from windex.arxiv import harvest as ah
+
+    ah.plan_backfill(pg, 2006, 2006, earliest=None)
+    with pg.cursor() as cur:
+        cur.execute("SELECT from_date FROM arxiv_windows")
+        assert str(cur.fetchone()[0]) == "2006-01-01"
+
+
+def test_reclaim_stale_frees_windows_from_a_killed_run(pg):
+    """A killed harvest leaves its window 'processing'; pending_windows() only
+    selects 'pending', so nothing ever retries it and that year is silently
+    absent from the index. 2008/2014/2015 were stranded exactly this way."""
+    from windex.arxiv import harvest as ah
+
+    with pg.cursor() as cur:
+        # stale: claimed over an hour ago by a worker that is gone
+        cur.execute("""INSERT INTO arxiv_windows (from_date, until_date, status, processed_at)
+                       VALUES ('2008-01-01','2008-12-31','processing', now() - interval '3 hours')""")
+        # live: claimed seconds ago by a running worker — must NOT be stolen
+        cur.execute("""INSERT INTO arxiv_windows (from_date, until_date, status, processed_at)
+                       VALUES ('2009-01-01','2009-12-31','processing', now())""")
+        cur.execute("""INSERT INTO arxiv_windows (from_date, until_date, status)
+                       VALUES ('2010-01-01','2010-12-31','done')""")
+    pg.commit()
+
+    assert ah.reclaim_stale(pg, older_than_minutes=60) == 1
+    pending = ah.pending_windows(pg, limit=10)
+    assert ("2008-01-01", "2008-12-31") in [(str(a), str(b)) for a, b in pending]
+    with pg.cursor() as cur:
+        cur.execute("SELECT status FROM arxiv_windows WHERE from_date='2009-01-01'")
+        assert cur.fetchone()[0] == "processing", "stole a window from a live worker"
+        cur.execute("SELECT status FROM arxiv_windows WHERE from_date='2010-01-01'")
+        assert cur.fetchone()[0] == "done"

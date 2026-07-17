@@ -160,10 +160,63 @@ def parse_records(xml_bytes: bytes) -> tuple[list[dict], str | None]:
 
 # --- window watermark ------------------------------------------------------
 
-def plan_backfill(conn: psycopg.Connection, from_year: int, to_year: int) -> int:
+def earliest_datestamp(settings: Settings) -> str | None:
+    """arXiv's OAI `Identify` earliestDatestamp (2005-09-16 as of 2026-07).
+
+    A window starting before it is rejected outright — `badArgument: ... Reason:
+    start date too early` — so the whole year fails and stays failed forever.
+    Asked rather than hardcoded: it's a property of the repository, and it moves.
+    Returns None if Identify can't be reached; callers then plan unclamped, which
+    is the pre-existing behaviour.
+    """
+    try:
+        r = httpx.get(f"{settings.arxiv_oai_endpoint}?verb=Identify",
+                      headers={"User-Agent": USER_AGENT}, timeout=30)
+        r.raise_for_status()
+        el = ET.fromstring(r.text).find(".//{http://www.openarchives.org/OAI/2.0/}earliestDatestamp")
+        return el.text.strip() if el is not None and el.text else None
+    except Exception:
+        return None
+
+
+def reclaim_stale(conn: psycopg.Connection, older_than_minutes: int = 60) -> int:
+    """Return long-'processing' windows to 'pending'.
+
+    A killed harvest leaves its window claimed forever: pending_windows() only
+    selects status='pending', so nothing ever retries it and that year is
+    silently absent from the index. Found 2026-07-17 with 2008, 2014 and 2015
+    stranded exactly this way — three years of arXiv missing, no error anywhere.
+    Windows are processed one at a time and a real one finishes in minutes, so
+    an hour of 'processing' means the worker is gone.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE arxiv_windows SET status = 'pending' WHERE status = 'processing' "
+            "AND (processed_at IS NULL OR processed_at < now() - make_interval(mins => %s))",
+            (older_than_minutes,),
+        )
+        n = cur.rowcount or 0
+    conn.commit()
+    return n
+
+
+def plan_backfill(conn: psycopg.Connection, from_year: int, to_year: int,
+                  earliest: str | None = None) -> int:
     """Insert one pending per-year window [YYYY-01-01, YYYY-12-31] for each year
-    in [from_year, to_year]. Idempotent: already-recorded years are left as-is."""
-    rows = [(f"{y}-01-01", f"{y}-12-31") for y in range(from_year, to_year + 1)]
+    in [from_year, to_year]. Idempotent: already-recorded years are left as-is.
+
+    `earliest` clamps the first window's start to the repository's earliest
+    datestamp; without it a too-early year is rejected wholesale and its valid
+    tail is lost too (2005 held ~3.5 months of papers we never fetched).
+    """
+    rows = []
+    for y in range(from_year, to_year + 1):
+        frm = f"{y}-01-01"
+        if earliest and earliest > f"{y}-12-31":
+            continue  # entirely before the repository existed — nothing to ask for
+        if earliest and earliest > frm:
+            frm = earliest  # clamp: keep the valid tail of the year
+        rows.append((frm, f"{y}-12-31"))
     with conn.cursor() as cur:
         cur.executemany(
             "INSERT INTO arxiv_windows (from_date, until_date) VALUES (%s, %s) "
@@ -433,6 +486,12 @@ def harvest(
     """Process pending windows one at a time. Returns aggregate stats. A single
     failed window is marked failed and skipped so a long backfill survives it;
     repeated back-to-back failures still abort."""
+    # A killed harvest leaves its window 'processing' forever; pending_windows()
+    # only sees 'pending', so that year is silently skipped (2008/2014/2015 were
+    # stranded exactly so). Reclaim before planning what's left to do.
+    reclaimed = reclaim_stale(conn)
+    if reclaimed:
+        console.print(f"[yellow]reclaimed {reclaimed} stale window(s) from a killed run[/yellow]")
     totals = {"windows": 0, "pages": 0, "records": 0, "staged": 0, "skipped": 0, "deleted": 0}
     consecutive_failures = 0
     own = client is None

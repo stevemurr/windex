@@ -315,7 +315,11 @@ def arxiv_harvest(
     settings = get_settings()
     with db.connect(settings.pg_dsn) as conn:
         if from_year is not None:
-            planned = aharvest.plan_backfill(conn, from_year, to_year or date.today().year)
+            # Ask arXiv how far back it serves: a window starting before its
+            # earliestDatestamp is rejected wholesale (badArgument: "start date
+            # too early"), losing that year's valid tail with it.
+            planned = aharvest.plan_backfill(conn, from_year, to_year or date.today().year,
+                                             earliest=aharvest.earliest_datestamp(settings))
             console.print(f"[green]{planned} new per-year windows planned[/green]")
         else:
             frm, until = aharvest.plan_incremental(conn, days or settings.arxiv_incremental_days)
