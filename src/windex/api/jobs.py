@@ -213,7 +213,19 @@ def stop(name: str) -> dict:
     pids = _pids(job.pattern)
     for pid in pids:
         try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            # Only nuke the process group when this pid LEADS it. start() uses
+            # start_new_session=True, so a job we launched owns its group and
+            # killpg cleanly takes its children too. But a job started any other
+            # way (shell loop, script, cron) can share its parent's group with
+            # unrelated siblings — killpg there stops every other embed loop as
+            # collateral. Reported 2026-07-17: "stopping one embed job stopped
+            # them all". _pids already matches this job's own processes, so
+            # killing them directly is the correct fallback.
+            pgid = os.getpgid(pid)
+            if pgid == pid:
+                os.killpg(pgid, signal.SIGTERM)
+            else:
+                os.kill(pid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError):
             try:
                 os.kill(pid, signal.SIGTERM)

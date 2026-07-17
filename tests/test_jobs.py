@@ -168,3 +168,33 @@ def test_job_patterns_match_their_own_argv():
         argv = build_argv(j, {})
         cmdline = " ".join(["windex", *argv[1:]])
         assert j.pattern in cmdline, f"{j.name}: pattern {j.pattern!r} won't match {cmdline!r}"
+
+
+def test_stop_does_not_kill_a_shared_process_group(monkeypatch):
+    """Regression (2026-07-17, user-reported: "stopping one embed job stopped
+    them all"). start() uses start_new_session=True, so a job we launch leads
+    its own group and killpg cleanly takes its children. A job started any other
+    way (shell loop, script, cron) can share its parent's group with unrelated
+    siblings — killpg there stops every other loop as collateral."""
+    import os
+    import signal
+
+    from windex.api import jobs
+
+    killed_groups, killed_pids = [], []
+    monkeypatch.setattr(jobs, "_pids", lambda pattern: [4242])
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: killed_groups.append(pgid))
+    monkeypatch.setattr(os, "kill", lambda pid, sig: killed_pids.append(pid))
+
+    # Shared group (pid is NOT the leader): must kill only this pid.
+    monkeypatch.setattr(os, "getpgid", lambda pid: 999)
+    jobs.stop("wiki-embed")
+    assert killed_groups == [], "killpg on a shared group takes out sibling jobs"
+    assert killed_pids == [4242]
+
+    # Own group (pid leads it): killpg is safe and catches children.
+    killed_groups.clear(); killed_pids.clear()
+    monkeypatch.setattr(os, "getpgid", lambda pid: 4242)
+    jobs.stop("wiki-embed")
+    assert killed_groups == [4242]
+    assert killed_pids == []
