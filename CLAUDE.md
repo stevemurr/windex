@@ -25,6 +25,7 @@ and link to things. Full design/plan: `~/.claude/plans/i-want-to-build-functiona
 
 ## Commands
 - `scripts/dev.sh up` — start postgres:5432 + qdrant:6333
+- Metrics: `windex serve` exposes Prometheus `/metrics` on :8100, scraped by the user's self-hosted Prometheus/Grafana on 192.168.1.237 (config to paste in `ops/`).
 - `uv run windex init-db` / `health` / `ensure-collections`
 - `uv run pytest`
 

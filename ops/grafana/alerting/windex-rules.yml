@@ -1,0 +1,244 @@
+# windex alert rules for the Grafana on the services box (192.168.1.237),
+# Grafana-managed + file-provisioned.
+#
+# HOW TO USE (two options):
+#   A) File provisioning — copy this file into that Grafana's
+#      provisioning/alerting/ dir and restart/reload it. FIRST replace every
+#      `REPLACE_WITH_PROMETHEUS_DS_UID` below with the uid of their Prometheus
+#      datasource (find it: Grafana > Connections > Data sources > Prometheus,
+#      the uid is in the URL, or `GET /api/datasources` -> the prometheus row's
+#      "uid"). The `__expr__` datasource is Grafana's built-in server-side
+#      expression engine — leave those as-is.
+#   B) UI import — Alerting > Alert rules > New/Import, recreate each rule with
+#      the same query + threshold; pick the Prometheus datasource from the
+#      dropdown (no uid editing needed).
+#
+# No notification channel exists on this box (no SMTP / webhook), so rules route
+# to Grafana's default contact point and fire IN-UI only (the Alerting bell / the
+# Alert rules list). Wire a contact point + notification policy when a channel
+# exists.
+#
+# Each rule is a Prometheus instant query (refId A) feeding a threshold
+# expression (refId C) that decides firing; `for:` is the sustain window.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: windex-fleet
+    folder: windex
+    interval: 1m
+    rules:
+      # The 2026-07-17 incident detector. A 25-min gateway outage silently
+      # stalled the whole indexing pipeline for ~36h because nothing watched
+      # throughput-vs-backlog. This rule is the tripwire so that can't recur:
+      # embed throughput flatlined to zero WHILE a real backlog is waiting.
+      - uid: windex-embeds-stalled
+        title: EmbedsStalled
+        condition: C
+        for: 15m
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: REPLACE_WITH_PROMETHEUS_DS_UID
+            model:
+              refId: A
+              # 1 iff embedded throughput is exactly zero over 15m AND >1000 docs
+              # sit deduped-but-unembedded; 0 otherwise. Product of two boolean
+              # aggregations (both label-less, so they join on the empty set).
+              expr: '(sum(rate(windex_documents{status="embedded"}[15m])) == bool 0) * (sum(windex_documents{status="deduped"}) > bool 1000)'
+              instant: true
+              range: false
+              editorMode: code
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: "Embedding pipeline has stalled with a backlog waiting"
+          description: >-
+            Embed throughput has been zero for 15m while >1000 docs are deduped
+            but unembedded. This is the 2026-07-17 failure mode: a 25-min
+            gateway outage silently stalled indexing for ~36h because no alert
+            watched throughput against backlog. Check the embed loops
+            (windex_loop_up), the embedding gateway (windex_gateway_up), and
+            embed-<source> log staleness on the windex ops dashboard.
+
+      # Any per-source ingest/embed loop process is down.
+      - uid: windex-loop-down
+        title: LoopDown
+        condition: C
+        for: 10m
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: REPLACE_WITH_PROMETHEUS_DS_UID
+            model:
+              refId: A
+              # Keeps the {source} label so the firing instance names the loop.
+              expr: windex_loop_up
+              instant: true
+              range: false
+              editorMode: code
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: lt
+                    params: [1]
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: "A windex ingest/embed loop is down ({{ $labels.source }})"
+          description: >-
+            windex_loop_up == 0 for 10m. The named source's loop process is not
+            running; its backlog will grow until it is restarted.
+
+      # The embedding gateway (upstream model endpoint) is unreachable.
+      - uid: windex-gateway-down
+        title: GatewayDown
+        condition: C
+        for: 5m
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: REPLACE_WITH_PROMETHEUS_DS_UID
+            model:
+              refId: A
+              expr: windex_gateway_up
+              instant: true
+              range: false
+              editorMode: code
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: lt
+                    params: [1]
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: "Embedding gateway is down"
+          description: >-
+            windex_gateway_up == 0 for 5m. The user-supplied embedding endpoint
+            is unreachable; embedding will stall (see EmbedsStalled) until it
+            recovers. This was the trigger of the 2026-07-17 incident.
+
+      # Postgres (metadata + watermarks + dedup ledgers) is unreachable.
+      - uid: windex-db-down
+        title: DbDown
+        condition: C
+        for: 5m
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: REPLACE_WITH_PROMETHEUS_DS_UID
+            model:
+              refId: A
+              expr: windex_db_up
+              instant: true
+              range: false
+              editorMode: code
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: lt
+                    params: [1]
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: "Postgres is down"
+          description: >-
+            windex_db_up == 0 for 5m. Metadata, state watermarks and dedup
+            ledgers are unreachable; every job that writes state will fail or
+            wedge. Often a transient host<->container port-forward drop under
+            Apple's container CLI.
+
+      # Qdrant (vector store) is unreachable — dense search + upserts fail.
+      - uid: windex-qdrant-down
+        title: QdrantDown
+        condition: C
+        for: 5m
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: REPLACE_WITH_PROMETHEUS_DS_UID
+            model:
+              refId: A
+              expr: windex_qdrant_up
+              instant: true
+              range: false
+              editorMode: code
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: lt
+                    params: [1]
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: "Qdrant is down"
+          description: >-
+            windex_qdrant_up == 0 for 5m. The vector store is unreachable: dense
+            search returns nothing (or errors) and embedding upserts fail. Check
+            the qdrant container on the windex host.
