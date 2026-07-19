@@ -24,7 +24,12 @@ def _qdrant(settings: Settings) -> QdrantClient:
     one per request meant a fresh pool (and handshake) for every search."""
     global _client
     if _client is None:
-        _client = QdrantClient(url=settings.qdrant_url)
+        # Via client_from_url so the query timeout is owned in ONE place —
+        # this used to build its own client and silently kept the 5s default
+        # while qdrant.py's was raised, 500ing cold searches (2026-07-19).
+        from windex.index.qdrant import client_from_url
+
+        _client = client_from_url(settings.qdrant_url)
     return _client
 
 

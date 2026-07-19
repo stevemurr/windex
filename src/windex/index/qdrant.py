@@ -55,7 +55,13 @@ def alias_name(source: str) -> str:
 
 
 def client_from_url(url: str) -> QdrantClient:
-    return QdrantClient(url=url)
+    # 30s, not the client's 5s default: the int8 copies are mmap'd off the
+    # external disk (always_ram=False below) and six embed loops' upserts keep
+    # evicting them, so a COLD dense query measured 4.2-6.2s (2026-07-19) —
+    # straddling the default and 500ing searches from a fresh serve process.
+    # Warm queries are ~0s. Slow-but-answered beats a timeout; the Grafana
+    # search-latency histogram now shows the cold tail directly.
+    return QdrantClient(url=url, timeout=30)
 
 
 def ensure_collection(client: QdrantClient, source: str, model_id: str, dim: int) -> str:
