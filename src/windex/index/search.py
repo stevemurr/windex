@@ -12,6 +12,7 @@ from qdrant_client import models as qm
 from windex.config import Settings
 from windex.index import qdrant as qidx
 from windex.index.embed_breaker import EmbedBreakerOpen, breaker
+from windex.metrics import QUERY_EMBED_DURATION, QUERY_EMBED_FAILURES
 
 Mode = Literal["hybrid", "dense", "lexical"]
 
@@ -248,12 +249,19 @@ def search(
                 query_dense = embedder.embed_batch([settings.embed_query_prefix + q])[0]
             except Exception as exc:
                 breaker.record_failure(exc, settings)
+                QUERY_EMBED_FAILURES.inc()
                 if mode == "dense":
                     raise  # explicit dense request: fail loudly, don't change semantics
                 degraded = True
             else:
                 breaker.record_success()
-            embed_ms = (time.monotonic() - t_embed) * 1000
+            finally:
+                # Observe every real attempt (success OR failure, including the
+                # mode=dense re-raise via finally); the breaker short-circuit above
+                # never reaches this branch, so the histogram measures only genuine
+                # round trips — which is what its deadline caveat means.
+                embed_ms = (time.monotonic() - t_embed) * 1000
+                QUERY_EMBED_DURATION.observe(embed_ms / 1000.0)
 
     results = []
     targets = []

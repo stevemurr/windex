@@ -14,6 +14,7 @@ from windex import db
 from windex.config import Settings
 from windex.index.embed_breaker import breaker
 from windex.index.search import search as index_search
+from windex.metrics import SEARCH_DURATION, SEARCH_REQUESTS
 
 RESULT_FIELDS = ("url", "title", "snippet", "source", "published_at", "outlet",
                  "stars", "language", "topics", "pushed_at", "lang", "incoming_links",
@@ -41,12 +42,20 @@ def run_search(
     kind: str | None = None,
 ) -> dict:
     t0 = time.monotonic()
-    resp = index_search(
-        settings, q, source=source, limit=limit, mode=mode,
-        published_after=published_after, published_before=published_before,
-        min_stars=min_stars, language=language, category=category, outlet=outlet,
-        framework=framework, min_points=min_points, root=root, kind=kind,
-    )
+    try:
+        resp = index_search(
+            settings, q, source=source, limit=limit, mode=mode,
+            published_after=published_after, published_before=published_before,
+            min_stars=min_stars, language=language, category=category, outlet=outlet,
+            framework=framework, min_points=min_points, root=root, kind=kind,
+        )
+    except Exception:
+        # result=error covers e.g. an explicit mode=dense raised through the open
+        # breaker, or Qdrant being unreachable. Still record duration so the
+        # histogram isn't silently missing the slow-failure tail.
+        SEARCH_REQUESTS.labels(mode=mode, result="error").inc()
+        SEARCH_DURATION.observe(time.monotonic() - t0)
+        raise
     results = []
     for r in resp["results"]:
         item = {"id": r.get("doc_id"), "score": round(r["score"], 4)}
@@ -61,7 +70,10 @@ def run_search(
         "took_ms": total_ms,
     }
     # Both front doors (REST /v1/search and the MCP search_index tool) call
-    # run_search, so recording here covers every search path.
+    # run_search, so recording here — Prometheus counters + the search_metrics
+    # row — covers every search path.
+    SEARCH_REQUESTS.labels(mode=mode, result="degraded" if resp["degraded"] else "ok").inc()
+    SEARCH_DURATION.observe(total_ms / 1000.0)
     _record_search_metric(settings, q, source, mode, resp["degraded"],
                           response["timings"], len(results))
     return response

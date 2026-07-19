@@ -6,12 +6,12 @@ from importlib.resources import files
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from fastapi import Body
 
-from windex.api import jobs, logs, service
+from windex.api import jobs, logs, prom, service
 from windex.config import get_settings
 
 STARTED_AT = time.time()  # serve-process uptime for the console
@@ -84,6 +84,16 @@ def metrics(minutes: int = Query(60, ge=1, le=43200)) -> dict:
     """Search-performance rollup: latency percentiles + hybrid→keyword
     degradation counts over the trailing window."""
     return service.get_search_metrics(get_settings(), minutes=minutes)
+
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics() -> Response:
+    """Prometheus exposition (src/windex/api/prom.py). Not `/v1/*`: this is an
+    ops scrape target for Grafana/Prometheus, deliberately outside the versioned
+    agent-facing contract. Never 500s — a DB outage still returns a page with
+    windex_db_up 0 (see the collector) so the very outage it should catch is
+    visible rather than a scrape error."""
+    return Response(prom.render(get_settings()), media_type=prom.CONTENT_TYPE_LATEST)
 
 
 @app.get("/v1/recent")
@@ -195,3 +205,9 @@ async def events(ticks: int | None = Query(None, ge=1, le=100)) -> StreamingResp
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# HTTP RED metrics (windex/api/prom.py). Registered last, after every route is
+# defined, so the middleware's route-template resolver sees the full routing
+# table (the live routes list, not a copy).
+app.add_middleware(prom.PrometheusMiddleware, routes=app.router.routes)
