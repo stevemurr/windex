@@ -2,6 +2,7 @@
 (id gh:owner/repo) with text_ref into clean parquet, mirroring the news flow so
 /v1/docs works identically for both sources."""
 
+import logging
 import time
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from windex.embed import build_embedder
 from windex.github.clean import clean_readme, compose_doc
 from windex.index import qdrant as qidx
 
+log = logging.getLogger("windex.github.embed_index")
+
 CLEAN_SCHEMA = pa.schema(
     [("id", pa.string()), ("full_name", pa.string()), ("text", pa.string())]
 )
@@ -29,9 +32,16 @@ def _readmes(readme_dir: Path) -> dict[int, str]:
     if not readme_dir.exists():
         return out
     for f in sorted(readme_dir.glob("*.parquet")):
-        for batch in pq.ParquetFile(f).iter_batches(batch_size=1024):
-            for row in batch.to_pylist():
-                out[row["repo_id"]] = row["readme"]
+        # Belt-and-suspenders beyond hydrate's write-then-rename: a file can
+        # still be truncated out from under us (the external volume has detached
+        # mid-read on this box). Skip the one bad file loudly rather than let it
+        # raise and fail every embed cycle for every repo.
+        try:
+            for batch in pq.ParquetFile(f).iter_batches(batch_size=1024):
+                for row in batch.to_pylist():
+                    out[row["repo_id"]] = row["readme"]
+        except Exception as e:
+            log.warning("skipping unreadable readme parquet %s: %r", f, e)
     return out
 
 

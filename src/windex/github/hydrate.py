@@ -5,6 +5,8 @@ parquet (staging/repos/readme/) keyed by repo; documents rows appear later at
 the clean/embed step."""
 
 import json
+import logging
+import os
 import time
 from pathlib import Path
 
@@ -12,6 +14,8 @@ import httpx
 import psycopg
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+log = logging.getLogger("windex.github.hydrate")
 
 API = "https://api.github.com/graphql"
 BATCH = 40
@@ -100,12 +104,26 @@ def hydrate(
 
     pool = TokenPool(tokens)
     readme_dir.mkdir(parents=True, exist_ok=True)
+    # A previous run SIGKILLed mid-close leaves a *.parquet.tmp with no footer
+    # (unreadable). The embed loop's *.parquet glob already ignores .tmp, but we
+    # sweep them so they don't accrete — the repos they'd have covered simply
+    # refetch their READMEs whenever they are re-hydrated.
+    for stale in sorted(readme_dir.glob("*.parquet.tmp")):
+        log.warning("removing stale in-progress readme parquet from a prior run: %s", stale)
+        stale.unlink()
     stats = {"hydrated": 0, "below_threshold": 0, "gone": 0, "readmes": 0}
     stage_ctx = wdb.stage(conn, "gh_stage", "hydrating repos (metadata + READMEs)")
     stage_ctx.__enter__()
     stamp = time.strftime("%Y%m%d-%H%M%S")
     writer: pq.ParquetWriter | None = None
-    parquet_name = f"{stamp}.parquet"
+    # Write under a .tmp name the embed loop's *.parquet glob cannot match, then
+    # atomically rename to the final name only after the footer is written. An
+    # open ParquetWriter has no footer until close(), so a concurrent reader that
+    # globbed the live file got "Parquet magic bytes not found in footer" and
+    # circuit-broke the whole embed loop (2026-07-17); the rename closes that race.
+    final_name = f"{stamp}.parquet"
+    tmp_path = readme_dir / f"{stamp}.parquet.tmp"
+    final_path = readme_dir / final_name
 
     try:
         with httpx.Client(timeout=60) as client:
@@ -161,7 +179,7 @@ def hydrate(
                 conn.commit()
                 if readme_rows:
                     if writer is None:
-                        writer = pq.ParquetWriter(readme_dir / parquet_name, README_SCHEMA)
+                        writer = pq.ParquetWriter(tmp_path, README_SCHEMA)
                     writer.write_batch(
                         pa.record_batch(
                             [
@@ -175,9 +193,14 @@ def hydrate(
                     stats["readmes"] += len(readme_rows)
     finally:
         if writer is not None:
+            # close() flushes the footer for whatever rows were written; publish
+            # even while an exception unwinds — those repos are already marked
+            # 'hydrated' in the committed DB, so a partial-but-valid file beats
+            # losing the batch and embedding them with no README.
             writer.close()
+            os.replace(tmp_path, final_path)
         stage_ctx.__exit__(None, None, None)
-    stats["readme_file"] = parquet_name if writer is not None else None
+    stats["readme_file"] = final_name if writer is not None else None
     return stats
 
 
