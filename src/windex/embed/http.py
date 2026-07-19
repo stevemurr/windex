@@ -44,7 +44,13 @@ class HttpEmbedder(Embedder):
             except (httpx.HTTPError, KeyError, ValueError) as exc:
                 last_exc = exc
                 time.sleep(2**attempt)
-        raise RuntimeError(f"embedding request failed after {self.retries} attempts") from last_exc
+        # The cause goes INTO the message: consumers log str(exc) only, and
+        # `from last_exc` alone left the real error invisible — during the
+        # 2026-07-19 gateway flap every loop logged "failed after 3 attempts"
+        # with no way to tell no-route from 429 from a validation error.
+        raise RuntimeError(
+            f"embedding request failed after {self.retries} attempts: {last_exc!r}"
+        ) from last_exc
 
     def _request(self, texts: list[str]) -> list[list[float]]:
         if self.style == "tei":
