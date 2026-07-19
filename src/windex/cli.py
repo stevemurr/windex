@@ -75,11 +75,27 @@ def _processor_alive() -> bool:
 @ccnews_app.command("embed-loop")
 def ccnews_embed_loop(
     interval: int = 30,
-    max_consecutive_failures: int = 10,
+    max_consecutive_failures: int = typer.Option(
+        10,
+        help="Consecutive-failure count at which the loop logs one louder "
+             "'endpoint appears down' line and enters down-mode. It NEVER exits "
+             "on failures — it keeps probing on the backoff.",
+    ),
 ) -> None:
     """Long-running embed drainer: follows the processor, backs off on errors,
-    and circuit-breaks (exit code 2) instead of spinning against dead services.
-    Exits cleanly when the backlog is drained and no processor is running."""
+    and probes a dead endpoint forever rather than exiting. Exits cleanly only
+    when the backlog is drained and no processor is running.
+
+    It used to circuit-break (exit 2) on 10 consecutive failures to spare a
+    saturated embedder, but that backfired: on 2026-07-17 ~22:17 a ~25-minute
+    gateway (LiteLLM) outage made every loop exit, and nothing supervises the
+    loops (the watchdog guards only the postgres/qdrant containers), so a short
+    blip stalled indexing ~36 hours. Waiting is now nearly free — a down gateway
+    refuses connections instantly, a saturated one is bounded by the flock budget
+    plus the bulk key's 6-concurrent cap — so the loop keeps probing;
+    --max-consecutive-failures only marks when it announces the endpoint looks
+    down. See `windex embed-loop` for the full rationale.
+    """
     import time as time_mod
 
     from windex.ccnews.embed_index import embed_pending
@@ -104,11 +120,16 @@ def ccnews_embed_loop(
         except Exception as exc:
             failures += 1
             console.print(
-                f"[red]embed cycle failed ({failures}/{max_consecutive_failures}): {exc}[/red]"
+                f"[red]embed cycle failed ({failures} consecutive): {exc}[/red]"
             )
-            if failures >= max_consecutive_failures:
-                console.print("[red]circuit breaker tripped — exiting[/red]")
-                raise typer.Exit(2)
+            if failures == max_consecutive_failures:
+                # Cross into down-mode: announce once, keep probing. Exiting here
+                # (the old circuit breaker) is what turned the 25-minute gateway
+                # outage into a ~36h indexing stall on 2026-07-17.
+                console.print(
+                    f"[bold red]embedder endpoint appears down after {failures} "
+                    f"consecutive failures — continuing to probe every 300s[/bold red]"
+                )
             time_mod.sleep(min(interval * failures, 300))
 
 
@@ -666,7 +687,12 @@ EMBED_SOURCES = {
 def embed_loop(
     source: str = typer.Argument(..., help=f"one of: {', '.join(EMBED_SOURCES)}"),
     interval: int = 30,
-    max_consecutive_failures: int = 10,
+    max_consecutive_failures: int = typer.Option(
+        10,
+        help="Consecutive-failure count at which the loop logs one louder "
+             "'endpoint appears down' line and enters down-mode. It NEVER exits "
+             "on failures — it keeps probing on the backoff.",
+    ),
 ) -> None:
     """Supervised embed drainer for any source — the unattended entrypoint.
 
@@ -674,9 +700,23 @@ def embed_loop(
     failure and the process dies, silently stopping that source until a human
     notices. On 2026-07-17 a saturated embedder killed 5 of 6 backfills that way
     within minutes; only ccnews survived, because it alone ran under a loop.
-    A ~15-day backfill cannot depend on the embedder never hiccuping, so every
-    source gets the same supervision: back off, retry, and circuit-break (exit 2)
-    rather than spin against something that is genuinely down.
+
+    So the loop backs off and retries *forever* — it never exits on consecutive
+    failures. It used to circuit-break (exit 2) to avoid piling retries onto a
+    saturated GPU, but that rationale is now obsolete. The model sits behind a
+    gateway with per-tier keys: a DOWN gateway refuses connections instantly, so
+    a retry costs nothing, and a SATURATED one is bounded by the fleet-wide flock
+    budget (embed/budget.py) plus the bulk key's server-side 6-concurrent cap —
+    HttpEmbedder already caps its own retries at 3. Waiting is nearly free;
+    exiting is not. On 2026-07-17 ~22:17 the gateway (LiteLLM) went down for
+    ~25 minutes and every loop burned its 10 failures and exited by design — but
+    nothing supervises the loops (the watchdog guards only the postgres/qdrant
+    containers), so a 25-minute blip stalled indexing for ~36 hours with 11.7M
+    docs staged. A loop that had simply kept probing every ~5 minutes would have
+    self-healed the moment the gateway returned.
+
+    --max-consecutive-failures no longer trips a breaker: crossing it just logs
+    (once) that the endpoint looks down, so the log says the stall is on purpose.
     """
     import importlib
     import time as time_mod
@@ -698,7 +738,9 @@ def embed_loop(
                     continue
                 n = embed_pending(conn, settings)
             failures = 0
-            console.print(f"[{source}] embedded {n} docs")
+            # Escape the source tag: rich reads a bare "[wiki]" as markup and
+            # silently swallows it, so the log would omit which loop spoke.
+            console.print(rf"\[{source}] embedded {n} docs")
             if n == 0:
                 # Nothing staged: idle rather than exit. Upstream ingest may
                 # still be running, and a drained queue is not a finished one.
@@ -706,12 +748,18 @@ def embed_loop(
         except Exception as exc:
             failures += 1
             console.print(
-                f"[red][{source}] embed cycle failed "
-                f"({failures}/{max_consecutive_failures}): {exc}[/red]"
+                rf"[red]\[{source}] embed cycle failed "
+                rf"({failures} consecutive): {exc}[/red]"
             )
-            if failures >= max_consecutive_failures:
-                console.print("[red]circuit breaker tripped — exiting[/red]")
-                raise typer.Exit(2)
+            if failures == max_consecutive_failures:
+                # Cross into down-mode: say so once, loudly, then keep probing on
+                # the same backoff. Exiting here (the old circuit breaker) is what
+                # turned the 25-minute gateway outage into a ~36h indexing stall.
+                console.print(
+                    rf"[bold red]\[{source}] endpoint appears down after {failures} "
+                    rf"consecutive failures — continuing to probe every 300s[/bold red]"
+                )
+            # Backoff caps at 300s, so a dead endpoint is re-probed ~every 5 min.
             time_mod.sleep(min(interval * failures, 300))
 
 

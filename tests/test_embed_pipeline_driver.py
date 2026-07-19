@@ -186,8 +186,8 @@ def test_unreadable_staging_raises_instead_of_silently_short_passing(
 ):
     """The staging drive has detached mid-run before. Reading now happens on a
     background thread, so its failure must still reach the caller — embed-loop
-    circuit-breaks on a raise, but would spin forever on a pass that quietly
-    returns 0."""
+    backs off and re-probes on a raise, but would read a pass that quietly
+    returns 0 as a drained queue and stop making progress."""
     monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
     fake = FakeQdrant()
     monkeypatch.setattr(embed_pipeline, "QdrantClient", lambda **kw: fake)

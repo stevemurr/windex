@@ -178,10 +178,15 @@ def test_embed_loop_covers_every_embeddable_source():
         assert hasattr(importlib.import_module(mod), "embed_pending"), src
 
 
-def test_embed_loop_retries_then_circuit_breaks(settings, pg, monkeypatch):
-    """A transient failure must not kill the loop; a persistent one must not
-    spin forever."""
+def test_embed_loop_probes_forever_after_max_failures(settings, pg, monkeypatch):
+    """A persistent outage must NOT kill the loop: it keeps retrying on the
+    backoff and announces (once) that the endpoint looks down. Exiting used to
+    strand the whole backlog when a ~25-min gateway blip tripped every loop
+    (2026-07-17); --max-consecutive-failures now only marks down-mode."""
     import windex.wiki.embed_index as wiki_embed
+
+    class _Stop(Exception):
+        pass
 
     calls = []
 
@@ -189,9 +194,15 @@ def test_embed_loop_retries_then_circuit_breaks(settings, pg, monkeypatch):
         calls.append(1)
         raise RuntimeError("embedding request failed after 3 attempts")
 
+    def stop_after_a_few(_):
+        if len(calls) >= 5:  # threshold (3) + 2: prove it kept going past it
+            raise _Stop
+
     _use_test_settings(monkeypatch, settings)
     monkeypatch.setattr(wiki_embed, "embed_pending", boom)
-    monkeypatch.setattr("time.sleep", lambda s: None)
+    monkeypatch.setattr("time.sleep", stop_after_a_few)
     r = runner.invoke(app, ["embed-loop", "wiki", "--max-consecutive-failures", "3"])
-    assert r.exit_code == 2, "should circuit-break, not raise or hang"
-    assert len(calls) == 3, f"should retry to the limit, got {len(calls)} attempts"
+    assert isinstance(r.exception, _Stop), "loop must not exit on its own"
+    assert r.exit_code != 2, "must not circuit-break"
+    assert len(calls) >= 5, f"should keep retrying past the limit, got {len(calls)}"
+    assert "endpoint appears down after 3 consecutive failures" in r.output

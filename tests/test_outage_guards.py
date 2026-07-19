@@ -71,18 +71,35 @@ def test_embed_pending_fails_fast_when_qdrant_down(pg, settings, fake_embedder, 
     assert time.monotonic() - t0 < 30  # raise, don't spin
 
 
-def test_embed_loop_circuit_breaker_exits(settings, monkeypatch):
+def test_embed_loop_stays_up_after_max_failures(settings, monkeypatch):
+    """A persistent outage must NOT exit the loop — it used to circuit-break at
+    the failure limit, and on 2026-07-17 a ~25-min gateway blip tripped every
+    loop that way and stranded an 11.7M-doc backlog for ~36h. The loop now keeps
+    probing on the backoff and only announces (once) that the endpoint is down."""
     import windex.ccnews.embed_index as news_embed
+
+    class _Stop(Exception):
+        pass
+
+    sleeps = []
+
+    def stop_after_a_few(_):
+        sleeps.append(1)
+        if len(sleeps) >= 5:  # threshold (3) + 2: prove it kept going past it
+            raise _Stop
 
     monkeypatch.setattr(cli_mod, "get_settings", lambda: settings)
     monkeypatch.setattr(
         news_embed, "embed_pending",
-        lambda conn, s, limit=50_000: (_ for _ in ()).throw(RuntimeError("qdrant down")),
+        lambda conn, s, limit=50_000: (_ for _ in ()).throw(RuntimeError("gateway down")),
     )
-    monkeypatch.setattr("time.sleep", lambda s: None)
+    monkeypatch.setattr("time.sleep", stop_after_a_few)
     result = runner.invoke(app, ["ccnews", "embed-loop", "--max-consecutive-failures", "3"])
-    assert result.exit_code == 2
-    assert "circuit breaker tripped" in result.output
+    assert isinstance(result.exception, _Stop)  # only our sentinel stopped it
+    assert result.exit_code != 2  # never circuit-broke
+    assert "circuit breaker" not in result.output
+    assert "endpoint appears down after 3 consecutive failures" in result.output
+    assert len(sleeps) >= 5  # kept probing past the limit
 
 
 def test_embed_loop_exits_when_drained_and_no_processor(pg, settings, monkeypatch):
