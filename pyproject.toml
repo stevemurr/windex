@@ -14,6 +14,10 @@ dependencies = [
     "pyarrow>=17",
     "rich>=13",
     "psycopg-pool>=3.3.1",
+    # Direct dep (was transitive via datatrove): hot-path JSON. Measured
+    # 2026-07-19 on real data: 1.8x on GH Archive event parse, 5.8-9.4x on
+    # API response dumps, 1.3x on wiki cirrus lines.
+    "orjson>=3.9",
 ]
 
 [project.optional-dependencies]
@@ -29,8 +33,11 @@ pipeline = [
 # Serving layer
 api = [
     "fastapi>=0.115",
-    "uvicorn>=0.30",
+    # [standard] = uvloop + httptools (C event loop + parser); without them
+    # uvicorn falls back to pure-Python asyncio/h11 (noticed 2026-07-19).
+    "uvicorn[standard]>=0.30",
     "fastmcp>=2.0",
+    "prometheus-client>=0.20",  # GET /metrics exposition (src/windex/api/prom.py)
 ]
 # Only needed if the user's embedding model runs in-process instead of behind HTTP
 st = [
