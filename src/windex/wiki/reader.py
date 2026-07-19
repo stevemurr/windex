@@ -16,7 +16,7 @@ pairing, field names, bzip2, URL derivation) lives here so a different upstream
 
 import bz2
 import io
-import json
+import orjson
 from collections.abc import Iterable, Iterator
 from urllib.parse import quote
 
@@ -115,9 +115,9 @@ def iter_articles(lines: Iterable[str], namespace: int = CONTENT_NAMESPACE) -> I
         except StopIteration:
             return  # dangling action at a truncation boundary
         try:
-            action = json.loads(action_line)
-            doc = json.loads(doc_line)
-        except (json.JSONDecodeError, ValueError):
+            action = orjson.loads(action_line)
+            doc = orjson.loads(doc_line)
+        except ValueError:  # orjson.JSONDecodeError subclasses ValueError
             continue
         if not isinstance(action, dict) or "index" not in action:
             continue
