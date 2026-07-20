@@ -550,6 +550,113 @@ def set_control(settings: Settings, value: str) -> str:
     return value
 
 
+# --- per-source embed-loop desired-state (the on/off that must STICK) ---
+# A `loop_<source>` control flag is the single source of truth honored by BOTH
+# `windex up` (won't start a disabled source) and the watchdog (a disabled+stopped
+# loop is not in status --json's `down` list, so it's never auto-restarted). That
+# is what stops the supervisor from fighting a manual "off".
+
+def get_loops_enabled(settings: Settings) -> dict[str, bool]:
+    """{source: enabled} from the loop_<source> flags (default enabled). DB
+    unreachable ⇒ assume enabled — never leave a loop off because a flag read
+    failed."""
+    from windex.api import jobs
+
+    sources = [j.argv[1] for j in jobs.embed_loop_jobs()]
+    try:
+        with db.pooled(settings.pg_dsn) as conn:
+            return {s: db.get_control(conn, f"loop_{s}", "enabled") != "disabled"
+                    for s in sources}
+    except Exception:  # noqa: BLE001 — a flag-read failure must not disable loops
+        return {s: True for s in sources}
+
+
+def loop_states(settings: Settings) -> list[dict]:
+    """Per-source {source, enabled, running, state, pids} for status + the
+    console. state = up (running) | down (enabled but not running — the gap the
+    watchdog closes) | disabled (intentionally off)."""
+    from windex.api import jobs
+
+    enabled = get_loops_enabled(settings)
+    out = []
+    for job in jobs.embed_loop_jobs():
+        src = job.argv[1]
+        pids = jobs._pids(job.pattern)
+        en = enabled.get(src, True)
+        out.append({
+            "source": src, "enabled": en, "running": bool(pids),
+            "state": "up" if pids else ("down" if en else "disabled"), "pids": pids,
+        })
+    return out
+
+
+def set_loop_enabled(settings: Settings, source: str, enabled: bool) -> dict:
+    """Set a source's desired-state and reconcile the process now: enable starts
+    the loop (if down); disable stops it and keeps it off. Raises KeyError for an
+    unknown source."""
+    from windex.api import jobs
+
+    job = next((j for j in jobs.embed_loop_jobs() if j.argv[1] == source), None)
+    if job is None:
+        raise KeyError(source)
+    with db.pooled(settings.pg_dsn) as conn:
+        db.set_control(conn, f"loop_{source}", "enabled" if enabled else "disabled")
+    if enabled and not jobs._pids(job.pattern):
+        jobs.start(job.name, {})
+    elif not enabled:
+        jobs.stop(job.name)
+    return {"source": source, "enabled": enabled, "state": ("up" if enabled else "disabled")}
+
+
+def supervisor_status(settings: Settings) -> dict:
+    """Is the watchdog (supervisor) process alive, and the per-loop states it
+    acts on — for the console's supervision panel."""
+    from windex.api import jobs
+
+    return {"watchdog_running": bool(jobs._pids("scripts/watchdog.sh")),
+            "loops": loop_states(settings)}
+
+
+def set_all_loops_enabled(settings: Settings, enabled: bool) -> list[dict]:
+    """Bulk on/off for every source (the console's 'start all' / 'stop all')."""
+    from windex.api import jobs
+
+    return [set_loop_enabled(settings, j.argv[1], enabled) for j in jobs.embed_loop_jobs()]
+
+
+def _spawn_windex(args: list[str], log_name: str) -> int:
+    """Detach a `windex <args>` subprocess (the API can't block on a long
+    lifecycle command). Reuses the jobs spawn machinery + log rotation."""
+    from windex.api import jobs
+
+    return jobs._spawn(log_name, [str(jobs.VENV_BIN / "windex"), *args])
+
+
+def system_up(settings: Settings) -> dict:
+    """Detached `windex up` — reconcile to desired state (start enabled loops and
+    serve that are down). Returns immediately; progress in system-up.log."""
+    return {"action": "up", "pid": _spawn_windex(["up"], "system-up")}
+
+
+def restart_loops(settings: Settings) -> dict:
+    """Bounce the loops: stop every one, then detached `windex up` restarts the
+    ENABLED ones (disabled stay off)."""
+    from windex.api import jobs
+
+    for job in jobs.embed_loop_jobs():
+        jobs.stop(job.name)
+    return {"action": "restart", "pid": _spawn_windex(["up"], "system-up")}
+
+
+def run_refresh(settings: Settings, sources: list[str] | None = None) -> dict:
+    """Detached freshness sweep (`windex refresh [--source …]`); its own guard
+    skips if a sweep is already running."""
+    args = ["refresh"]
+    for s in sources or []:
+        args += ["--source", s]
+    return {"action": "refresh", "pid": _spawn_windex(args, "system-refresh")}
+
+
 def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
     stats = dict(_pg_stats(settings, ttl=ttl))
 
@@ -596,5 +703,8 @@ def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
     }
     # Self-describing outbound links for the console header (e.g. the Grafana
     # that scrapes /metrics). Empty string ⇒ the header hides that link.
+    # NB: loop/supervisor state is deliberately NOT here — the control panel
+    # polls the lightweight GET /v1/loops instead, so it stays responsive even
+    # when this (qdrant + heavy-pg) call is slow/cold.
     stats["links"] = {"grafana": settings.grafana_url}
     return stats

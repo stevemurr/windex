@@ -1132,21 +1132,32 @@ def _qdrant_ready(settings) -> bool:
 def _collect_status(settings) -> dict:
     """Shared status core: containers, serve, and each embed loop, plus a
     top-level `up` bool and a `down` list of supervised members that are absent
-    (what the watchdog reads to decide whether to call `windex up`)."""
-    from windex.api import jobs
+    (what the watchdog reads to decide whether to call `windex up`). A loop that
+    is DISABLED (desired-state off) and stopped is not `down` — so the watchdog
+    leaves it off."""
+    from windex.api import jobs, service
 
     pg = _pg_ready(settings)
     qd = _qdrant_ready(settings)
     serve_up = jobs.serve_running()
+    loop_jobs = jobs.embed_loop_jobs()
+    # Desired-state flags need the DB; if it's down, treat all as enabled so a
+    # stopped loop still reports "down" rather than being silently hidden.
+    enabled = service.get_loops_enabled(settings) if pg else {j.argv[1]: True for j in loop_jobs}
     down = [] if serve_up else ["serve"]
     loops = []
-    for job in jobs.embed_loop_jobs():
+    for job in loop_jobs:
         src = job.argv[1]
+        en = enabled.get(src, True)
         pids = jobs._pids(job.pattern)
-        loops.append({"source": src, "name": job.name, "running": bool(pids), "pids": pids})
-        if not pids:
-            down.append(src)
-    loops_up = all(entry["running"] for entry in loops)
+        running = bool(pids)
+        loops.append({"source": src, "name": job.name, "enabled": en, "running": running,
+                      "state": "up" if running else ("down" if en else "disabled"),
+                      "pids": pids})
+        if en and not running:
+            down.append(src)  # enabled but not running → the watchdog restarts it
+    # "up" = serve + every ENABLED loop running (disabled loops don't count).
+    loops_up = all(entry["running"] for entry in loops if entry["enabled"])
     return {
         "up": bool(pg and qd and serve_up and loops_up),
         "containers": {"postgres": {"reachable": pg}, "qdrant": {"reachable": qd}},
@@ -1169,9 +1180,11 @@ def _print_status(settings) -> None:
     table.add_row("postgres", mark(st["containers"]["postgres"]["reachable"]), "")
     table.add_row("qdrant", mark(st["containers"]["qdrant"]["reachable"]), "")
     table.add_row("serve", mark(st["serve"]["running"], "up"), f":{st['serve']['port']}")
+    state_style = {"up": "[green]up[/green]", "down": "[red]down[/red]",
+                   "disabled": "[dim]disabled[/dim]"}
     for entry in st["loops"]:
         detail = f"pid {entry['pids'][0]}" if entry["pids"] else ""
-        table.add_row(f"loop {entry['source']}", mark(entry["running"], "up"), detail)
+        table.add_row(f"loop {entry['source']}", state_style[entry["state"]], detail)
     console.print(table)
     console.print(f"overall: {'[green]UP[/green]' if st['up'] else '[yellow]DEGRADED[/yellow]'}")
 
@@ -1196,7 +1209,7 @@ def up(
     import subprocess
     import time as time_mod
 
-    from windex.api import jobs
+    from windex.api import jobs, service
 
     settings = get_settings()
     host = host or settings.serve_host  # env-driven so the watchdog's `up` keeps the LAN bind
@@ -1250,12 +1263,18 @@ def up(
             info = jobs.start_serve(host, port)
             console.print(f"[green]started serve[/green] pid {info['pid']} on {host}:{port}")
 
-    # 6. Loops (unless suppressed), skipping any already alive.
+    # 6. Loops (unless suppressed): start each ENABLED source that's down. A
+    # disabled source (desired-state off) is skipped, so `up` — including the
+    # watchdog's — never resurrects a loop the operator turned off.
     if not no_loops:
         wanted = set(source) if source else None
+        enabled = service.get_loops_enabled(settings)
         for job in jobs.embed_loop_jobs():
             src = job.argv[1]
             if wanted and src not in wanted:
+                continue
+            if not enabled.get(src, True):
+                console.print(f"loop {src} [dim]disabled[/dim] — skipping")
                 continue
             if jobs._pids(job.pattern):
                 console.print(f"loop {src} already running")
@@ -1328,6 +1347,26 @@ def status(
         print(json_mod.dumps(_collect_status(settings)))
     else:
         _print_status(settings)
+
+
+@app.command()
+def loop(
+    source: str = typer.Argument(..., help=f"one of: {', '.join(EMBED_SOURCES)}"),
+    state: str = typer.Argument(..., help="on | off"),
+) -> None:
+    """Turn an embed loop on or off (desired-state). `off` stops it and keeps it
+    off — `up` and the watchdog both honor the flag, so it won't come back until
+    you turn it on."""
+    from windex.api import service
+
+    if source not in EMBED_SOURCES:
+        console.print(f"[red]unknown source '{source}'[/red] — pick from {', '.join(EMBED_SOURCES)}")
+        raise typer.Exit(1)
+    if state not in ("on", "off"):
+        console.print("[red]state must be 'on' or 'off'[/red]")
+        raise typer.Exit(1)
+    res = service.set_loop_enabled(get_settings(), source, state == "on")
+    console.print(f"[green]loop {source} → {'on' if res['enabled'] else 'off'}[/green]")
 
 
 # Per-source freshness sweep: fetch/discover new content and stage it; the

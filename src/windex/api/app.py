@@ -173,6 +173,49 @@ def throttle(profile: Literal["polite", "full", "env"]) -> dict:
     return {"embed_profile": service.set_embed_profile(get_settings(), profile)}
 
 
+@app.get("/v1/loops")
+def loops_state() -> dict:
+    """Per-source loop desired-state + running, and whether the supervisor is
+    alive. Lightweight (pgrep + one control read) so the console control panel
+    can poll it responsively, independent of the heavier /v1/stats."""
+    return service.supervisor_status(get_settings())
+
+
+@app.post("/v1/loops/{source}")
+def loop_set(source: str, params: dict = Body(default={})) -> dict:
+    """Turn an embed loop on/off (desired-state). `off` stops it and keeps it off
+    — `windex up` and the watchdog both honor the flag, so it won't come back."""
+    try:
+        return service.set_loop_enabled(get_settings(), source, bool(params.get("enabled", True)))
+    except KeyError:
+        raise HTTPException(404, f"unknown source: {source}")
+
+
+@app.post("/v1/system/loops")
+def loops_bulk(params: dict = Body(default={})) -> dict:
+    """Bulk on/off for every embed loop ('start all' / 'stop all')."""
+    return {"loops": service.set_all_loops_enabled(get_settings(), bool(params.get("enabled", True)))}
+
+
+@app.post("/v1/system/up")
+def system_up() -> dict:
+    """Reconcile to desired state — detached `windex up` (starts enabled loops
+    and serve that are down)."""
+    return service.system_up(get_settings())
+
+
+@app.post("/v1/system/restart")
+def system_restart() -> dict:
+    """Bounce the loops — stop every one, then `windex up` restarts the enabled."""
+    return service.restart_loops(get_settings())
+
+
+@app.post("/v1/system/refresh")
+def system_refresh(params: dict = Body(default={})) -> dict:
+    """Kick off a freshness sweep — detached `windex refresh [--source …]`."""
+    return service.run_refresh(get_settings(), params.get("sources") or [])
+
+
 @app.get("/v1/events")
 async def events(ticks: int | None = Query(None, ge=1, le=100)) -> StreamingResponse:
     """SSE stream for the dashboard: `stats` every ~2s, `recent` only when it

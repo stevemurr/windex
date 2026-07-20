@@ -219,3 +219,43 @@ def test_stop_does_not_kill_a_shared_process_group(monkeypatch):
     jobs.stop("wiki-embed")
     assert killed_groups == [4242]
     assert killed_pids == []
+
+
+def test_loop_control_endpoint(client, monkeypatch):
+    import windex.api.service as svc
+
+    toggled = {}
+    monkeypatch.setattr(svc, "set_loop_enabled",
+                        lambda s, src, en: toggled.__setitem__("v", (src, en)) or {"source": src, "enabled": en})
+    r = client.post("/v1/loops/hf", json={"enabled": False})
+    assert r.status_code == 200 and toggled["v"] == ("hf", False)
+
+    def _raise(s, src, en):
+        raise KeyError(src)
+    monkeypatch.setattr(svc, "set_loop_enabled", _raise)
+    assert client.post("/v1/loops/bogus", json={"enabled": True}).status_code == 404
+
+
+def test_system_action_endpoints(client, monkeypatch):
+    import windex.api.service as svc
+
+    monkeypatch.setattr(svc, "set_all_loops_enabled", lambda s, en: [{"source": "hf", "enabled": en}])
+    monkeypatch.setattr(svc, "system_up", lambda s: {"action": "up", "pid": 1})
+    monkeypatch.setattr(svc, "restart_loops", lambda s: {"action": "restart", "pid": 2})
+    monkeypatch.setattr(svc, "run_refresh", lambda s, sources: {"action": "refresh", "sources": sources})
+
+    assert client.post("/v1/system/loops", json={"enabled": False}).json()["loops"][0]["enabled"] is False
+    assert client.post("/v1/system/up").json()["action"] == "up"
+    assert client.post("/v1/system/restart").json()["action"] == "restart"
+    assert client.post("/v1/system/refresh", json={"sources": ["hf"]}).json()["sources"] == ["hf"]
+
+
+def test_loops_state_endpoint(client, monkeypatch):
+    import windex.api.service as svc
+
+    monkeypatch.setattr(svc, "supervisor_status", lambda s: {
+        "watchdog_running": True,
+        "loops": [{"source": "hf", "enabled": True, "running": True, "state": "up", "pids": [1]}],
+    })
+    d = client.get("/v1/loops").json()
+    assert d["watchdog_running"] is True and d["loops"][0]["source"] == "hf"

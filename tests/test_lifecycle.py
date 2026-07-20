@@ -9,7 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 import windex.cli as cli
-from windex.api import jobs
+from windex.api import jobs, service
 
 runner = CliRunner()
 
@@ -45,6 +45,9 @@ def wired(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "start_serve",
                         lambda host="127.0.0.1", port=8100: events.append("serve") or {"pid": 1})
     monkeypatch.setattr(jobs, "start", lambda name, params: events.append(name) or {"pid": 2})
+    # desired-state flags default all-enabled unless a test overrides
+    monkeypatch.setattr(service, "get_loops_enabled",
+                        lambda s: {src: True for src in cli.EMBED_SOURCES})
     return events, settings
 
 
@@ -196,3 +199,46 @@ def test_refresh_unknown_source_aborts(monkeypatch):
     result = runner.invoke(cli.app, ["refresh", "--source", "bogus"])
     assert result.exit_code == 1
     assert "unknown source" in result.output
+
+
+# --- desired-state on/off ---
+
+def test_up_skips_disabled_sources(wired, monkeypatch):
+    events, _ = wired
+    monkeypatch.setattr(service, "get_loops_enabled",
+                        lambda s: {**{src: True for src in cli.EMBED_SOURCES}, "hf": False})
+    result = runner.invoke(cli.app, ["up", "--no-serve"])
+    assert result.exit_code == 0, result.output
+    started = [e for e in events if _is_loop_start(e)]
+    assert "hf-embed" not in started          # disabled → not started by up (nor the watchdog)
+    assert len(started) == 7                   # the other 7 enabled loops
+
+
+def test_status_disabled_loop_is_not_down(wired, monkeypatch):
+    """The crux: a disabled+stopped loop must NOT be in `down`, or the watchdog
+    would restart it and 'off' would never stick."""
+    monkeypatch.setattr(jobs, "serve_running", lambda port=8100: True)
+    monkeypatch.setattr(jobs, "_pids", lambda pattern: [])   # nothing running
+    monkeypatch.setattr(service, "get_loops_enabled",
+                        lambda s: {**{src: True for src in cli.EMBED_SOURCES}, "hf": False})
+    result = runner.invoke(cli.app, ["status", "--json"])
+    assert result.exit_code == 0, result.output
+    import json
+    st = json.loads(result.output)
+    hf = next(entry for entry in st["loops"] if entry["source"] == "hf")
+    assert hf["state"] == "disabled" and hf["enabled"] is False
+    assert "hf" not in st["down"]
+    assert set(st["down"]) == set(cli.EMBED_SOURCES) - {"hf"}   # the enabled ones are down
+
+
+def test_loop_command_toggles(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(cli, "get_settings", lambda: object())
+    monkeypatch.setattr(service, "set_loop_enabled",
+                        lambda s, src, en: calls.__setitem__("args", (src, en)) or {"enabled": en})
+    assert runner.invoke(cli.app, ["loop", "hf", "off"]).exit_code == 0
+    assert calls["args"] == ("hf", False)
+    assert runner.invoke(cli.app, ["loop", "hf", "on"]).exit_code == 0
+    assert calls["args"] == ("hf", True)
+    assert runner.invoke(cli.app, ["loop", "bogus", "off"]).exit_code == 1
+    assert runner.invoke(cli.app, ["loop", "hf", "maybe"]).exit_code == 1

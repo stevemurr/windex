@@ -62,6 +62,24 @@
   #grafanaLink { flex-shrink:0; padding:.3rem .8rem; font:600 .78rem var(--sans); color:var(--muted);
                  text-decoration:none; border:1px solid var(--line-strong); border-radius:8px; }
   #grafanaLink:hover { border-color:var(--accent); color:var(--accent); }
+  .sysbtns { display:flex; gap:.5rem; flex-wrap:wrap; margin:-.2rem 0 .9rem; }
+  .sysbtns button { padding:.32rem .8rem; font:600 .78rem var(--sans); color:var(--ink);
+                    background:var(--panel); border:1px solid var(--line-strong); border-radius:8px; cursor:pointer; }
+  .sysbtns button:hover { border-color:var(--accent); color:var(--accent); }
+  .sysbtns button.stop { color:var(--accent); border-color:var(--accent); background:transparent; }
+  .loopgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:.5rem; }
+  .looprow { display:flex; align-items:center; gap:.5rem; background:var(--panel);
+             border:1px solid var(--line); border-radius:10px; padding:.45rem .6rem; }
+  .looprow .lname { font-weight:600; font-size:.82rem; flex:1; }
+  .looprow .lbadge { font-size:.6rem; text-transform:uppercase; letter-spacing:.04em;
+                     padding:.1rem .35rem; border-radius:4px; }
+  .lbadge.up { color:var(--ok); border:1px solid var(--ok); }
+  .lbadge.down { color:var(--accent); border:1px solid var(--accent); }
+  .lbadge.disabled { color:var(--muted); border:1px solid var(--line-strong); }
+  .looprow .ltoggle { padding:.2rem .55rem; font:600 .72rem var(--sans); border-radius:6px;
+                      cursor:pointer; border:1px solid var(--line-strong); background:transparent; }
+  .ltoggle.on { color:var(--ok); border-color:var(--ok); }
+  .ltoggle.off { color:var(--muted); }
   .charts { display:grid; grid-template-columns:1fr 1fr; gap:.65rem; margin:0 0 .65rem; }
   @media (max-width:560px) { .charts { grid-template-columns:1fr; } }
   .chart { background:var(--panel); border:1px solid var(--line); border-radius:12px;
@@ -486,6 +504,17 @@
       <div class="bar"><div id="wbar" style="width:0%"></div></div>
       <div id="wrows" style="margin-top:.5rem"></div>
     </div>
+    <h2 style="margin-top:1.6rem">Control</h2>
+    <div class="stageline" id="supRow">supervisor …</div>
+    <div class="sysbtns">
+      <button onclick="sysAction('up')" title="Start any enabled loop or serve that is down">Reconcile</button>
+      <button onclick="sysAction('restart')" title="Stop every loop, then start the enabled ones">Restart loops</button>
+      <button onclick="sysRefresh()" title="Fetch new content for every source; the loops index it">Refresh all</button>
+      <button onclick="bulkLoops(true)">Start all loops</button>
+      <button class="stop" onclick="bulkLoops(false)">Stop all loops</button>
+    </div>
+    <div class="loopgrid" id="loopGrid"></div>
+
     <h2 style="margin-top:1.6rem">Recently indexed</h2>
     <div id="feed"><div class="feed-empty">nothing indexed yet</div></div>
     <h2 style="margin-top:1.6rem">Operations</h2>
@@ -1051,6 +1080,54 @@ function paramInput(job, key, spec) {
   return `<label>${key} <input type="${type}" id="${id}" value="${spec.default ?? ""}"></label>`;
 }
 
+// --- control panel: loop on/off (desired-state) + system actions ---
+// Driven by the lightweight GET /v1/loops on its own poll, so it stays snappy
+// even when the heavier /v1/stats is cold.
+function renderControl(data) {
+  const loops = data.loops || [];
+  const supEl = $("supRow");
+  if (supEl) supEl.innerHTML =
+    `supervisor <b>${data.watchdog_running ? "running" : "not running"}</b>`
+    + ` · <b>${loops.filter(l => l.enabled).length}/${loops.length}</b> loops enabled`;
+  const grid = $("loopGrid");
+  if (!grid) return;
+  grid.innerHTML = loops.map(l => {
+    const on = l.enabled;
+    return `<div class="looprow">
+      <span class="lname">${esc(l.source)}</span>
+      <span class="lbadge ${l.state}">${esc(l.state)}</span>
+      <button class="ltoggle ${on ? "on" : "off"}" onclick="toggleLoop('${esc(l.source)}', ${!on})">${on ? "On" : "Off"}</button>
+    </div>`;
+  }).join("");
+}
+
+async function pollLoops() { try { renderControl(await (await fetch("/v1/loops")).json()); } catch (e) {} }
+
+window.toggleLoop = async (src, enabled) => {
+  await fetch(`/v1/loops/${encodeURIComponent(src)}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }),
+  });
+  pollLoops();
+};
+window.bulkLoops = async (enabled) => {
+  if (!enabled && !confirm("Stop ALL embed loops? They stay off until turned back on.")) return;
+  await fetch("/v1/system/loops", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }),
+  });
+  pollLoops();
+};
+window.sysAction = async (action) => {
+  const r = await fetch(`/v1/system/${action}`, { method: "POST" });
+  if (!r.ok) { alert("action failed"); return; }
+  setTimeout(pollLoops, 1200);
+};
+window.sysRefresh = async () => {
+  const r = await fetch("/v1/system/refresh", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+  });
+  if (r.ok) alert("Refresh sweep started — new content indexes as it lands (see ~/.windex/logs/refresh.log).");
+};
+
 function renderJobs(jobs) {
   try {
     let html = "", cat = "";
@@ -1146,6 +1223,7 @@ $("loglines").addEventListener("change", refreshLogBody);
 $("loglevel").addEventListener("change", refreshLogBody);
 $("loggrep").addEventListener("input", () => { clearTimeout(window._lgt); window._lgt = setTimeout(refreshLogBody, 350); });
 setInterval(refreshLogBody, 3000);
+setInterval(pollLoops, 4000);   // control panel: its own light poll, off the heavy stats path
 
 // SSE keeps the page realtime; EventSource auto-reconnects on drops, and a
 // dropped connection also triggers one manual refresh as a bridge.
@@ -1165,6 +1243,7 @@ refreshFeed();
 refreshCharts();
 refreshJobs();
 refreshWorkers();
+pollLoops();
 initLogs();
 connectEvents();
 </script>
