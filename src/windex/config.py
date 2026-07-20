@@ -11,6 +11,17 @@ class Settings(BaseSettings):
     data_root: Path = Path("/Volumes/External/windex")
     pg_dsn: str = "postgresql://windex:windex@127.0.0.1:5432/windex"
     qdrant_url: str = "http://127.0.0.1:6333"
+    # Base URL of the Grafana that scrapes windex's /metrics (the ops box at
+    # 192.168.1.237). Surfaced to the console header via /v1/stats; empty ⇒ the
+    # header link stays hidden, so installs without Grafana show no dead link and
+    # the IP is never hardcoded in source. Set WINDEX_GRAFANA_URL in .env.
+    grafana_url: str = ""
+    # Interface `windex serve` binds. Default loopback-only; set
+    # WINDEX_SERVE_HOST=0.0.0.0 to expose the API + /metrics on the LAN (required
+    # for the remote Prometheus on 192.168.1.237 to scrape). `windex up` and the
+    # watchdog read this, so a supervised restart keeps the same binding instead
+    # of silently reverting to loopback.
+    serve_host: str = "127.0.0.1"
 
     # Embedding model is user-supplied; dim must be set before collections exist.
     embed_backend: Literal["http-tei", "http-openai", "st"] = "http-tei"

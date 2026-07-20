@@ -170,6 +170,27 @@ def test_job_patterns_match_their_own_argv():
         assert j.pattern in cmdline, f"{j.name}: pattern {j.pattern!r} won't match {cmdline!r}"
 
 
+def test_serve_is_managed_but_not_in_the_whitelist():
+    """serve must not be a startable/stoppable /v1/jobs entry — the LAN-exposed
+    API can't be allowed to kill its own host — but it must be manageable by
+    up/down/status, and its pattern must not cross-match `windex serve-mcp`."""
+    assert "serve" not in jobs.JOBS
+    launched = " ".join([str(jobs.VENV_BIN / "windex"), "serve", "--host", "127.0.0.1", "--port", "8100"])
+    assert jobs.SERVE.pattern in launched
+    assert jobs.SERVE.pattern not in "/opt/venv/bin/windex serve-mcp"
+
+
+def test_embed_loop_jobs_are_the_eight_sources():
+    """The one place that answers 'which loops should be running' — reused by
+    windex up/status, the watchdog, and windex_loop_up."""
+    from windex.cli import EMBED_SOURCES
+
+    loops = jobs.embed_loop_jobs()
+    assert len(loops) == 8
+    assert {j.argv[1] for j in loops} == set(EMBED_SOURCES)
+    assert all(j.argv[0] == "embed-loop" for j in loops)
+
+
 def test_stop_does_not_kill_a_shared_process_group(monkeypatch):
     """Regression (2026-07-17, user-reported: "stopping one embed job stopped
     them all"). start() uses start_new_session=True, so a job we launch leads

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  windex supervisor LaunchAgent.
+
+  A per-user LaunchAgent (NOT a LaunchDaemon): the external volume, the Apple
+  `container` per-user runtime, the venv, ~/.windex and .env all live in the user
+  session, so a root daemon starting pre-login would race the mount and lack Full
+  Disk Access. Trade-off: this needs the user logged in — for an appliance box,
+  enable auto-login (System Settings → Users & Groups → Automatic login).
+
+  RunAtLoad + KeepAlive: start the watchdog at login and relaunch it if it ever
+  dies (it is a `while :` loop, so KeepAlive only fires on a real crash).
+  ThrottleInterval bounds relaunch churn. The watchdog itself waits for the mount
+  and runs `windex up`, so this one agent brings the whole stack up in order.
+
+  PATH MUST include /usr/local/bin (where `container` lives) — launchd's default
+  PATH omits it, and without it every `container` call fails silently and the
+  watchdog thinks the containers are permanently down.
+
+  Paths are absolute and specific to this box (matching deploy/newsyslog-windex.conf).
+  Install with deploy/install-launchd.sh.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.windex.supervisor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/murr/Code/github.com/stevemurr/windex/scripts/watchdog.sh</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/murr/Code/github.com/stevemurr/windex</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/murr/Code/github.com/stevemurr/windex/.venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/murr/.windex/logs/supervisor.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/murr/.windex/logs/supervisor.out</string>
+</dict>
+</plist>

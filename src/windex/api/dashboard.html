@@ -59,6 +59,9 @@
          background:var(--panel); border:1px solid var(--line-strong); border-radius:8px;
          cursor:pointer; }
   #ctl:hover { border-color:var(--accent); color:var(--accent); }
+  #grafanaLink { flex-shrink:0; padding:.3rem .8rem; font:600 .78rem var(--sans); color:var(--muted);
+                 text-decoration:none; border:1px solid var(--line-strong); border-radius:8px; }
+  #grafanaLink:hover { border-color:var(--accent); color:var(--accent); }
   .charts { display:grid; grid-template-columns:1fr 1fr; gap:.65rem; margin:0 0 .65rem; }
   @media (max-width:560px) { .charts { grid-template-columns:1fr; } }
   .chart { background:var(--panel); border:1px solid var(--line); border-radius:12px;
@@ -346,6 +349,7 @@
     <span class="wordmark">windex</span>
     <span class="tagline">self-hosted web index</span>
     <span id="liveDot"><i></i><span id="liveLabel">checking…</span></span>
+    <a id="grafanaLink" target="_blank" rel="noopener" style="display:none">Metrics ↗</a>
     <button id="ctl" style="display:none">Pause</button>
   </header>
 
@@ -837,6 +841,11 @@ function renderQueues() {
 
 function renderStats(s) {
   try {
+    // Grafana link is data-driven: shown only when WINDEX_GRAFANA_URL is set.
+    const gl = document.getElementById("grafanaLink");
+    const gurl = (s.links || {}).grafana || "";
+    gl.href = gurl;
+    gl.style.display = gurl ? "" : "none";
     const w = s.warc_files || {}, d = (s.documents || {}).news || {}, r = s.repos || {},
           g = s.gharchive_files || {}, v = s.vectors || {};
     renderComposition(v);

@@ -140,6 +140,24 @@ JOBS: dict[str, Job] = {j.name: j for j in [
 ]}
 
 
+# serve is a MANAGED process but deliberately NOT in JOBS: JOBS is the
+# LAN-exposed start/stop whitelist (/v1/jobs), so it must never offer a control
+# that stops the server hosting the API. `windex up`/`down`/`status` and the
+# watchdog manage serve through the helpers below. The pattern is the flagged
+# form the manager always launches ("windex serve --host …"), which a literal
+# pgrep/`in` match distinguishes from `windex serve-mcp`.
+SERVE = Job("serve", ("serve",), "windex serve --host",
+            "API server", "REST API + dashboard + /metrics on :8100", "system")
+
+
+def embed_loop_jobs() -> list[Job]:
+    """The supervised embed-loop jobs, one per source — the same predicate the
+    exporter uses to exclude loops from windex_job_up. The single source of
+    truth for 'which loops should be running', shared by `windex up`/`status`,
+    the watchdog, and the metrics exporter — never a hardcoded source list."""
+    return [j for j in JOBS.values() if j.argv[0] == "embed-loop"]
+
+
 def build_argv(job: Job, params: dict) -> list[str]:
     argv = [str(VENV_BIN / "windex"), *job.argv]
     for key, spec in job.params.items():
@@ -196,15 +214,14 @@ def list_jobs() -> list[dict]:
     return out
 
 
-def start(name: str, params: dict) -> dict:
-    job = JOBS.get(name)
-    if job is None:
-        raise KeyError(name)
-    if _pids(job.pattern):
-        raise RuntimeError(f"{name} is already running")
-    argv = build_argv(job, params or {})
+def _spawn(log_name: str, argv: list[str]) -> int:
+    """Detach a windex subprocess, its stdout+stderr appended to
+    ~/.windex/logs/<log_name>.log. start_new_session makes the child lead its
+    own process group so stop() can killpg it without catching siblings (the
+    2026-07-17 'stopping one loop stopped them all' fix). Shared by the
+    dashboard job starts and the serve manager."""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / f"{job.name}.log"
+    log_path = LOG_DIR / f"{log_name}.log"
     # rotate-on-start guard: detached children write raw stdout no logging
     # handler can cap, so bound growth here (newsyslog covers the interval)
     if log_path.exists() and log_path.stat().st_size > 10_485_760:
@@ -213,17 +230,24 @@ def start(name: str, params: dict) -> dict:
     proc = subprocess.Popen(
         argv, stdout=log, stderr=log, cwd=PROJECT_ROOT, start_new_session=True
     )
-    return {"started": name, "pid": proc.pid}
+    return proc.pid
 
 
-def stop(name: str) -> dict:
+def start(name: str, params: dict) -> dict:
     job = JOBS.get(name)
     if job is None:
         raise KeyError(name)
-    pids = _pids(job.pattern)
+    if _pids(job.pattern):
+        raise RuntimeError(f"{name} is already running")
+    argv = build_argv(job, params or {})
+    return {"started": name, "pid": _spawn(job.name, argv)}
+
+
+def _stop_pattern(name: str, pattern: str) -> dict:
+    pids = _pids(pattern)
     for pid in pids:
         try:
-            # Only nuke the process group when this pid LEADS it. start() uses
+            # Only nuke the process group when this pid LEADS it. _spawn uses
             # start_new_session=True, so a job we launched owns its group and
             # killpg cleanly takes its children too. But a job started any other
             # way (shell loop, script, cron) can share its parent's group with
@@ -242,3 +266,40 @@ def stop(name: str) -> dict:
             except ProcessLookupError:
                 pass
     return {"stopped": name, "pids": pids}
+
+
+def stop(name: str) -> dict:
+    job = JOBS.get(name)
+    if job is None:
+        raise KeyError(name)
+    return _stop_pattern(name, job.pattern)
+
+
+def serve_running(port: int = 8100) -> bool:
+    """True if the API is up: something accepts a TCP connection on `port` (the
+    real 'is it serving' signal); a pgrep on the serve pattern is the fallback
+    used when checking whether there's a process to stop."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1.0)
+        if s.connect_ex(("127.0.0.1", port)) == 0:
+            return True
+    return bool(_pids(SERVE.pattern))
+
+
+def start_serve(host: str = "127.0.0.1", port: int = 8100) -> dict:
+    """Launch `windex serve` detached (reusing the job spawn machinery). Refuses
+    if the port is already served."""
+    if serve_running(port):
+        raise RuntimeError("serve is already running")
+    argv = [str(VENV_BIN / "windex"), "serve", "--host", host, "--port", str(port)]
+    # Raw stdout/stderr → serve.out.log, NOT serve.log: `windex serve` installs
+    # its own RotatingFileHandler on serve.log (cli.py), and pointing the
+    # detached process's fds at the same file would fight that handler.
+    return {"started": "serve", "pid": _spawn("serve.out", argv)}
+
+
+def stop_serve() -> dict:
+    """Stop the managed API server (SIGTERM its process group)."""
+    return _stop_pattern("serve", SERVE.pattern)

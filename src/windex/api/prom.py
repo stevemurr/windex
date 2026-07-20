@@ -149,9 +149,12 @@ class WindexCollector:
             "windex_documents — the ccnews/gh CLI loops are labeled news/github so "
             "per-source dashboard joins line up.",
             labels=["source"])
-        for cli_source in EMBED_SOURCES:
-            # pgrep still matches the CLI name; only the label is canonicalised.
-            alive = 1.0 if jobs._pids(f"windex embed-loop {cli_source}") else 0.0
+        for job in jobs.embed_loop_jobs():
+            # One registry: the loop set and their pgrep patterns come from
+            # jobs.py — the same source `windex up`/`status` and the watchdog
+            # use. Only the label is canonicalised (ccnews→news, gh→github).
+            cli_source = job.argv[1]
+            alive = 1.0 if jobs._pids(job.pattern) else 0.0
             loop.add_metric([_canonical_source(cli_source)], alive)
         yield loop
 

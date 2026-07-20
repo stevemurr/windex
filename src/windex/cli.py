@@ -1099,5 +1099,301 @@ def health(embed: bool = typer.Option(False, help="Also ping the embedding serve
     raise typer.Exit(1 if failed else 0)
 
 
+# ---------------------------------------------------------------------------
+# System lifecycle. `windex up` is the single, idempotent, health-gated
+# entrypoint the watchdog and the launchd agent call; `status --json` is the
+# agent/watchdog-readable signal. The supervised set (serve + the 8 embed loops)
+# is derived from the jobs.py registry — never a second hardcoded list.
+# ---------------------------------------------------------------------------
+
+def _pg_ready(settings) -> bool:
+    """Cheap 'is postgres reachable' probe — a real client connect like the
+    watchdog's, not a heavy query."""
+    try:
+        with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+        return True
+    except Exception:
+        return False
+
+
+def _qdrant_ready(settings) -> bool:
+    """Cheap 'is qdrant reachable' probe: a bare GET on the root, mirroring the
+    watchdog. Deliberately NOT qdrant.status() — that enumerates collections and
+    can take seconds during backfill."""
+    import httpx
+
+    try:
+        return httpx.get(settings.qdrant_url.rstrip("/") + "/", timeout=3).status_code == 200
+    except Exception:
+        return False
+
+
+def _collect_status(settings) -> dict:
+    """Shared status core: containers, serve, and each embed loop, plus a
+    top-level `up` bool and a `down` list of supervised members that are absent
+    (what the watchdog reads to decide whether to call `windex up`)."""
+    from windex.api import jobs
+
+    pg = _pg_ready(settings)
+    qd = _qdrant_ready(settings)
+    serve_up = jobs.serve_running()
+    down = [] if serve_up else ["serve"]
+    loops = []
+    for job in jobs.embed_loop_jobs():
+        src = job.argv[1]
+        pids = jobs._pids(job.pattern)
+        loops.append({"source": src, "name": job.name, "running": bool(pids), "pids": pids})
+        if not pids:
+            down.append(src)
+    loops_up = all(entry["running"] for entry in loops)
+    return {
+        "up": bool(pg and qd and serve_up and loops_up),
+        "containers": {"postgres": {"reachable": pg}, "qdrant": {"reachable": qd}},
+        "serve": {"running": serve_up, "port": 8100},
+        "loops": loops,
+        "down": down,
+    }
+
+
+def _print_status(settings) -> None:
+    from rich.table import Table
+
+    def mark(alive: bool, up_word: str = "ok") -> str:
+        return f"[green]{up_word}[/green]" if alive else "[red]down[/red]"
+
+    st = _collect_status(settings)
+    table = Table(title="windex status")
+    for col in ("component", "state", "detail"):
+        table.add_column(col)
+    table.add_row("postgres", mark(st["containers"]["postgres"]["reachable"]), "")
+    table.add_row("qdrant", mark(st["containers"]["qdrant"]["reachable"]), "")
+    table.add_row("serve", mark(st["serve"]["running"], "up"), f":{st['serve']['port']}")
+    for entry in st["loops"]:
+        detail = f"pid {entry['pids'][0]}" if entry["pids"] else ""
+        table.add_row(f"loop {entry['source']}", mark(entry["running"], "up"), detail)
+    console.print(table)
+    console.print(f"overall: {'[green]UP[/green]' if st['up'] else '[yellow]DEGRADED[/yellow]'}")
+
+
+@app.command()
+def up(
+    host: str = typer.Option(
+        None, help="Interface serve binds (default: WINDEX_SERVE_HOST, else 127.0.0.1)"),
+    port: int = 8100,
+    no_serve: bool = typer.Option(False, "--no-serve", help="Don't start the API server"),
+    no_loops: bool = typer.Option(False, "--no-loops", help="Don't start the embed loops"),
+    source: list[str] = typer.Option(
+        [], "--source", help="Restrict the loops to these sources (repeatable); default all"),
+    foreground: bool = typer.Option(
+        False, "--foreground",
+        help="After containers + loops, run serve in the foreground (blocks)"),
+    timeout: int = typer.Option(60, help="Seconds to wait for postgres + qdrant to be reachable"),
+) -> None:
+    """Bring the whole stack up in order — containers → serve → the 8 embed loops.
+    Idempotent: anything already running is left alone. The unattended entrypoint
+    the watchdog and the launchd agent invoke."""
+    import subprocess
+    import time as time_mod
+
+    from windex.api import jobs
+
+    settings = get_settings()
+    host = host or settings.serve_host  # env-driven so the watchdog's `up` keeps the LAN bind
+    if source:
+        unknown = set(source) - set(EMBED_SOURCES)
+        if unknown:
+            console.print(f"[red]unknown source(s): {sorted(unknown)}[/red] — "
+                          f"pick from {', '.join(EMBED_SOURCES)}")
+            raise typer.Exit(1)
+
+    # 1. Preflight the external mount: dev.sh does `mkdir -p` on the services
+    # dir, which on an unmounted drive silently creates it on the internal disk
+    # and lets postgres init against the wrong path — a corruption footgun.
+    if not settings.data_root.exists():
+        console.print(f"[red]{settings.data_root} is not mounted[/red] — refusing to start")
+        raise typer.Exit(1)
+
+    # 2. Containers via the existing script (run_or_start is idempotent and
+    # recreates a wedged container).
+    dev_sh = jobs.PROJECT_ROOT / "scripts" / "dev.sh"
+    console.print("bringing up containers (scripts/dev.sh up)…")
+    subprocess.run(["bash", str(dev_sh), "up"], check=False)
+
+    # 3. Health-gate on cheap probes only — never the cold qdrant.status() /
+    # /metrics paths — polling until both answer or the timeout elapses.
+    deadline = time_mod.monotonic() + timeout
+    while True:
+        pg, qd = _pg_ready(settings), _qdrant_ready(settings)
+        if pg and qd:
+            break
+        if time_mod.monotonic() >= deadline:
+            console.print(f"[red]timed out after {timeout}s[/red] — "
+                          f"postgres={'ok' if pg else 'DOWN'} qdrant={'ok' if qd else 'DOWN'}")
+            raise typer.Exit(1)
+        time_mod.sleep(2)
+    console.print("[green]postgres + qdrant reachable[/green]")
+
+    # 4. Schema + collections (both idempotent create-if-missing).
+    init_db()
+    if settings.embed_dim > 0:
+        ensure_collections()
+    else:
+        console.print("[yellow]embedder not configured (WINDEX_EMBED_* pending) — "
+                      "skipping ensure-collections[/yellow]")
+
+    # 5. Serve (unless suppressed, or deferred to --foreground below).
+    if not no_serve and not foreground:
+        if jobs.serve_running(port):
+            console.print(f"serve already running on :{port}")
+        else:
+            info = jobs.start_serve(host, port)
+            console.print(f"[green]started serve[/green] pid {info['pid']} on {host}:{port}")
+
+    # 6. Loops (unless suppressed), skipping any already alive.
+    if not no_loops:
+        wanted = set(source) if source else None
+        for job in jobs.embed_loop_jobs():
+            src = job.argv[1]
+            if wanted and src not in wanted:
+                continue
+            if jobs._pids(job.pattern):
+                console.print(f"loop {src} already running")
+            else:
+                info = jobs.start(job.name, {})
+                console.print(f"[green]started loop {src}[/green] pid {info['pid']}")
+
+    _print_status(settings)
+
+    # 7. Foreground serve blocks here; the loops are already detached above.
+    if foreground and not jobs.serve_running(port):
+        serve(host=host, port=port)
+
+
+@app.command()
+def down(
+    source: list[str] = typer.Option(
+        [], "--source", help="Restrict to these loop sources (repeatable); serve is left alone then"),
+    keep_containers: bool = typer.Option(
+        True, "--keep-containers/--stop-containers",
+        help="Leave postgres + qdrant running (default), or stop them too"),
+) -> None:
+    """Stop the embed loops and serve (reverse of `up`). Containers are kept by
+    default. Idempotent — stopping something already down is a no-op."""
+    import subprocess
+
+    from windex.api import jobs
+
+    settings = get_settings()
+    if source:
+        unknown = set(source) - set(EMBED_SOURCES)
+        if unknown:
+            console.print(f"[red]unknown source(s): {sorted(unknown)}[/red]")
+            raise typer.Exit(1)
+
+    wanted = set(source) if source else None
+    for job in jobs.embed_loop_jobs():
+        src = job.argv[1]
+        if wanted and src not in wanted:
+            continue
+        res = jobs.stop(job.name)
+        console.print(f"stopped loop {src}: {res['pids']}" if res["pids"]
+                      else f"loop {src} not running")
+
+    # Only touch serve on a full down (no --source subset).
+    if not source:
+        res = jobs.stop_serve()
+        console.print(f"stopped serve: {res['pids']}" if res["pids"] else "serve not running")
+
+    if not keep_containers:
+        dev_sh = jobs.PROJECT_ROOT / "scripts" / "dev.sh"
+        subprocess.run(["bash", str(dev_sh), "down"], check=False)
+        console.print("[yellow]stopped containers — a running watchdog will restart "
+                      "them within ~45s[/yellow]")
+
+    _print_status(settings)
+
+
+@app.command()
+def status(
+    json_out: bool = typer.Option(
+        False, "--json", help="Machine-readable status (for agents and the watchdog)"),
+) -> None:
+    """Report what's up: containers, serve, and the 8 embed loops. `--json` emits
+    the agent/watchdog form with a top-level `up` bool and a `down` list."""
+    settings = get_settings()
+    if json_out:
+        import json as json_mod
+
+        print(json_mod.dumps(_collect_status(settings)))
+    else:
+        _print_status(settings)
+
+
+# Per-source freshness sweep: fetch/discover new content and stage it; the
+# always-on embed loops index whatever lands. Keys are the EMBED_SOURCES CLI
+# names. Within a source, steps are &&-chained (ingest needs its own sync).
+# gh hydrate carries --min-star-events 0: the default (1) silently skips every
+# Search-API-sweep candidate (they have star_events=0).
+REFRESH_CHAINS = {
+    "ccnews": "ccnews sync && ccnews run --no-embed",
+    "gh": "gh discover && gh hydrate --min-star-events 0",
+    "wiki": "wiki sync && wiki ingest",
+    "arxiv": "arxiv harvest --days 7",
+    "smallweb": "smallweb sync && smallweb poll",
+    "docs": "docs sync && docs ingest",
+    "hn": "hn harvest --days 2",
+    "hf": "hf sync && hf crawl",
+}
+
+
+def _refresh_script(sources: list[str], wx: str, root: str) -> str:
+    """Build the bash sweep: sources run sequentially (gentle on the single box),
+    each source's steps &&-chained, sources separated by ; so one source's
+    failure doesn't abort the rest. `true WINDEX_REFRESH` tags the process so a
+    second `refresh` can detect the sweep is already running via pgrep."""
+    def expand(chain: str) -> str:
+        return " && ".join(f'"{wx}" {step}' for step in chain.split(" && "))
+    blocks = [f"echo === refresh {s} === && {expand(REFRESH_CHAINS[s])}" for s in sources]
+    body = " ; ".join(f"{{ {b} ; }}" for b in blocks)
+    return f'true WINDEX_REFRESH; cd "{root}" && {body}'
+
+
+@app.command()
+def refresh(
+    source: list[str] = typer.Option(
+        [], "--source", help="Only these sources (repeatable); default all"),
+    foreground: bool = typer.Option(
+        False, "--foreground", help="Run the sweep inline (blocks) instead of detaching"),
+) -> None:
+    """Freshness sweep: check each source for new content, fetch + stage it, and
+    let the always-on embed loops index it. Sources run sequentially in one
+    detached process; each source's fetch steps are chained, and a per-source
+    failure doesn't abort the rest. Idempotent — every job only advances past its
+    own watermark, so a re-run with nothing new is a quick no-op."""
+    import subprocess
+
+    from windex.api import jobs
+
+    if source:
+        unknown = set(source) - set(REFRESH_CHAINS)
+        if unknown:
+            console.print(f"[red]unknown source(s): {sorted(unknown)}[/red] — "
+                          f"pick from {', '.join(REFRESH_CHAINS)}")
+            raise typer.Exit(1)
+    if jobs._pids("WINDEX_REFRESH"):
+        console.print("[yellow]a refresh sweep is already running — skipping[/yellow]")
+        raise typer.Exit(0)
+
+    sources = source or list(REFRESH_CHAINS)
+    script = _refresh_script(sources, str(jobs.VENV_BIN / "windex"), str(jobs.PROJECT_ROOT))
+    if foreground:
+        raise typer.Exit(subprocess.run(["bash", "-lc", script]).returncode)
+    pid = jobs._spawn("refresh", ["bash", "-lc", script])
+    console.print(f"[green]refresh sweep started[/green] pid {pid} — sources: {', '.join(sources)}")
+    console.print("staged content is indexed by the running embed loops; "
+                  "follow ~/.windex/logs/refresh.log")
+
+
 if __name__ == "__main__":
     app()

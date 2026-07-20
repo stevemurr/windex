@@ -594,4 +594,7 @@ def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
         # search-performance tile: 1h p95 + degraded fallbacks (60s-cached)
         **_search_metrics_summary(settings),
     }
+    # Self-describing outbound links for the console header (e.g. the Grafana
+    # that scrapes /metrics). Empty string ⇒ the header hides that link.
+    stats["links"] = {"grafana": settings.grafana_url}
     return stats
