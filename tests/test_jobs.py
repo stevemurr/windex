@@ -259,3 +259,23 @@ def test_loops_state_endpoint(client, monkeypatch):
     })
     d = client.get("/v1/loops").json()
     assert d["watchdog_running"] is True and d["loops"][0]["source"] == "hf"
+
+
+def test_freshness_and_schedule_endpoints(client, monkeypatch):
+    import windex.api.service as svc
+
+    monkeypatch.setattr(svc, "freshness",
+                        lambda s: [{"source": "hf", "indexed": 10, "pending": 2, "last_embed_ts": 1.0}])
+    monkeypatch.setattr(svc, "schedule_status",
+                        lambda s: [{"name": "daily", "running": False, "last_run_ts": None}])
+
+    def _run(s, name):
+        if name == "daily":
+            return {"action": "daily", "pid": 7}
+        raise KeyError(name)
+    monkeypatch.setattr(svc, "run_scheduled", _run)
+
+    assert client.get("/v1/freshness").json()[0]["source"] == "hf"
+    assert client.get("/v1/schedule").json()[0]["name"] == "daily"
+    assert client.post("/v1/schedule/daily/run").json()["action"] == "daily"
+    assert client.post("/v1/schedule/bogus/run").status_code == 404

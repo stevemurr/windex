@@ -80,6 +80,25 @@
                       cursor:pointer; border:1px solid var(--line-strong); background:transparent; }
   .ltoggle.on { color:var(--ok); border-color:var(--ok); }
   .ltoggle.off { color:var(--muted); }
+  .looprow .lrefresh { padding:.2rem .45rem; border:1px solid var(--line-strong); background:transparent;
+                       color:var(--muted); border-radius:6px; cursor:pointer; font-size:.85rem; line-height:1; }
+  .looprow .lrefresh:hover { border-color:var(--accent); color:var(--accent); }
+  .ftable { width:100%; border-collapse:collapse; font-size:.82rem; }
+  .ftable th { text-align:left; color:var(--muted); font-weight:600; font-size:.68rem; text-transform:uppercase;
+               letter-spacing:.04em; padding:.3rem .5rem; border-bottom:1px solid var(--line); }
+  .ftable td { padding:.4rem .5rem; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  .ftable td:last-child { text-align:right; }
+  .ftable .fname { font-weight:600; }
+  .fempty { color:var(--muted); text-align:center; font-style:italic; }
+  .fbtn { padding:.2rem .55rem; font:600 .72rem var(--sans); border-radius:6px; cursor:pointer;
+          border:1px solid var(--line-strong); background:transparent; color:var(--muted); }
+  .fbtn:hover { border-color:var(--accent); color:var(--accent); }
+  .fbtn:disabled { opacity:.5; cursor:default; }
+  .schedrow { display:flex; align-items:center; gap:.6rem; background:var(--panel); border:1px solid var(--line);
+              border-radius:10px; padding:.55rem .7rem; margin-bottom:.5rem; }
+  .schedrow .sname { font-weight:600; font-size:.85rem; }
+  .schedrow .sdesc { color:var(--muted); font-size:.72rem; flex:1; }
+  .schedrow .swhen { color:var(--muted); font-size:.72rem; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .charts { display:grid; grid-template-columns:1fr 1fr; gap:.65rem; margin:0 0 .65rem; }
   @media (max-width:560px) { .charts { grid-template-columns:1fr; } }
   .chart { background:var(--panel); border:1px solid var(--line); border-radius:12px;
@@ -410,115 +429,30 @@
 
   <section id="tab-console" class="tabpane">
   <section id="status">
-    <h2>Metrics</h2>
-    <div class="charts">
-      <div class="chart comp" id="chartComp" style="grid-column:1 / -1">
-        <div class="head"><span class="k">index composition · docs by source</span><span class="v" id="compSrcs">—</span></div>
-        <div class="body">
-          <svg viewBox="0 0 300 184" role="group" aria-label="Share of the index held by each source"></svg>
-          <div class="clegend" id="compLegend"></div>
-        </div>
-        <div class="empty comp-empty" style="display:none">index empty</div>
-        <div class="tip"></div>
-      </div>
-      <div class="chart" id="chartDocs">
-        <div class="head"><span class="k">indexed per minute · last hour</span><span class="v" id="rateDocs">—</span></div>
-        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Documents entering the index per minute, trailing hour"></svg>
-        <div class="tip"></div>
-      </div>
-      <div class="chart" id="chartEmbeds">
-        <div class="head"><span class="k">embeds per minute · last hour</span><span class="v" id="rateEmbeds">—</span></div>
-        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Documents embedded per minute, trailing hour"></svg>
-        <div class="tip"></div>
-      </div>
-      <div class="chart" id="chartBw" style="grid-column:1 / -1">
-        <div class="head"><span class="k">download MB per minute · last hour</span><span class="v" id="rateBw">—</span></div>
-        <svg viewBox="0 0 600 88" preserveAspectRatio="none" aria-label="Download megabytes per minute, trailing hour"></svg>
-        <div class="tip"></div>
-      </div>
-    </div>
-    <div class="rows" id="stats"></div>
-    <h2 style="margin-top:1.6rem">Queues</h2>
-    <div class="charts">
-      <div class="chart qpanel" id="chartEmbedQ" style="grid-column:1 / -1">
-        <div class="head">
-          <span class="k">embed queue · docs extracted, waiting for a vector</span>
-          <span class="v" id="embedQTotal">—</span>
-        </div>
-        <div class="qeta">
-          <div class="etav" id="etaValue">—</div>
-          <div class="etak" id="etaNote">measuring…</div>
-        </div>
-        <div id="embedQBars" role="group" aria-label="Embed backlog by source"></div>
-        <div class="tip"></div>
-      </div>
-      <div class="chart qpanel" id="chartIndexQ" style="grid-column:1 / -1">
-        <div class="head">
-          <span class="k">index queue · upstream work not yet extracted</span>
-          <span class="v" id="indexQSrcs">—</span>
-        </div>
-        <p class="qnote">Every source counts a different unit of work — a WARC file is not an
-          arXiv window is not a feed. These rows are never added up or ranked against each
-          other; only <em>progress</em> (each source against its own total) compares.</p>
-        <div class="qhead" aria-hidden="true">
-          <span></span><span>source</span><span class="qhprog">progress</span>
-          <span class="qhnum">queued</span><span>unit of work</span>
-        </div>
-        <div id="indexQRows" role="group" aria-label="Index queue by source"></div>
-        <div class="tip"></div>
-      </div>
-    </div>
-    <h2 style="margin-top:1.6rem">Logs</h2>
-    <div id="logpanel">
-      <div class="lbar">
-        <select id="logsel" class="pillselect" aria-label="Log source"></select>
-        <select id="loglevel" class="pillselect" aria-label="Level">
-          <option value="">All levels</option>
-          <option value="info">Info</option>
-          <option value="warn">Warn</option>
-          <option value="error">Error</option>
-        </select>
-        <select id="loglines" class="pillselect" aria-label="Lines">
-          <option>100</option><option selected>300</option><option>1000</option>
-        </select>
-        <input id="loggrep" type="search" placeholder="filter lines…">
-        <span id="logmeta"></span>
-      </div>
-      <pre id="logbody">select a log…</pre>
-    </div>
-    <h2 style="margin-top:1.6rem">Activity</h2>
-    <div class="actrow">
-      <div class="stageline" id="stagesLine"></div>
+    <div class="stageline" id="supRow">supervisor …</div>
+    <div class="sysbtns">
+      <button onclick="sysAction('up')" title="Start any enabled loop or serve that is down">Reconcile</button>
+      <button onclick="sysAction('restart')" title="Stop every loop, then start the enabled ones">Restart loops</button>
+      <button onclick="bulkLoops(true)">Start all</button>
+      <button class="stop" onclick="bulkLoops(false)">Stop all</button>
       <select id="throttle" class="pillselect" aria-label="Embed throughput profile"
-              title="Embedding throughput — polite keeps search fast, full drains the backlog. Applies within a minute, no restarts.">
+              title="Embedding throughput — polite keeps search fast, full drains the backlog.">
         <option value="env">Throttle · env</option>
         <option value="polite">Throttle · polite</option>
         <option value="full">Throttle · full</option>
       </select>
     </div>
-    <div id="workers">
-      <div class="whead">
-        <span class="k" id="wstage"></span>
-        <span class="v" id="wprogress"></span>
-      </div>
-      <div class="bar"><div id="wbar" style="width:0%"></div></div>
-      <div id="wrows" style="margin-top:.5rem"></div>
-    </div>
-    <h2 style="margin-top:1.6rem">Control</h2>
-    <div class="stageline" id="supRow">supervisor …</div>
-    <div class="sysbtns">
-      <button onclick="sysAction('up')" title="Start any enabled loop or serve that is down">Reconcile</button>
-      <button onclick="sysAction('restart')" title="Stop every loop, then start the enabled ones">Restart loops</button>
-      <button onclick="sysRefresh()" title="Fetch new content for every source; the loops index it">Refresh all</button>
-      <button onclick="bulkLoops(true)">Start all loops</button>
-      <button class="stop" onclick="bulkLoops(false)">Stop all loops</button>
-    </div>
+
+    <h2>Loops</h2>
     <div class="loopgrid" id="loopGrid"></div>
 
-    <h2 style="margin-top:1.6rem">Recently indexed</h2>
-    <div id="feed"><div class="feed-empty">nothing indexed yet</div></div>
-    <h2 style="margin-top:1.6rem">Operations</h2>
-    <div class="ops" id="ops"></div>
+    <h2 style="margin-top:1.6rem">Freshness</h2>
+    <table class="ftable"><thead><tr>
+      <th>source</th><th>indexed</th><th>pending</th><th>last embed</th><th></th>
+    </tr></thead><tbody id="freshBody"><tr><td colspan="5" class="fempty">loading…</td></tr></tbody></table>
+
+    <h2 style="margin-top:1.6rem">Scheduled jobs</h2>
+    <div id="schedList"></div>
   </section>
   </section>
 </main>
@@ -1085,10 +1019,15 @@ function paramInput(job, key, spec) {
 // even when the heavier /v1/stats is cold.
 function renderControl(data) {
   const loops = data.loops || [];
+  // header live status + pause button — driven off this light poll (renderStats is gone).
+  const paused = !!data.indexing_paused;
+  const dot = $("liveDot"), ctl = $("ctl");
+  if (dot) { dot.className = paused ? "paused" : ""; $("liveLabel").textContent = paused ? "paused" : "running"; }
+  if (ctl) { ctl.style.display = ""; ctl.textContent = paused ? "Resume indexing" : "Pause indexing"; }
   const supEl = $("supRow");
   if (supEl) supEl.innerHTML =
     `supervisor <b>${data.watchdog_running ? "running" : "not running"}</b>`
-    + ` · <b>${loops.filter(l => l.enabled).length}/${loops.length}</b> loops enabled`;
+    + ` · <b>${loops.filter(l => l.enabled).length}/${loops.length}</b> loops on`;
   const grid = $("loopGrid");
   if (!grid) return;
   grid.innerHTML = loops.map(l => {
@@ -1097,6 +1036,7 @@ function renderControl(data) {
       <span class="lname">${esc(l.source)}</span>
       <span class="lbadge ${l.state}">${esc(l.state)}</span>
       <button class="ltoggle ${on ? "on" : "off"}" onclick="toggleLoop('${esc(l.source)}', ${!on})">${on ? "On" : "Off"}</button>
+      <button class="lrefresh" title="Fetch new content for ${esc(l.source)}" onclick="refreshSource('${esc(l.source)}')">↻</button>
     </div>`;
   }).join("");
 }
@@ -1218,34 +1158,54 @@ async function refreshLogBody() {
 async function initLogs() {
   try { renderLogList(await (await fetch("/v1/logs")).json()); refreshLogBody(); } catch (e) {}
 }
-$("logsel").addEventListener("change", refreshLogBody);
-$("loglines").addEventListener("change", refreshLogBody);
-$("loglevel").addEventListener("change", refreshLogBody);
-$("loggrep").addEventListener("input", () => { clearTimeout(window._lgt); window._lgt = setTimeout(refreshLogBody, 350); });
-setInterval(refreshLogBody, 3000);
-setInterval(pollLoops, 4000);   // control panel: its own light poll, off the heavy stats path
-
-// SSE keeps the page realtime; EventSource auto-reconnects on drops, and a
-// dropped connection also triggers one manual refresh as a bridge.
-function connectEvents() {
-  const es = new EventSource("/v1/events");
-  es.addEventListener("stats", e => renderStats(JSON.parse(e.data)));
-  es.addEventListener("recent", e => renderFeed(JSON.parse(e.data)));
-  es.addEventListener("timeseries", e => renderCharts(JSON.parse(e.data)));
-  es.addEventListener("jobs", e => renderJobs(JSON.parse(e.data)));
-  es.addEventListener("workers", e => renderWorkers(JSON.parse(e.data)));
-  es.addEventListener("logsizes", e => renderLogList(JSON.parse(e.data)));
-  es.onerror = () => refresh();
+// Console is now a lean control surface: three light polls, no SSE / heavy stats.
+async function pollFreshness() {
+  try {
+    const rows = await (await fetch("/v1/freshness")).json();
+    const tb = $("freshBody");
+    if (tb) tb.innerHTML = rows.map(r => `<tr>
+      <td class="fname">${esc(r.source)}</td>
+      <td>${num(r.indexed)}</td>
+      <td>${num(r.pending)}</td>
+      <td>${r.last_embed_ts ? agoTs(r.last_embed_ts) : "—"}</td>
+      <td><button class="fbtn" onclick="refreshSource('${esc(r.source)}')">Update</button></td>
+    </tr>`).join("") || `<tr><td colspan="5" class="fempty">no sources</td></tr>`;
+  } catch (e) {}
+}
+async function pollSchedule() {
+  try {
+    const rows = await (await fetch("/v1/schedule")).json();
+    const el = $("schedList");
+    if (el) el.innerHTML = rows.map(r => `<div class="schedrow">
+      <span class="sname">${esc(r.label)}</span>
+      <span class="sdesc">${esc(r.desc)}</span>
+      <span class="swhen">${esc(r.cadence)}${r.last_run_ts ? " · ran " + agoTs(r.last_run_ts) : ""}</span>
+      <button class="fbtn" ${r.running ? "disabled" : ""} onclick="runScheduled('${esc(r.name)}')">${r.running ? "running…" : "Run"}</button>
+    </div>`).join("");
+  } catch (e) {}
+}
+window.refreshSource = async (src) => {
+  await fetch("/v1/system/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sources: [src] }) });
+  alert(`Refreshing ${src} — new content indexes as it lands.`);
+};
+window.runScheduled = async (name) => {
+  const r = await fetch(`/v1/schedule/${name}/run`, { method: "POST" });
+  if (r.ok) { alert(`Started ${name}.`); setTimeout(pollSchedule, 800); } else alert("failed to start");
+};
+function agoTs(ts) {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
 }
 
-refresh();
-refreshFeed();
-refreshCharts();
-refreshJobs();
-refreshWorkers();
 pollLoops();
-initLogs();
-connectEvents();
+pollFreshness();
+pollSchedule();
+setInterval(pollLoops, 4000);
+setInterval(pollFreshness, 15000);
+setInterval(pollSchedule, 15000);
 </script>
 </body>
 </html>

@@ -216,6 +216,27 @@ def system_refresh(params: dict = Body(default={})) -> dict:
     return service.run_refresh(get_settings(), params.get("sources") or [])
 
 
+@app.get("/v1/freshness")
+def freshness_state() -> list[dict]:
+    """Per-source indexed/pending counts + last embed-loop activity."""
+    return service.freshness(get_settings())
+
+
+@app.get("/v1/schedule")
+def schedule_state() -> list[dict]:
+    """Recurring jobs (daily / refresh / maintain) with running + last-run."""
+    return service.schedule_status(get_settings())
+
+
+@app.post("/v1/schedule/{name}/run")
+def schedule_run(name: str) -> dict:
+    """Run a recurring job now (detached)."""
+    try:
+        return service.run_scheduled(get_settings(), name)
+    except KeyError:
+        raise HTTPException(404, f"unknown scheduled job: {name}")
+
+
 @app.get("/v1/events")
 async def events(ticks: int | None = Query(None, ge=1, le=100)) -> StreamingResponse:
     """SSE stream for the dashboard: `stats` every ~2s, `recent` only when it

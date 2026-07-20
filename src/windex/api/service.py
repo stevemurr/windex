@@ -609,12 +609,114 @@ def set_loop_enabled(settings: Settings, source: str, enabled: bool) -> dict:
 
 
 def supervisor_status(settings: Settings) -> dict:
-    """Is the watchdog (supervisor) process alive, and the per-loop states it
-    acts on — for the console's supervision panel."""
+    """For the console control panel: supervisor liveness, the global
+    pause/resume flag, and the per-loop states."""
     from windex.api import jobs
 
+    try:
+        with db.pooled(settings.pg_dsn) as conn:
+            paused = db.get_control(conn, "indexing", "running") == "paused"
+    except Exception:  # noqa: BLE001
+        paused = False
     return {"watchdog_running": bool(jobs._pids("scripts/watchdog.sh")),
+            "indexing_paused": paused,
             "loops": loop_states(settings)}
+
+
+_pg_heavy_warming = False
+
+
+def _warm_pg_heavy(settings: Settings) -> None:
+    """Compute _pg_heavy in a daemon thread (one at a time) so a cold rollup
+    never blocks the freshness poll; errors are swallowed (counts just stay 0
+    until a later warm succeeds)."""
+    global _pg_heavy_warming
+    if _pg_heavy_warming:
+        return
+    _pg_heavy_warming = True
+
+    def _run() -> None:
+        global _pg_heavy_warming
+        try:
+            _pg_heavy(settings)
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            _pg_heavy_warming = False
+
+    import threading
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def freshness(settings: Settings) -> list[dict]:
+    """Per-source freshness for the console table: indexed + pending counts (from
+    the 600s-cached docs rollup, so this stays cheap) and last embed-loop
+    activity (the loop log's mtime — avoids a per-source max(indexed_at) on the
+    13M-row table, which has no (source, indexed_at) index)."""
+    from windex.api import jobs
+
+    # Counts come from the 600s-cached docs rollup, but computing it cold is a
+    # full 13M-row aggregate. Never block the poll on that: serve the cache if
+    # warm, else 0 now and warm it in the background so counts fill in on a later
+    # poll. Timestamps (below) never depend on it.
+    now = time.monotonic()
+    hit = _pg_heavy_cache.get(settings.pg_dsn)
+    docs = hit[1].get("docs", {}) if hit else {}
+    if not (hit and now - hit[0] < _PG_HEAVY_TTL):
+        _warm_pg_heavy(settings)
+    canon = {"ccnews": "news", "gh": "github"}  # loop name → corpus source
+    out = []
+    for job in jobs.embed_loop_jobs():
+        src = job.argv[1]
+        by_status = docs.get(canon.get(src, src), {})
+        indexed = int(by_status.get("embedded", 0))
+        pending = int(sum(v for k, v in by_status.items() if k != "embedded"))
+        last = None
+        for name in (f"{job.name}.log", f"embed-{src}.log"):  # jobs name + legacy nohup name
+            try:
+                last = max(last or 0, (jobs.LOG_DIR / name).stat().st_mtime)
+            except OSError:
+                pass
+        out.append({"source": src, "indexed": indexed, "pending": pending, "last_embed_ts": last})
+    return out
+
+
+# Recurring jobs the console can see + run on demand (windex doesn't auto-run
+# them without launchd, so the panel is how you fire them by hand).
+SCHEDULE = [
+    {"name": "daily", "label": "Daily freshness", "desc": "news + github: sync, process, embed", "cadence": "daily · 02:15"},
+    {"name": "refresh", "label": "Refresh all sources", "desc": "fetch new content for every source", "cadence": "on demand"},
+    {"name": "maintain", "label": "Store maintenance", "desc": "VACUUM/ANALYZE the churn tables", "cadence": "daily · 05:45"},
+]
+_SCHED_CMD = {"daily": ["daily"], "maintain": ["maintain"]}
+_SCHED_PATTERN = {"daily": "windex daily", "refresh": "WINDEX_REFRESH", "maintain": "windex maintain"}
+_SCHED_LOG = {"daily": "daily", "refresh": "refresh", "maintain": "maintain"}
+
+
+def schedule_status(settings: Settings) -> list[dict]:
+    """The recurring jobs + whether each is running + last-run time (its log's
+    mtime)."""
+    from windex.api import jobs
+
+    out = []
+    for item in SCHEDULE:
+        name = item["name"]
+        try:
+            last = (jobs.LOG_DIR / f"{_SCHED_LOG[name]}.log").stat().st_mtime
+        except OSError:
+            last = None
+        out.append({**item, "running": bool(jobs._pids(_SCHED_PATTERN[name])), "last_run_ts": last})
+    return out
+
+
+def run_scheduled(settings: Settings, name: str) -> dict:
+    """Kick off a recurring job now (detached). Raises KeyError for an unknown name."""
+    if name == "refresh":
+        return run_refresh(settings)
+    if name not in _SCHED_CMD:
+        raise KeyError(name)
+    return {"action": name, "pid": _spawn_windex(_SCHED_CMD[name], _SCHED_LOG[name])}
 
 
 def set_all_loops_enabled(settings: Settings, enabled: bool) -> list[dict]:
