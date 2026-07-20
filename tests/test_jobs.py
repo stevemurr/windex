@@ -279,3 +279,13 @@ def test_freshness_and_schedule_endpoints(client, monkeypatch):
     assert client.get("/v1/schedule").json()[0]["name"] == "daily"
     assert client.post("/v1/schedule/daily/run").json()["action"] == "daily"
     assert client.post("/v1/schedule/bogus/run").status_code == 404
+
+
+def test_activity_endpoint(client, monkeypatch):
+    import windex.api.service as svc
+
+    monkeypatch.setattr(svc, "activity", lambda s: [
+        {"name": "refresh", "label": "Refresh sweep", "group": "action",
+         "running": True, "last_ts": 1, "error": False}])
+    d = client.get("/v1/activity").json()
+    assert d[0]["name"] == "refresh" and d[0]["group"] == "action"

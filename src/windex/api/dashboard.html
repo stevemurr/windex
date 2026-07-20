@@ -99,6 +99,32 @@
   .schedrow .sname { font-weight:600; font-size:.85rem; }
   .schedrow .sdesc { color:var(--muted); font-size:.72rem; flex:1; }
   .schedrow .swhen { color:var(--muted); font-size:.72rem; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  /* bottom activity dock (gmail-chat style) */
+  main { padding-bottom:56px; }
+  #activityDock { position:fixed; left:0; right:0; bottom:0; z-index:50; }
+  #dockBar { display:flex; align-items:center; gap:.6rem; padding:.5rem .9rem; cursor:pointer;
+             background:var(--panel); border-top:1px solid var(--line-strong); font-size:.82rem; }
+  #dockSummary { font-weight:600; white-space:nowrap; }
+  #dockChips { display:flex; gap:.4rem; flex:1; flex-wrap:wrap; overflow:hidden; }
+  #dockCaret { color:var(--muted); }
+  .dchip { display:inline-flex; align-items:center; gap:.3rem; padding:.1rem .45rem; border-radius:99px;
+           border:1px solid var(--line-strong); color:var(--muted); font-size:.72rem; white-space:nowrap; }
+  .dchip .dot { width:.45rem; height:.45rem; border-radius:99px; background:var(--muted); }
+  .dchip.run .dot { background:var(--accent); animation:pulse 1.6s ease-in-out infinite; }
+  .dchip.err { color:var(--accent); border-color:var(--accent); }
+  .dchip.err .dot { background:var(--accent); }
+  #dockPanel { background:var(--panel); border-top:1px solid var(--line-strong); max-height:56vh; overflow:auto; }
+  .dgroup { padding:.45rem .9rem .2rem; color:var(--muted); font-size:.66rem; text-transform:uppercase; letter-spacing:.05em; }
+  .dockrow { display:flex; align-items:center; gap:.6rem; padding:.45rem .9rem; border-bottom:1px solid var(--line); cursor:pointer; font-size:.82rem; }
+  .dockrow:hover { border-color:var(--accent); }
+  .dockrow .dstatus { width:.5rem; height:.5rem; border-radius:99px; flex-shrink:0; }
+  #dockLogHead { display:flex; align-items:center; gap:.6rem; padding:.5rem .9rem; border-bottom:1px solid var(--line); }
+  #dockLogHead button { padding:.2rem .5rem; border:1px solid var(--line-strong); background:transparent;
+                        color:var(--muted); border-radius:6px; cursor:pointer; font:600 .72rem var(--sans); }
+  #dockLogHead button:hover { border-color:var(--accent); color:var(--accent); }
+  #dockLogBody { margin:0; padding:.7rem .9rem; font:.72rem/1.55 ui-monospace, Menlo, monospace;
+                 white-space:pre-wrap; word-break:break-word; max-height:44vh; overflow:auto; }
+  #dockLogBody .errline { color:var(--accent); }
   .charts { display:grid; grid-template-columns:1fr 1fr; gap:.65rem; margin:0 0 .65rem; }
   @media (max-width:560px) { .charts { grid-template-columns:1fr; } }
   .chart { background:var(--panel); border:1px solid var(--line); border-radius:12px;
@@ -456,6 +482,16 @@
   </section>
   </section>
 </main>
+
+<div id="activityDock">
+  <div id="dockBar" onclick="toggleDock()">
+    <span id="dockSummary">Activity</span>
+    <span id="dockChips"></span>
+    <span id="dockCaret">▴</span>
+  </div>
+  <div id="dockPanel" style="display:none"></div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
@@ -1186,11 +1222,14 @@ async function pollSchedule() {
 }
 window.refreshSource = async (src) => {
   await fetch("/v1/system/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sources: [src] }) });
-  alert(`Refreshing ${src} — new content indexes as it lands.`);
+  openDockLog("refresh", "Refresh sweep");   // pop the dock so you can watch it
+  pollActivity();
 };
 window.runScheduled = async (name) => {
   const r = await fetch(`/v1/schedule/${name}/run`, { method: "POST" });
-  if (r.ok) { alert(`Started ${name}.`); setTimeout(pollSchedule, 800); } else alert("failed to start");
+  if (!r.ok) { alert("failed to start"); return; }
+  openDockLog(name, name);
+  setTimeout(() => { pollSchedule(); pollActivity(); }, 800);
 };
 function agoTs(ts) {
   const s = Math.max(0, Date.now() / 1000 - ts);
@@ -1200,12 +1239,81 @@ function agoTs(ts) {
   return `${Math.round(s / 86400)}d ago`;
 }
 
+// --- bottom activity dock: watch running / crashed actions and tail their logs ---
+let dockOpen = false, dockCurrent = null, dockLogTimer = null, dockActs = [];
+async function pollActivity() {
+  try { dockActs = await (await fetch("/v1/activity")).json(); } catch (e) { return; }
+  renderDockBar();
+  if (dockOpen && !dockCurrent) renderDockList();
+}
+function renderDockBar() {
+  const running = dockActs.filter(a => a.running).length;
+  const errs = dockActs.filter(a => a.error);
+  $("dockSummary").textContent = `Activity — ${running} running${errs.length ? ` · ${errs.length} error` : ""}`;
+  const chips = dockActs.filter(a => a.error || (a.running && a.group === "action"));
+  $("dockChips").innerHTML = chips.map(a =>
+    `<span class="dchip ${a.error ? "err" : "run"}"><span class="dot"></span>${esc(a.label)}</span>`).join("");
+  $("dockCaret").textContent = dockOpen ? "▾" : "▴";
+}
+window.toggleDock = () => {
+  dockOpen = !dockOpen;
+  $("dockPanel").style.display = dockOpen ? "" : "none";
+  dockCurrent = null; stopDockLog();
+  if (dockOpen) renderDockList();
+  $("dockCaret").textContent = dockOpen ? "▾" : "▴";
+};
+function dstatusColor(a) { return a.error ? "var(--accent)" : a.running ? "var(--ok)" : "var(--muted)"; }
+function renderDockList() {
+  const groups = { action: "Actions", loop: "Loops", service: "Services" };
+  let html = "";
+  for (const g of Object.keys(groups)) {
+    const rows = dockActs.filter(a => a.group === g);
+    if (!rows.length) continue;
+    html += `<div class="dgroup">${groups[g]}</div>` + rows.map(a => {
+      const anim = a.running ? ";animation:pulse 1.6s ease-in-out infinite" : "";
+      const meta = a.running ? "running" : a.error ? "error" : (a.last_ts ? agoTs(a.last_ts) : "—");
+      return `<div class="dockrow" onclick="openLog('${esc(a.name)}', '${esc(a.label)}')">
+        <span class="dstatus" style="background:${dstatusColor(a)}${anim}"></span>
+        <span style="flex:1">${esc(a.label)}</span>
+        <span style="color:var(--muted);font-size:.72rem">${esc(meta)}</span>
+      </div>`;
+    }).join("");
+  }
+  $("dockPanel").innerHTML = html || `<div class="dgroup">nothing to show</div>`;
+}
+window.openLog = (name, label) => {
+  dockCurrent = name;
+  $("dockPanel").innerHTML =
+    `<div id="dockLogHead"><button onclick="backDock()">‹ back</button><b>${esc(label)}</b></div>` +
+    `<pre id="dockLogBody">loading…</pre>`;
+  stopDockLog();
+  tailDockLog();
+  dockLogTimer = setInterval(tailDockLog, 1500);
+};
+async function tailDockLog() {
+  if (!dockCurrent) return;
+  let d;
+  try { d = await (await fetch(`/v1/logs/${encodeURIComponent(dockCurrent)}?lines=400`)).json(); } catch (e) { return; }
+  const body = $("dockLogBody");
+  if (!body) return;
+  if (!d.available) { body.textContent = "log unavailable (not started yet, or drive detached)"; return; }
+  const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+  body.innerHTML = d.lines.map(ln =>
+    `<div class="${/error|traceback|fail|exception/i.test(ln) ? "errline" : ""}">${esc(ln)}</div>`).join("") || "(empty)";
+  if (atBottom) body.scrollTop = body.scrollHeight;
+}
+window.backDock = () => { dockCurrent = null; stopDockLog(); renderDockList(); };
+function stopDockLog() { if (dockLogTimer) { clearInterval(dockLogTimer); dockLogTimer = null; } }
+function openDockLog(name, label) { dockOpen = true; $("dockPanel").style.display = ""; $("dockCaret").textContent = "▾"; openLog(name, label); }
+
 pollLoops();
 pollFreshness();
 pollSchedule();
+pollActivity();
 setInterval(pollLoops, 4000);
 setInterval(pollFreshness, 15000);
 setInterval(pollSchedule, 15000);
+setInterval(pollActivity, 3000);
 </script>
 </body>
 </html>

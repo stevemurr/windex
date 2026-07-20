@@ -719,6 +719,44 @@ def run_scheduled(settings: Settings, name: str) -> dict:
     return {"action": name, "pid": _spawn_windex(_SCHED_CMD[name], _SCHED_LOG[name])}
 
 
+def activity(settings: Settings) -> list[dict]:
+    """What the console log drawer watches: recurring actions, the embed loops,
+    and the services — each with running state, last activity, and (for a stopped
+    action) whether its log ended in an error ('crashed'). `name` is the
+    /v1/logs/{name} key for tailing."""
+    from windex.api import jobs
+    from windex.api import logs as logmod
+
+    mtimes = {r["name"]: r["mtime"] for r in logmod.list_logs()}
+
+    def errored(key: str) -> bool:
+        try:
+            hit = logmod.tail(key, lines=1, level="error")
+            return bool(hit.get("available") and hit.get("lines"))
+        except Exception:  # noqa: BLE001
+            return False
+
+    out = []
+    for label, pattern, key in (
+        ("Refresh sweep", "WINDEX_REFRESH", "refresh"),
+        ("Daily freshness", "windex daily", "daily"),
+        ("Store maintenance", "windex maintain", "maintain"),
+    ):
+        running = bool(jobs._pids(pattern))
+        out.append({"name": key, "label": label, "group": "action", "running": running,
+                    "last_ts": mtimes.get(key), "error": (not running and errored(key))})
+    for job in jobs.embed_loop_jobs():
+        out.append({"name": job.name, "label": f"loop · {job.argv[1]}", "group": "loop",
+                    "running": bool(jobs._pids(job.pattern)), "last_ts": mtimes.get(job.name),
+                    "error": False})
+    out.append({"name": "server", "label": "API server", "group": "service",
+                "running": jobs.serve_running(), "last_ts": mtimes.get("server"), "error": False})
+    out.append({"name": "watchdog", "label": "Supervisor", "group": "service",
+                "running": bool(jobs._pids("scripts/watchdog.sh")), "last_ts": mtimes.get("watchdog"),
+                "error": False})
+    return out
+
+
 def set_all_loops_enabled(settings: Settings, enabled: bool) -> list[dict]:
     """Bulk on/off for every source (the console's 'start all' / 'stop all')."""
     from windex.api import jobs

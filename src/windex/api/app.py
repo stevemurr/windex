@@ -237,6 +237,13 @@ def schedule_run(name: str) -> dict:
         raise HTTPException(404, f"unknown scheduled job: {name}")
 
 
+@app.get("/v1/activity")
+def activity_state() -> list[dict]:
+    """Watchable things for the log drawer: actions, loops, services — with
+    running state, last activity, and crash flag. Tail any via GET /v1/logs/{name}."""
+    return service.activity(get_settings())
+
+
 @app.get("/v1/events")
 async def events(ticks: int | None = Query(None, ge=1, le=100)) -> StreamingResponse:
     """SSE stream for the dashboard: `stats` every ~2s, `recent` only when it
