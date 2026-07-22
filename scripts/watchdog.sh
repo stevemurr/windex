@@ -1,29 +1,21 @@
 #!/usr/bin/env bash
-# Service watchdog v4. Supervises the data plane AND the app processes.
+# Service watchdog v5. Supervises the data plane AND the app processes.
 #
-# v3 lessons (2026-07-16) kept intact:
-# - Probe postgres over the HOST port-forward (127.0.0.1:5432) like a real
-#   client, not `container exec` — the port-forward is what stalls while the
-#   runtime's control channel stays healthy.
-# - One failed probe must not trigger a restart (restarts CAUSE outages and IP
-#   churn): require 3 consecutive failures.
-# - Silence was ambiguous: hourly heartbeat + container IPs logged, IP changes
-#   called out (answers "what restarted them" forensics directly).
-#
-# v4 adds PROCESS supervision — the 2026-07-17 gap: a ~25-min gateway blip
-# exited every embed loop by design and nothing restarted them, so a short blip
-# became a ~36h stall. Now, when the data plane is healthy, `windex status
-# --json` names the supervised members (serve + the 8 embed loops) that are
-# absent and `windex up` — idempotent, the same start mechanism the CLI uses —
-# brings the missing ones back. Storm guards: a 2-cycle debounce, a 5-per-600s
-# restart rate cap (then alert-only, leaning on the Grafana LoopDown/
-# EmbedsStalled rules), and a bounded serve backstop so a genuinely broken serve
-# isn't hammered. Supervision lives in the data-plane-healthy branch ONLY, so it
-# can never restart loops onto a dead postgres/qdrant.
-#
-# On start it waits for the external volume, then runs `windex up` once — so the
-# launchd agent (deploy/com.windex.supervisor.plist) brings the whole stack up
-# in order at boot.
+# v3 lessons kept: probe over the host port-forward like a real client; debounce
+# before acting; hourly heartbeat + container-IP-change logging.
+# v4 added process supervision (restart down loops/serve via idempotent
+# `windex up`), with a debounce, a rate cap, and a bounded-serve backstop.
+# v5 fixes the 2026-07-20 THRASH: under heavy load qdrant went SLOW (not dead);
+# v4 restarted BOTH containers on 3 failed probes with no backoff, kept nuking a
+# HEALTHY postgres for qdrant's sake, and churned container IPs every ~45s at
+# load 39 — which PREVENTED recovery. v5:
+#   - checks postgres and qdrant SEPARATELY and restarts only the dead one;
+#   - "dead" = the TCP port won't accept a connection — a slow-but-listening
+#     service is ALIVE and is NEVER restarted merely for being slow;
+#   - qdrant tolerates more consecutive misses than postgres (slow is normal for
+#     it — int8 vectors mmap'd off the external disk);
+#   - escalating backoff between restarts + a streak cap that stops restarting a
+#     service that won't recover (alert-only), so a slow store can't thrash.
 set -u
 cd "$(dirname "$0")/.."
 LOG="$HOME/.windex/watchdog.log"
@@ -34,15 +26,13 @@ WINDEX=.venv/bin/windex
 
 say() { echo "$(date '+%F %T') $*" >> "$LOG"; }
 mount_ok() { [ -d "$MOUNT/services/postgres" ]; }
-pg_tcp_ok() {
-  "$PY" -c "import psycopg; psycopg.connect('postgresql://windex:windex@127.0.0.1:5432/windex', connect_timeout=5).close()" 2>/dev/null
-}
-qd_ok() { curl -sf -m 5 http://127.0.0.1:6333/ >/dev/null 2>&1; }
+# Liveness = the port accepts a TCP connection. A busy/slow-but-listening service
+# still passes, so we never restart it just for being slow (the v5 fix). A
+# wedged/dead container refuses the connection and is caught.
+port_alive() { "$PY" -c "import socket,sys; socket.create_connection(('127.0.0.1',int(sys.argv[1])),3).close()" "$1" 2>/dev/null; }
 ips() { container ls 2>/dev/null | awk '/windex-/ {printf "%s=%s ", $1, $6}'; }
 
-# Supervised members (serve + the 8 loops) that `windex status` reports absent.
-# A pure process-table read (windex status --json), so it works even when serve
-# itself is down.
+# supervised app members (serve + the 8 loops) that `windex status` reports absent
 down_procs() {
   "$WINDEX" status --json 2>/dev/null | "$PY" -c '
 import json, sys
@@ -53,7 +43,7 @@ except Exception:
 ' 2>/dev/null
 }
 
-# True if fewer than 5 restarts happened in the last 600s (also prunes the ring).
+# True if fewer than 5 process-restarts happened in the last 600s (prunes the ring).
 rate_ok() {
   local now cutoff kept="" t count=0
   now=$(date +%s); cutoff=$((now - 600))
@@ -64,19 +54,16 @@ rate_ok() {
   [ "$count" -lt 5 ]
 }
 
-say "watchdog v4 started · $(ips)"
+say "watchdog v5 started · $(ips)"
 
-# Boot ordering: wait for the external volume before anything (a missing mount
-# means postgres would init on the internal disk — corruption), then bring the
-# whole stack up once. The loop below keeps it up.
+# Boot ordering: wait for the external volume, then bring the whole stack up once.
 while ! mount_ok; do say "waiting for $MOUNT to mount…"; sleep 10; done
 say "mount present — windex up"
 "$WINDEX" up >> "$LOG" 2>&1
 
-fails=0
-down_streak=0
-serve_fails=0
-restart_times=""
+pg_fails=0; pg_streak=0; pg_last=0
+qd_fails=0; qd_streak=0; qd_last=0
+down_streak=0; serve_fails=0; restart_times=""
 last_ips="$(ips)"
 last_beat=$(date +%s)
 
@@ -97,37 +84,67 @@ while :; do
     while ! mount_ok; do sleep 10; done
     say "mount back — restarting services"
     ./scripts/dev.sh up >> "$LOG" 2>&1
-    fails=0
-  elif ! pg_tcp_ok || ! qd_ok; then
-    fails=$((fails + 1))
-    say "health probe failed ($fails/3) pg_tcp=$(pg_tcp_ok && echo ok || echo FAIL) qdrant=$(qd_ok && echo ok || echo FAIL)"
-    if [ "$fails" -ge 3 ]; then
-      say "3 consecutive failures — full restart"
-      container stop windex-postgres windex-qdrant >/dev/null 2>&1
-      sleep 2
-      ./scripts/dev.sh up >> "$LOG" 2>&1
-      sleep 20
-      fails=0
-    fi
+    pg_fails=0; qd_fails=0
+    sleep 15
+    continue
+  fi
+
+  now=$(date +%s)
+  port_alive 5432 && PG=1 || PG=0
+  port_alive 6333 && QD=1 || QD=0
+
+  # --- postgres: restart ONLY postgres, only when the port is genuinely dead ---
+  if [ "$PG" = 1 ]; then
+    pg_fails=0; pg_streak=0
   else
-    fails=0
-    # Data plane is healthy (mount + pg + qdrant), so it is safe to (re)start app
-    # processes without racing a dead store. Supervise serve + the 8 loops.
+    pg_fails=$((pg_fails + 1))
+    say "postgres port not answering ($pg_fails)"
+    backoff=$(( 30 * (1 << (pg_streak < 4 ? pg_streak : 4)) ))
+    if [ "$pg_fails" -ge 3 ]; then
+      if [ "$pg_streak" -ge 5 ]; then
+        say "postgres still dead after $pg_streak restarts — NOT restarting; investigate"
+      elif [ $((now - pg_last)) -ge "$backoff" ]; then
+        say "postgres dead — recreating (streak $pg_streak; backoff escalates)"
+        container stop windex-postgres >/dev/null 2>&1; sleep 1
+        ./scripts/dev.sh up >> "$LOG" 2>&1
+        pg_last=$(date +%s); pg_streak=$((pg_streak + 1)); pg_fails=0; sleep 15
+      fi
+    fi
+  fi
+
+  # --- qdrant: separate, more tolerant (slow under load is expected, not dead) ---
+  if [ "$QD" = 1 ]; then
+    qd_fails=0; qd_streak=0
+  else
+    qd_fails=$((qd_fails + 1))
+    say "qdrant port not answering ($qd_fails)"
+    backoff=$(( 30 * (1 << (qd_streak < 4 ? qd_streak : 4)) ))
+    if [ "$qd_fails" -ge 5 ]; then
+      if [ "$qd_streak" -ge 5 ]; then
+        say "qdrant still dead after $qd_streak restarts — NOT restarting; investigate"
+      elif [ $((now - qd_last)) -ge "$backoff" ]; then
+        say "qdrant dead — recreating (streak $qd_streak; backoff escalates)"
+        container stop windex-qdrant >/dev/null 2>&1; sleep 1
+        ./scripts/dev.sh up >> "$LOG" 2>&1
+        qd_last=$(date +%s); qd_streak=$((qd_streak + 1)); qd_fails=0; sleep 15
+      fi
+    fi
+  fi
+
+  # --- process supervision only when BOTH data services are alive ---
+  if [ "$PG" = 1 ] && [ "$QD" = 1 ]; then
     down="$(down_procs)"
     if [ -z "$down" ]; then
       down_streak=0; serve_fails=0
     else
       down_streak=$((down_streak + 1))
       if [ "$down_streak" -lt 2 ]; then
-        # Debounce: a just-restarted process needs a cycle before pgrep sees it.
         say "supervise: down=[$down] (debounce $down_streak/2)"
       elif ! rate_ok; then
         say "supervise: down=[$down] but restart rate cap hit (>=5/600s) — alerting only"
       else
         case " $down " in *" serve "*) serve_fails=$((serve_fails + 1));; *) serve_fails=0;; esac
         if [ "$serve_fails" -ge 3 ]; then
-          # A serve that won't stay up (bad bind, import error) must not be
-          # hammered; keep supervising the loops, let a human fix serve.
           say "supervise: serve down ${serve_fails}× — restarting loops only (windex up --no-serve); investigate serve"
           "$WINDEX" up --no-serve >> "$LOG" 2>&1
         else
@@ -136,9 +153,10 @@ while :; do
         fi
         restart_times="$restart_times $(date +%s)"
         down_streak=0
-        sleep 20  # settle: let freshly-spawned PIDs appear before the next probe
+        sleep 20
       fi
     fi
   fi
+
   sleep 15
 done

@@ -53,9 +53,47 @@ class Settings(BaseSettings):
     embed_throttle_seconds: float = 0.0
     # Prepended to *queries* only (retrieval-instruction models like qwen3-embedding)
     embed_query_prefix: str = ""
+    # Per-source query prefix override for the `memory` source: chat-history
+    # recall is framed differently from web search, so when non-empty this is
+    # used instead of embed_query_prefix for source=memory queries (single
+    # branch at the query-embed site in index/search.py). Empty ⇒ fall back to
+    # the global embed_query_prefix.
+    embed_query_prefix_memory: str = ""
+    # Opt-in bearer token guarding the write side of the `memory` source
+    # (POST/DELETE /v1/memory/* and GET /v1/memory/status). Empty (default) =
+    # open, matching windex's trusted-LAN posture; when set, those endpoints
+    # require `Authorization: Bearer <token>`. Read endpoints stay open.
+    write_token: str = ""
+    # --- search-quality eval (windex eval) ---
+    eval_per_source: int = 25      # known-item samples per source
+    eval_k: int = 10               # cutoff for NDCG@k / Recall@k
+    # LLM-as-judge (optional): a self-hosted OpenAI-compatible chat endpoint (the
+    # Spark's LLM gateway). Empty endpoint/model ⇒ the judge leg is skipped.
+    judge_endpoint: str = ""
+    judge_model: str = ""
+    judge_api_key: str = ""
+    judge_timeout: float = 30.0
+    # --- cross-encoder reranker (optional): reorders the fused pool by true
+    # (query, passage) relevance. Empty endpoint/model ⇒ reranking is skipped. ---
+    rerank_endpoint: str = ""
+    rerank_model: str = ""
+    rerank_api_key: str = ""
+    rerank_path: str = "/rerank"
+    # Instruction-tuned rerankers (Qwen3-Reranker) need the query wrapped as
+    # "<Instruct>: {instruct}\n<Query>: {query}"; sending the RAW query collapses
+    # scores to ~0.5 and mis-ranks real passages (verified: relevant 0.49 vs
+    # irrelevant 0.79 raw → 0.91 vs 0.63 wrapped). Empty ⇒ send the query as-is
+    # (for rerankers that take no instruction).
+    rerank_query_instruct: str = "Given a web search query, retrieve relevant passages that answer the query"
+    rerank_timeout: float = 10.0
+    rerank_top_k: int = 50         # candidates fetched per source to rerank
     # Query-time embedding deadline; hybrid search degrades to lexical past it
     # (indexing load on the GPU server must not stall searches)
     embed_query_timeout: float = 8.0
+    # Bulk embed queue order: "oldest" (created_at ASC — drain the backlog) or
+    # "newest" (created_at DESC — embed freshly-harvested docs ahead of the
+    # backlog). Flip to "newest" + restart the loops for a freshness push.
+    embed_order: str = "oldest"
     # Circuit breaker on the *query* embed only (index/embed_breaker.py) — the
     # bulk embed path is never breakered. Once the GPU is saturated the timeout
     # above is paid on every search to rediscover a known answer; after this many
@@ -222,6 +260,12 @@ class Settings(BaseSettings):
     def hf_staging_dir(self) -> Path:
         return self.staging_dir / "hf"
 
+    @property
+    def memory_staging_dir(self) -> Path:
+        # Push-based chat-memory source: one full-replace parquet per
+        # conversation under memory/clean/<conversation_id>.parquet.
+        return self.staging_dir / "memory"
+
     def all_dirs(self) -> list[Path]:
         return [
             self.ccnews_downloads_dir,
@@ -236,6 +280,7 @@ class Settings(BaseSettings):
             self.hn_downloads_dir,
             self.hn_staging_dir,
             self.hf_staging_dir,
+            self.memory_staging_dir,
         ]
 
     def github_token_list(self) -> list[str]:

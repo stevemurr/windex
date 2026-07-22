@@ -254,6 +254,24 @@ CREATE TABLE IF NOT EXISTS control (
     value text NOT NULL
 );
 
+-- Editable job scheduler. The `windex scheduler` timer loop reads this table
+-- every ~60s and fires the entries that are enabled + due. init_db seeds
+-- sensible defaults when the table is empty (one daily ingest per source at a
+-- staggered time, plus the daily-freshness + store-maintenance command jobs);
+-- fully editable thereafter via /v1/schedule. kind='ingest' targets a source
+-- name (fired as `windex refresh --source <target>`, gated on that source's
+-- ingest_enabled flag); kind='command' targets a command key (daily|maintain).
+CREATE TABLE IF NOT EXISTS schedule (
+    name     text PRIMARY KEY,           -- stable id, e.g. ingest-hf | daily | maintain
+    kind     text NOT NULL,              -- ingest | command
+    target   text NOT NULL,              -- source name (ingest) | daily|maintain (command)
+    hour     integer NOT NULL,           -- 0-23 (local time)
+    minute   integer NOT NULL,           -- 0-59
+    weekday  integer,                    -- 0=Sun … 6=Sat; NULL = every day
+    enabled  boolean NOT NULL DEFAULT true,
+    last_run timestamptz                 -- last time the loop fired this entry
+);
+
 -- Search-performance metrics: one narrow row per run_search call (REST and MCP
 -- both route through service.run_search). No query text by design — privacy
 -- and row width; q_hash (sha1 prefix) still surfaces repeated-query patterns.
@@ -273,3 +291,20 @@ CREATE INDEX IF NOT EXISTS search_metrics_ts_idx ON search_metrics (ts);
 -- degradations are the debugging needle; keep them findable at any table size
 CREATE INDEX IF NOT EXISTS search_metrics_degraded_ts_idx
     ON search_metrics (ts) WHERE degraded;
+
+-- Search QUALITY (relevance), distinct from search_metrics (performance). One
+-- row per `windex eval` run; the Prometheus collector reads the latest row and
+-- the Grafana panel trends them. git_sha makes runs comparable across changes.
+CREATE TABLE IF NOT EXISTS search_quality (
+    ts              timestamptz NOT NULL DEFAULT now(),
+    mode            text NOT NULL,        -- hybrid | dense | lexical
+    k               integer NOT NULL,
+    known_item_ndcg real,                 -- label-free title-as-query proxy
+    known_item_mrr  real,
+    golden_ndcg     real,                 -- curated regression anchors
+    golden_mrr      real,
+    judge_ndcg      real,                 -- LLM-as-judge graded (null if disabled)
+    git_sha         text,
+    detail          jsonb                 -- full by-source / by-leg breakdown
+);
+CREATE INDEX IF NOT EXISTS search_quality_ts_idx ON search_quality (ts);

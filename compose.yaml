@@ -1,0 +1,124 @@
+# windex — full stack for rootless podman on the Spark (DGX GB10).
+#   data plane : postgres 16 + qdrant 1.18.2 (on the local NVMe)
+#   app plane  : windex serve + the 9 embed-loops (built from ./Containerfile)
+#
+# The models (litellm gateway + vLLM) run in a SEPARATE podman project; windex reaches
+# the gateway at host.containers.internal:4000 (host-published), so it stays decoupled
+# from the model compose network.
+#
+# Build the app image first (compose references it):
+#   podman build -t localhost/windex-app:latest -f Containerfile .
+# Bring up:
+#   podman-compose -p windex -f compose.yaml up -d
+#
+# The `windex-scheduler` service runs the editable job scheduler (fires the due
+# ingest/daily/maintain entries in the `schedule` table). It WRITES parquet during
+# harvest, so it needs WINDEX_DATA_ROOT (/mnt/windex-external) mounted rw — true now
+# that the external drive is remounted rw (on the Spark it's the -rw bind workaround
+# until the CIFS mount lands in fstab as rw; see the loop anchor volume).
+#
+# Data lives OUTSIDE the repo on the NVMe: ${WINDEX_STACK_DATA:-/home/murr/windex-stack}.
+
+x-windex-app: &windex-app
+    image: localhost/windex-app:latest
+    env_file: .env
+    # Override the host-oriented .env values for in-container networking:
+    #  - postgres/qdrant reached by service name on the windex compose network
+    #  - the model gateway reached on the host via host.containers.internal
+    environment:
+        - WINDEX_PG_DSN=postgresql://${WINDEX_PG_USER:-windex}:${WINDEX_PG_PASSWORD:-windex}@postgres:5432/${WINDEX_PG_DB:-windex}
+        - WINDEX_QDRANT_URL=http://qdrant:6333
+        - WINDEX_EMBED_ENDPOINT=http://host.containers.internal:4000
+        # Query embed deadline. Lowered 8→3s so a GPU-contended query embed (during the
+        # backlog backfill) fails fast and search degrades to lexical in ~3s instead of
+        # hanging ~8s. Inert for the loops (they do bulk embeds, not query embeds).
+        - WINDEX_EMBED_QUERY_TIMEOUT=3
+        # Drain newest-first (pipeline.newest_first) so freshly-harvested docs embed
+        # ahead of the ~9M old backlog — freshness over completeness.
+        - WINDEX_EMBED_ORDER=newest
+        # Rerank stays OFF for now. The query-FORMAT bug is fixed (windex now sends the
+        # Qwen3-Reranker "<Instruct>:/<Query>:" wrapper — verified it ranks correctly in
+        # controlled tests), but a RESIDUAL reranker-quality issue remains: certain real
+        # docs still score a spurious ~1.0, so on the full candidate pool rerank-ON is
+        # worse than rerank-OFF. Needs a bf16-vs-NVFP4 recheck on realistic docs. To
+        # re-enable once fixed: set this to http://host.containers.internal:4000.
+        - WINDEX_RERANK_ENDPOINT=
+        - WINDEX_JUDGE_ENDPOINT=http://host.containers.internal:4000
+        # podman-compose's env_file parser keeps literal quotes/escapes (python-dotenv
+        # on the host strips them), so the query prefix must be set here with a real
+        # (YAML-escaped) newline — otherwise query embeddings get a malformed instruction.
+        - "WINDEX_EMBED_QUERY_PREFIX=Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+    extra_hosts:
+        - "host.containers.internal:host-gateway"
+    depends_on:
+        - postgres
+        - qdrant
+    restart: always
+
+x-windex-loop: &windex-loop
+    <<: *windex-app
+    # embed-loops READ parquet + WRITE vectors to Qdrant; some (gh) also re-clean and
+    # WRITE parquet to the staging dir — mount is now rw (external drive remounted rw).
+    volumes:
+        - /mnt/windex-external-rw:/mnt/windex-external:rw
+
+services:
+    postgres:
+        image: docker.io/library/postgres:16
+        environment:
+            - POSTGRES_USER=${WINDEX_PG_USER:-windex}
+            - POSTGRES_PASSWORD=${WINDEX_PG_PASSWORD:-windex}
+            - POSTGRES_DB=${WINDEX_PG_DB:-windex}
+            - PGDATA=/var/lib/postgresql/data/pgdata
+        volumes:
+            - ${WINDEX_STACK_DATA:-/home/murr/windex-stack}/pgdata:/var/lib/postgresql/data
+        ports:
+            - "127.0.0.1:5432:5432"
+        restart: unless-stopped
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+            interval: 5s
+            timeout: 5s
+            retries: 5
+            start_period: 20s
+
+    qdrant:
+        image: docker.io/qdrant/qdrant:v1.18.2
+        environment:
+            # Nudge Qdrant to memory-map segments early rather than keep them resident.
+            - QDRANT__STORAGE__OPTIMIZERS__MEMMAP_THRESHOLD_KB=20000
+        volumes:
+            - ${WINDEX_STACK_DATA:-/home/murr/windex-stack}/qdrant:/qdrant/storage
+        ports:
+            - "127.0.0.1:6333:6333"
+            - "127.0.0.1:6334:6334"
+        restart: unless-stopped
+
+    # --- App: REST API + dashboard + /metrics ---
+    windex-serve:
+        <<: *windex-app
+        # `build` here makes the stack reproducible; all app services share this image.
+        build:
+            context: .
+            dockerfile: Containerfile
+        command: ["serve", "--host", "0.0.0.0", "--port", "8100"]
+        ports:
+            - "8100:8100"
+        volumes:
+            - /mnt/windex-external-rw:/mnt/windex-external:rw
+
+    # --- App: the 9 supervised embed-loops (podman is the per-loop supervisor) ---
+    windex-loop-ccnews:   { <<: *windex-loop, command: ["embed-loop", "ccnews"] }
+    windex-loop-gh:       { <<: *windex-loop, command: ["embed-loop", "gh"] }
+    windex-loop-wiki:     { <<: *windex-loop, command: ["embed-loop", "wiki"] }
+    windex-loop-arxiv:    { <<: *windex-loop, command: ["embed-loop", "arxiv"] }
+    windex-loop-docs:     { <<: *windex-loop, command: ["embed-loop", "docs"] }
+    windex-loop-smallweb: { <<: *windex-loop, command: ["embed-loop", "smallweb"] }
+    windex-loop-hn:       { <<: *windex-loop, command: ["embed-loop", "hn"] }
+    windex-loop-hf:       { <<: *windex-loop, command: ["embed-loop", "hf"] }
+    # memory is push-based: the serve container's rw mount stages the pushed
+    # parquet, and this loop drains it exactly like every other embed-loop.
+    windex-loop-memory:   { <<: *windex-loop, command: ["embed-loop", "memory"] }
+
+    # --- App: editable job scheduler (fires due schedule-table entries: ingest/daily/maintain) ---
+    windex-scheduler:     { <<: *windex-loop, command: ["scheduler"] }

@@ -168,7 +168,7 @@ def test_dropped_searches_gauge_is_absent(client, pg):
 
 # The documents.source corpus vocabulary the dashboard joins per-source rows on.
 # windex_loop_up{source} MUST speak this, not the CLI's ccnews/gh names.
-DOCS_VOCAB = {"news", "github", "wiki", "hn", "arxiv", "docs", "smallweb", "hf"}
+DOCS_VOCAB = {"news", "github", "wiki", "hn", "arxiv", "docs", "smallweb", "hf", "memory"}
 
 
 def test_liveness_and_probe_series_present(client):

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>windex console (preview)</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <!-- No build, no npm, no runtime CDN: the bare `preact` specifier resolves to
+       the vendored file via this native import map. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "preact": "/static/vendor/preact.module.js",
+      "preact/hooks": "/static/vendor/hooks.module.js",
+      "htm": "/static/vendor/htm.module.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

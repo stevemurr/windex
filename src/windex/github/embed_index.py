@@ -15,6 +15,7 @@ from qdrant_client import models as qm
 from windex.ccnews.embed_index import point_id
 from windex.config import Settings
 from windex.embed import build_embedder
+from windex.embed.base import embed_isolating
 from windex.github.clean import clean_readme, compose_doc
 from windex.index import qdrant as qidx
 
@@ -92,16 +93,32 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 100
                         "text": compose_doc(full_name, description, topics, readme_text, MAX_DOC_CHARS),
                     }
                 )
-            dense = embedder.embed_batch([d["text"][:max_chars] for d in docs])
-            sparse = list(bm25.embed([d["text"][:max_chars] for d in docs]))
+            texts = [d["text"][:max_chars] for d in docs]
+            dense, ok = embed_isolating(embedder, texts)
+            rejected = [d for d, good in zip(docs, ok) if not good]
+            if rejected:
+                # A repo the server refuses even on its own (still over the token
+                # window, malformed, …): mark it 'failed' so the next pass stops
+                # re-selecting it and wedging the loop forever, then carry on with
+                # the rest of the batch.
+                log.warning("gh embed: skipping %d unembeddable repo(s): %s",
+                            len(rejected), ", ".join(d["full_name"] for d in rejected))
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE repos SET status = 'failed' WHERE repo_id = ANY(%s)",
+                                ([d["repo_id"] for d in rejected],))
+                conn.commit()
+            good = [(i, d) for i, d in enumerate(docs) if ok[i]]
+            if not good:
+                continue
+            sparse = list(bm25.embed([texts[i] for i, _ in good]))
             points = [
                 qm.PointStruct(
                     id=point_id(d["id"]),
                     vector={
                         qidx.DENSE: dense[i],
                         qidx.SPARSE: qm.SparseVector(
-                            indices=sparse[i].indices.tolist(),
-                            values=sparse[i].values.tolist(),
+                            indices=sparse[j].indices.tolist(),
+                            values=sparse[j].values.tolist(),
                         ),
                     },
                     payload={
@@ -116,15 +133,16 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 100
                         "pushed_at": d["pushed_at"],
                     },
                 )
-                for i, d in enumerate(docs)
+                for j, (i, d) in enumerate(good)
             ]
+            gdocs = [d for _, d in good]
             client.upsert(collection_name=collection, points=points)
             writer.write_batch(
                 pa.record_batch(
                     [
-                        pa.array([d["id"] for d in docs]),
-                        pa.array([d["full_name"] for d in docs]),
-                        pa.array([d["text"] for d in docs]),
+                        pa.array([d["id"] for d in gdocs]),
+                        pa.array([d["full_name"] for d in gdocs]),
+                        pa.array([d["text"] for d in gdocs]),
                     ],
                     schema=CLEAN_SCHEMA,
                 )
@@ -141,15 +159,15 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 100
                     [
                         (d["id"], f"https://github.com/{d['full_name']}", d["full_name"],
                          text_ref, settings.embed_model)
-                        for d in docs
+                        for d in gdocs
                     ],
                 )
                 cur.execute(
                     "UPDATE repos SET status = 'embedded' WHERE repo_id = ANY(%s)",
-                    ([d["repo_id"] for d in docs],),
+                    ([d["repo_id"] for d in gdocs],),
                 )
             conn.commit()
-            total += len(docs)
+            total += len(gdocs)
     finally:
         writer.close()
     return total

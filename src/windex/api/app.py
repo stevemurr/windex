@@ -1,13 +1,17 @@
 import asyncio
 import time
+import uuid
 
 import orjson
 from datetime import datetime
 from importlib.resources import files
+from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Header, Query
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from fastapi import Body
@@ -34,11 +38,26 @@ def dashboard() -> HTMLResponse:
     )
 
 
+# Vendored, no-build frontend assets (Preact console migration). Served locally
+# — nothing here is fetched from a CDN or npm at runtime.
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+
+
+@app.get("/console-preview", include_in_schema=False)
+def console_preview() -> HTMLResponse:
+    """The in-progress Preact console (no build, vendored). Kept alongside the
+    live `/` console until the migration is verified, then it takes over `/`."""
+    return HTMLResponse(
+        files("windex.api").joinpath("static/console.html").read_text(),
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
 @app.get("/v1/search")
 def search(
     q: str = Query(min_length=1),
     source: Literal["news", "github", "wiki", "arxiv", "smallweb", "docs", "hn",
-                    "hf", "all"] = "all",
+                    "hf", "memory", "all"] = "all",
     limit: int = Query(10, ge=1, le=50),
     mode: Literal["hybrid", "dense", "lexical"] = "hybrid",
     published_after: datetime | None = None,
@@ -57,12 +76,15 @@ def search(
                              description="HF doc root, e.g. transformers or agents-course"),
     kind: str | None = Query(None, max_length=16,
                              description="HF page kind: docs, learn or blog"),
+    conversation_id: str | None = Query(None, max_length=64,
+                                        description="Memory: scope recall to one conversation uuid"),
 ) -> dict:
     return service.run_search(
         get_settings(), q, source=source, limit=limit, mode=mode,
         published_after=published_after, published_before=published_before,
         min_stars=min_stars, language=language, category=category, outlet=outlet,
         framework=framework, min_points=min_points, root=root, kind=kind,
+        conversation_id=conversation_id,
     )
 
 
@@ -72,6 +94,93 @@ def get_doc(doc_id: str) -> dict:
     if doc is None:
         raise HTTPException(404, f"unknown document id: {doc_id}")
     return doc
+
+
+# --- chat-memory write API (push-based source) -------------------------------
+# The macOS app chunks each conversation and full-replace-pushes the whole chunk
+# list here; windex stages parquet + reconciles the ledger (see
+# memory_source.ingest). Opt-in bearer auth guards these three routes; reads
+# (/v1/search, /v1/docs) stay open by design.
+
+class MemoryChunk(BaseModel):
+    index: int = Field(ge=0)
+    text: str
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    message_range: tuple[int, int] | None = None
+
+
+class MemoryPush(BaseModel):
+    title: str = ""
+    chunks: list[MemoryChunk] = Field(default_factory=list)
+
+
+def require_write_token(authorization: str | None = Header(None)) -> None:
+    """Bearer-token gate for the /v1/memory/* write side. No-op when
+    WINDEX_WRITE_TOKEN is empty (open, trusted-LAN default); otherwise the
+    request must carry `Authorization: Bearer <token>`."""
+    token = get_settings().write_token
+    if not token:
+        return
+    if authorization != f"Bearer {token}":
+        raise HTTPException(401, "missing or invalid write token")
+
+
+def _validate_push(conversation_id: str, body: MemoryPush) -> None:
+    """422 the malformed pushes the ingest contract can't accept: a non-uuid
+    conversation id, too many chunks, oversized chunk text, non-contiguous
+    indices, or an over-budget body."""
+    try:
+        uuid.UUID(conversation_id)
+    except ValueError:
+        raise HTTPException(422, "conversation_id must be a UUID")
+    from windex.memory_source.ingest import MAX_CHUNKS, MAX_TEXT_CHARS
+
+    if len(body.chunks) > MAX_CHUNKS:
+        raise HTTPException(422, f"too many chunks (max {MAX_CHUNKS})")
+    if [c.index for c in body.chunks] != list(range(len(body.chunks))):
+        raise HTTPException(422, "chunk indices must be exactly 0..n-1 in order")
+    total = 0
+    for c in body.chunks:
+        if len(c.text) > MAX_TEXT_CHARS:
+            raise HTTPException(422, f"chunk text too large (max {MAX_TEXT_CHARS} chars)")
+        total += len(c.text)
+    if total > 4_000_000:
+        raise HTTPException(422, "push body too large (max ~4 MB of chunk text)")
+
+
+@app.post("/v1/memory/conversations/{conversation_id}",
+          dependencies=[Depends(require_write_token)])
+def memory_push(conversation_id: str, body: MemoryPush) -> dict:
+    """Full-replace one conversation's chat-memory chunks. Returns
+    {conversation_id, chunks, staged, skipped, deleted}; staged+deleted>0 means
+    work happened. 422 on a malformed push, 503 when staging isn't writable."""
+    _validate_push(conversation_id, body)
+    chunks = [c.model_dump() for c in body.chunks]
+    try:
+        return service.memory_replace(get_settings(), conversation_id.lower(),
+                                      body.title, chunks)
+    except OSError as exc:  # staging drive read-only / unmounted
+        raise HTTPException(503, f"staging unavailable: {exc}")
+
+
+@app.delete("/v1/memory/conversations/{conversation_id}",
+            dependencies=[Depends(require_write_token)])
+def memory_delete(conversation_id: str) -> dict:
+    """Tombstone every chunk of a conversation. Idempotent (deleting nothing →
+    deleted: 0)."""
+    try:
+        uuid.UUID(conversation_id)
+    except ValueError:
+        raise HTTPException(422, "conversation_id must be a UUID")
+    return service.memory_delete(get_settings(), conversation_id.lower())
+
+
+@app.get("/v1/memory/status", dependencies=[Depends(require_write_token)])
+def memory_status() -> dict:
+    """Corpus-wide memory rollup: conversation count, chunk counts by status,
+    last embed time. The app's Settings status row + health probe."""
+    return service.memory_status(get_settings())
 
 
 @app.get("/v1/stats")
@@ -191,6 +300,16 @@ def loop_set(source: str, params: dict = Body(default={})) -> dict:
         raise HTTPException(404, f"unknown source: {source}")
 
 
+@app.post("/v1/ingest/{source}")
+def ingest_set(source: str, params: dict = Body(default={})) -> dict:
+    """Turn a source's auto-ingest on/off (desired-state). Off means the refresh
+    sweep and the scheduler skip fetching it; a manual 'check now' still runs."""
+    try:
+        return service.set_ingest_enabled(get_settings(), source, bool(params.get("enabled", True)))
+    except KeyError:
+        raise HTTPException(404, f"unknown source: {source}")
+
+
 @app.post("/v1/system/loops")
 def loops_bulk(params: dict = Body(default={})) -> dict:
     """Bulk on/off for every embed loop ('start all' / 'stop all')."""
@@ -222,15 +341,47 @@ def freshness_state() -> list[dict]:
     return service.freshness(get_settings())
 
 
+@app.get("/v1/datasets/{source}/stats")
+def dataset_stats(source: str) -> dict:
+    """Per-dataset detail (freshness row-click): counts by pipeline status +
+    content date range."""
+    try:
+        return service.dataset_stats(get_settings(), source)
+    except KeyError:
+        raise HTTPException(404, f"unknown source: {source}")
+
+
 @app.get("/v1/schedule")
 def schedule_state() -> list[dict]:
-    """Recurring jobs (daily / refresh / maintain) with running + last-run."""
+    """The editable schedule entries with running + last-run — what the console
+    schedule editor reads (name, kind, target, hour, minute, weekday, enabled)."""
     return service.schedule_status(get_settings())
+
+
+@app.put("/v1/schedule/{name}")
+def schedule_upsert(name: str, params: dict = Body(default={})) -> dict:
+    """Create or edit a schedule entry. Body: any of hour/minute/weekday/enabled
+    /target/kind. Editing an existing entry preserves unspecified fields;
+    creating a new one requires kind + target. 422 on an invalid entry."""
+    try:
+        return service.upsert_schedule(get_settings(), {**params, "name": name})
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@app.delete("/v1/schedule/{name}")
+def schedule_delete(name: str) -> dict:
+    """Delete a schedule entry (404 if it doesn't exist)."""
+    try:
+        return service.delete_schedule(get_settings(), name)
+    except KeyError:
+        raise HTTPException(404, f"unknown scheduled job: {name}")
 
 
 @app.post("/v1/schedule/{name}/run")
 def schedule_run(name: str) -> dict:
-    """Run a recurring job now (detached)."""
+    """Run a scheduled entry now (detached), ignoring the ingest desired-state
+    flag (a manual run is an explicit 'check now')."""
     try:
         return service.run_scheduled(get_settings(), name)
     except KeyError:

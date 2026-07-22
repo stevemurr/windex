@@ -56,6 +56,7 @@ from windex import db
 from windex.config import Settings
 from windex.embed import build_embedder, with_runtime_profile
 from windex.index import qdrant as qidx
+from windex.sanitize import strip_smuggled
 
 _NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # uuid5 namespace
 
@@ -85,16 +86,22 @@ class SourceSpec:
     default_limit: int = 100_000
 
 
-def pending_refs(conn: psycopg.Connection, source: str, limit: int) -> dict[str, list[str]]:
-    """text_ref → doc ids, for the oldest pending docs of one source."""
+def pending_refs(conn: psycopg.Connection, source: str, limit: int,
+                 newest_first: bool = False) -> dict[str, list[str]]:
+    """text_ref → doc ids, for the oldest (or newest) pending docs of one source.
+
+    newest_first embeds freshly-harvested docs ahead of the backlog (created_at
+    DESC); the default drains oldest-first. `order` is a fixed literal, not user
+    input, so the f-string carries no injection surface."""
+    order = "created_at DESC" if newest_first else "created_at"
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT text_ref, array_agg(id)
             FROM (
                 SELECT text_ref, id FROM documents
                 WHERE source = %s AND status = 'deduped'
-                ORDER BY created_at LIMIT %s
+                ORDER BY {order} LIMIT %s
             ) t GROUP BY text_ref
             """,
             (source, limit),
@@ -103,9 +110,11 @@ def pending_refs(conn: psycopg.Connection, source: str, limit: int) -> dict[str,
 
 
 def compose_text(row: dict, text_field: str, max_chars: int) -> str:
-    """title + body, bounded. Every source embeds this shape."""
-    title = row.get("title")
-    body = row.get(text_field) or ""
+    """title + body, bounded. Every source embeds this shape. Smuggled/invisible
+    code points are stripped before the char bound so a Tags-block payload can't
+    slip under the char cap while blowing the model's token window (see sanitize)."""
+    title = strip_smuggled(row.get("title") or "")
+    body = strip_smuggled(row.get(text_field) or "")
     return ((title + "\n\n") if title else "") + body[:max_chars]
 
 
@@ -233,7 +242,9 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, spec: SourceSpec
     re-selects. Qdrant upserts are keyed by a stable uuid5 point id, so a
     re-embed overwrites rather than duplicates."""
     settings = with_runtime_profile(conn, settings)
-    refs = pending_refs(conn, spec.source, spec.default_limit if limit is None else limit)
+    newest_first = getattr(settings, "embed_order", "oldest") == "newest"
+    refs = pending_refs(conn, spec.source, spec.default_limit if limit is None else limit,
+                        newest_first=newest_first)
     if not refs:
         return 0
 

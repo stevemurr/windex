@@ -125,6 +125,38 @@ def test_search_surfaces_docs_result_fields(client, monkeypatch):
     assert res["url"].startswith("https://docs.python.org/") and "Foundation" in res["attribution"]
 
 
+def test_search_accepts_memory_source_and_conversation_id(client, monkeypatch):
+    captured = {}
+
+    def fake_search(settings, q, **kw):
+        captured.update(kw)
+        return {"results": [], "degraded": False, "timings": {"embed_query_ms": 0, "search_ms": 0}}
+
+    monkeypatch.setattr(service_mod, "index_search", fake_search)
+    r = client.get("/v1/search",
+                   params={"q": "sidebar jank", "source": "memory",
+                           "conversation_id": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"})
+    assert r.status_code == 200
+    assert captured["source"] == "memory"
+    assert captured["conversation_id"] == "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+
+
+def test_search_surfaces_memory_result_fields(client, monkeypatch):
+    cid = "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+    canned = {
+        "results": [{"doc_id": f"memory:{cid}/00007", "score": 0.83,
+                     "url": f"llmchat://chat/{cid}?chunk=7", "title": "Sidebar jank",
+                     "snippet": "the sidebar stutters…", "source": "memory",
+                     "conversation_id": cid, "chunk_index": 7,
+                     "published_at": "2026-05-14T10:00:00+00:00"}],
+        "degraded": False, "timings": {"embed_query_ms": 1, "search_ms": 1},
+    }
+    monkeypatch.setattr(service_mod, "index_search", lambda *a, **k: canned)
+    res = client.get("/v1/search", params={"q": "x", "source": "memory"}).json()["results"][0]
+    assert res["id"] == f"memory:{cid}/00007"
+    assert res["conversation_id"] == cid and res["chunk_index"] == 7
+
+
 def test_search_hn_source_and_min_points_passthrough(client, monkeypatch):
     captured = {}
 

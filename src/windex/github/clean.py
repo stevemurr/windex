@@ -3,6 +3,8 @@ goal is clean embedding/snippet text, not fidelity."""
 
 import re
 
+from windex.sanitize import strip_smuggled
+
 _PATTERNS = [
     (re.compile(r"```.*?```", re.DOTALL), " "),          # fenced code blocks
     (re.compile(r"!\[[^\]]*\]\([^)]*\)"), " "),           # images / badges
@@ -18,7 +20,9 @@ _NL = re.compile(r"\n{3,}")
 
 
 def clean_readme(md: str) -> str:
-    text = md
+    # Strip smuggled/invisible code points first, so a Tags-block payload can't
+    # survive markdown stripping and later blow the token budget (see sanitize).
+    text = strip_smuggled(md)
     for pattern, repl in _PATTERNS:
         text = pattern.sub(repl, text)
     text = _WS.sub(" ", text)
@@ -35,4 +39,6 @@ def compose_doc(full_name: str, description: str | None, topics: list[str] | Non
         parts.append("Topics: " + ", ".join(topics))
     if readme_text:
         parts.append(readme_text)
-    return "\n\n".join(parts)[:max_chars]
+    # Sanitize the whole composed doc (description/topics too) before the char
+    # bound, so `chars ≈ tokens` holds and the truncation can't keep a payload.
+    return strip_smuggled("\n\n".join(parts))[:max_chars]

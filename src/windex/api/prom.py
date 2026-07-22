@@ -309,6 +309,31 @@ class WindexCollector:
                 docs.add_metric([source, status], float(n))
         families.append(docs)
 
+        # search QUALITY (relevance) — the latest `windex eval` run, by leg;
+        # distinct from the search_metrics latency series. Absent until the first
+        # eval writes a row (the Grafana search-quality panel trends these).
+        from windex.eval.harness import latest_quality
+
+        q = latest_quality(s)
+        if q:
+            ndcg = GaugeMetricFamily(
+                "windex_search_quality_ndcg",
+                "NDCG@k of the latest search-quality eval, by leg "
+                "(known_item | golden | judge).", labels=["leg"])
+            mrr = GaugeMetricFamily(
+                "windex_search_quality_mrr",
+                "MRR of the latest search-quality eval, by leg.", labels=["leg"])
+            legs = [("known_item", q["known_item_ndcg"], q["known_item_mrr"]),
+                    ("golden", q["golden_ndcg"], q["golden_mrr"]),
+                    ("judge", q["judge_ndcg"], None)]
+            for leg, nd, mr in legs:
+                if nd is not None:
+                    ndcg.add_metric([leg], float(nd))
+                if mr is not None:
+                    mrr.add_metric([leg], float(mr))
+            families.append(ndcg)
+            families.append(mrr)
+
         # The rest are all cheap (repos is small; control is tiny) — one pooled
         # checkout so the scrape rides the pool's per-checkout health check.
         with db.pooled(s.pg_dsn) as conn, conn.cursor() as cur:

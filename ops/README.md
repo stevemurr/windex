@@ -10,7 +10,34 @@ stack:
 |------|------------|
 | `prometheus/windex-scrape.yml` | Scrape job to add to the services-box Prometheus. |
 | `grafana/dashboards/windex.json` | The "windex ops" dashboard (import into Grafana). |
-| `grafana/alerting/windex-rules.yml` | The four+one alert rules (provision or recreate in UI). |
+| `grafana/alerting/windex-rules.yml` | The nine alert rules (provision or recreate in UI). |
+
+## The dashboard at a glance
+
+`grafana/dashboards/windex.json` (uid `windex-ops`) is built to answer *what is
+broken and when did it break* without hunting:
+
+- **Alerts & uptime** — an **Active alerts** panel listing whatever is
+  firing/pending (scoped to `app=windex`), beside an **uptime state-timeline**
+  with one row per dependency (gateway / Postgres / Qdrant) and per embed-loop, so
+  an outage's blast radius and exact timing are visible at a glance (red = the
+  signal read 0 in that interval).
+- **Fleet health** — KPI stat tiles: the three dependencies, the query breaker,
+  indexing paused, total backlog, embeds/min (goes **red at 0** — the stall
+  signature), and a backlog ETA.
+- **Throughput / Search / Search quality** — backlog-vs-embedded and embeds/min;
+  search rate, degraded+error share, query + query-embed latency, query-embed
+  failures; and the `windex eval` NDCG/MRR-by-leg trends (0.8 threshold line =
+  the SearchQualityRegression alert).
+- **API internals** (collapsed) — HTTP rate, 5xx/4xx error rate, and p95 by
+  handler; background-job uptime; gateway probe duration.
+- **Source: $source** — a per-source row (repeats over `label_values(windex_documents,
+  source)`): backlog vs embedded, embeds/min, loop up/down, and embed-log
+  staleness (yellow >5m, red >15m — a wedged-but-alive loop).
+
+The dashboard also carries a **`windex alerts` annotation layer** (Grafana
+datasource, tag `windex`) that overlays alert state-changes onto the time panels
+*if* Grafana's alert-state annotations are enabled; it is harmless/empty otherwise.
 
 ## The exporter
 
@@ -97,10 +124,44 @@ updating both this dir and the exporter.
 
 ## Alert rules
 
-| Rule | Fires when | For |
-|------|-----------|-----|
-| `EmbedsStalled` | embed throughput == 0 **and** backlog > 1000 (the 2026-07-17 incident detector) | 15m |
-| `LoopDown` | `windex_loop_up == 0` (per source) | 10m |
-| `GatewayDown` | `windex_gateway_up == 0` | 5m |
-| `DbDown` | `windex_db_up == 0` | 5m |
-| `QdrantDown` | `windex_qdrant_up == 0` | 5m |
+Nine rules, all carrying `labels.app: windex` (the dashboard's Active-alerts panel
+filters on it) and a `severity`. The liveness/outage rules use `noDataState: NoData`
+(a scrape that stops is itself a signal); the rate/quality rules use `OK` (no
+traffic, or an eval that hasn't run, is not a fault and must not page).
+
+| Rule | Severity | Fires when | For |
+|------|----------|-----------|-----|
+| `EmbedsStalled` | critical | embed throughput == 0 **and** backlog > 1000 (the 2026-07-17 incident detector) | 15m |
+| `GatewayDown` | critical | `windex_gateway_up == 0` | 5m |
+| `DbDown` | critical | `windex_db_up == 0` | 5m |
+| `QdrantDown` | critical | `windex_qdrant_up == 0` | 5m |
+| `LoopDown` | warning | `windex_loop_up == 0` (per source) | 10m |
+| `QueryBreakerOpen` | warning | `windex_query_breaker_state{state="open"} == 1` (hybrid degrading to lexical) | 10m |
+| `ApiHighErrorRate` | warning | 5xx share > 5% at > 0.1 rps | 10m |
+| `SearchErrorRate` | warning | `result="error"` share > 5% (not the benign degraded fallback) | 10m |
+| `SearchQualityRegression` | warning | `windex_search_quality_ndcg{leg="known_item"} < 0.8` (baseline ~0.93) | 30m |
+
+The rate/quality rules gate on a minimum request rate and use `clamp_min` on the
+denominator so a `0/0` (or a single stray error in a quiet window) can't fire them.
+
+## Search quality (relevance)
+
+Distinct from the latency series above: `windex eval` measures *relevance*
+(NDCG@k / MRR / Recall@k) over a known-item proxy + a curated golden set (+ an
+optional LLM judge), writes a row to `search_quality`, and the exporter surfaces
+the latest run. Runs nightly via the scheduler (`eval` @ 06:30) and on demand
+(`windex eval`). Details: `docs/search-overhaul-plan.md` Phase 0.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `windex_search_quality_ndcg` | gauge | `leg` | NDCG@k of the latest eval, by leg (`known_item` \| `golden` \| `judge`). |
+| `windex_search_quality_mrr` | gauge | `leg` | MRR of the latest eval, by leg. |
+
+**Grafana panels** — the **Search quality** row of the dashboard plots
+`windex_search_quality_ndcg` and `_mrr` with legend `{{leg}}`. The `known_item`
+leg is the always-on health line; `golden` tracks the curated regression anchors;
+`judge` appears only when the LLM judge is set.
+
+**Alert** — `SearchQualityRegression` (in `windex-rules.yml`) fires when
+`windex_search_quality_ndcg{leg="known_item"} < 0.8` for 30m. Tune the 0.8
+threshold to the observed baseline (currently ~0.93).

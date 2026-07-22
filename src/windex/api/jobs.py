@@ -126,6 +126,8 @@ JOBS: dict[str, Job] = {j.name: j for j in [
     Job("hf-embed", ("embed-loop", "hf"), "windex embed-loop hf",
         "Embed pages", "Embed staged Hugging Face docs/courses/blog into the index",
         "hf"),
+    Job("memory-embed", ("embed-loop", "memory"), "windex embed-loop memory",
+        "Embed chat memory", "Embed pushed chat-history chunks", "memory"),
     Job("daily", ("daily",), "windex daily",
         "Daily job", "The full freshness cycle (news + github), idempotent",
         "maintenance"),
@@ -134,10 +136,18 @@ JOBS: dict[str, Job] = {j.name: j for j in [
         "maintenance",
         {"source": Param("", "choice",
                          choices=("news", "repos", "wiki", "arxiv", "smallweb", "docs",
-                                  "hn", "hf", "all"),
+                                  "hn", "hf", "memory", "all"),
                          default="all")},
         confirm=True),
 ]}
+
+
+# Push-based sources: they have a supervised embed loop (so they appear in
+# embed_loop_jobs, freshness, /v1/loops) but NO pull ingest — content arrives via
+# a write endpoint, not a fetch. This frozenset is what the seed/schedule guards
+# subtract so a push source never seeds a broken `ingest-<src>` schedule row or
+# becomes an editable ingest target (both would be undispatchable).
+PUSH_SOURCES = frozenset({"memory"})
 
 
 # serve is a MANAGED process but deliberately NOT in JOBS: JOBS is the
@@ -148,6 +158,14 @@ JOBS: dict[str, Job] = {j.name: j for j in [
 # pgrep/`in` match distinguishes from `windex serve-mcp`.
 SERVE = Job("serve", ("serve",), "windex serve --host",
             "API server", "REST API + dashboard + /metrics on :8100", "system")
+
+# The scheduler is a MANAGED process like serve — supervised by up/status/the
+# watchdog but deliberately NOT in JOBS (the LAN-exposed whitelist can't be
+# allowed to stop the timer that drives ingest). Its pattern is a literal
+# "windex scheduler", which won't cross-match serve/serve-mcp/embed-loop.
+SCHEDULER = Job("scheduler", ("scheduler",), "windex scheduler",
+                "Job scheduler", "Editable schedule timer loop (fires due ingest/command jobs)",
+                "system")
 
 
 def embed_loop_jobs() -> list[Job]:
@@ -185,7 +203,15 @@ def build_argv(job: Job, params: dict) -> list[str]:
 
 
 def _pids(pattern: str) -> list[int]:
-    out = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True)
+    # `pgrep` only sees this process's own PID namespace and may be absent from a
+    # slim container image. In the containerized (split serve/loops) deployment the
+    # loops run in separate containers, so cross-process liveness comes from Postgres
+    # heartbeats (see service.loop_states), not pgrep. Missing pgrep => "can't tell",
+    # not a 500.
+    try:
+        out = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True)
+    except FileNotFoundError:
+        return []
     return [int(p) for p in out.stdout.split()] if out.returncode == 0 else []
 
 
@@ -303,3 +329,22 @@ def start_serve(host: str = "127.0.0.1", port: int = 8100) -> dict:
 def stop_serve() -> dict:
     """Stop the managed API server (SIGTERM its process group)."""
     return _stop_pattern("serve", SERVE.pattern)
+
+
+def scheduler_running() -> bool:
+    """True if the job scheduler timer loop is running (pgrep on its pattern)."""
+    return bool(_pids(SCHEDULER.pattern))
+
+
+def start_scheduler() -> dict:
+    """Launch `windex scheduler` detached (reusing the job spawn machinery).
+    Refuses if one is already running. Logs to ~/.windex/logs/scheduler.log."""
+    if scheduler_running():
+        raise RuntimeError("scheduler is already running")
+    argv = [str(VENV_BIN / "windex"), "scheduler"]
+    return {"started": "scheduler", "pid": _spawn("scheduler", argv)}
+
+
+def stop_scheduler() -> dict:
+    """Stop the managed scheduler (SIGTERM its process group)."""
+    return _stop_pattern("scheduler", SCHEDULER.pattern)

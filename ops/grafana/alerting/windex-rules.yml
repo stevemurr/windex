@@ -15,11 +15,19 @@
 #
 # No notification channel exists on this box (no SMTP / webhook), so rules route
 # to Grafana's default contact point and fire IN-UI only (the Alerting bell / the
-# Alert rules list). Wire a contact point + notification policy when a channel
-# exists.
+# Alert rules list). The "windex ops" dashboard also surfaces them: the "Active
+# alerts" panel lists whatever is firing/pending, filtered to app=windex (the
+# label every rule below carries). Wire a contact point + notification policy
+# when a channel exists.
 #
 # Each rule is a Prometheus instant query (refId A) feeding a threshold
-# expression (refId C) that decides firing; `for:` is the sustain window.
+# expression (refId C) that decides firing; `for:` is the sustain window. Every
+# rule carries `labels.app: windex` so the dashboard's Active-alerts panel can
+# scope to windex, plus a `severity` (critical | warning).
+#
+# noDataState rationale: the liveness/outage rules use NoData (a scrape that
+# stops IS a signal worth surfacing). The rate/quality rules use OK, because
+# "no traffic" or "eval hasn't run yet" is not a fault and must not page.
 apiVersion: 1
 
 groups:
@@ -67,6 +75,7 @@ groups:
         noDataState: NoData
         execErrState: Error
         labels:
+          app: windex
           severity: critical
         annotations:
           summary: "Embedding pipeline has stalled with a backlog waiting"
@@ -112,6 +121,7 @@ groups:
         noDataState: NoData
         execErrState: Error
         labels:
+          app: windex
           severity: warning
         annotations:
           summary: "A windex ingest/embed loop is down ({{ $labels.source }})"
@@ -152,6 +162,7 @@ groups:
         noDataState: NoData
         execErrState: Error
         labels:
+          app: windex
           severity: critical
         annotations:
           summary: "Embedding gateway is down"
@@ -193,6 +204,7 @@ groups:
         noDataState: NoData
         execErrState: Error
         labels:
+          app: windex
           severity: critical
         annotations:
           summary: "Postgres is down"
@@ -235,6 +247,7 @@ groups:
         noDataState: NoData
         execErrState: Error
         labels:
+          app: windex
           severity: critical
         annotations:
           summary: "Qdrant is down"
@@ -242,3 +255,184 @@ groups:
             windex_qdrant_up == 0 for 5m. The vector store is unreachable: dense
             search returns nothing (or errors) and embedding upserts fail. Check
             the qdrant container on the windex host.
+
+      # Query-embed circuit breaker latched open: hybrid search is degrading to
+      # lexical for every query (the query-embed leg keeps timing out / refusing).
+      # Distinct from GatewayDown — a bare TCP connect can still succeed while the
+      # embed call itself times out under GPU contention.
+      - uid: windex-query-breaker-open
+        title: QueryBreakerOpen
+        condition: C
+        for: 10m
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: REPLACE_WITH_PROMETHEUS_DS_UID
+            model:
+              refId: A
+              expr: windex_query_breaker_state{state="open"}
+              instant: true
+              range: false
+              editorMode: code
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        labels:
+          app: windex
+          severity: warning
+        annotations:
+          summary: "Query-embed circuit breaker is open"
+          description: >-
+            windex_query_breaker_state{state="open"} == 1 for 10m. The
+            query-embedding leg is failing, so hybrid search is falling back to
+            lexical (BM25) for live queries. Dense results are unavailable until
+            the embedding endpoint recovers and the breaker half-opens. See the
+            Search row (degraded share, query-embed failures) on the dashboard.
+
+      # API is returning server errors (5xx) at a meaningful rate. Gated on a
+      # minimum request rate so a single stray 500 in a quiet period can't fire.
+      - uid: windex-api-high-error-rate
+        title: ApiHighErrorRate
+        condition: C
+        for: 10m
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: REPLACE_WITH_PROMETHEUS_DS_UID
+            model:
+              refId: A
+              # 1 iff 5xx share > 5% AND overall request rate > 0.1 rps (the gate
+              # keeps a lone 500 in a quiet window from tripping it). clamp_min
+              # avoids a 0/0 when there is no traffic at all.
+              expr: '(sum(rate(windex_http_requests_total{code=~"5.."}[10m])) / clamp_min(sum(rate(windex_http_requests_total[10m])), 1e-9) > bool 0.05) * (sum(rate(windex_http_requests_total[10m])) > bool 0.1)'
+              instant: true
+              range: false
+              editorMode: code
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        labels:
+          app: windex
+          severity: warning
+        annotations:
+          summary: "API 5xx error rate is elevated"
+          description: >-
+            Over 5% of HTTP responses have been 5xx for 10m (at >0.1 rps). Check
+            the API internals row (HTTP error rate by handler) and windex serve's
+            log; a dependency outage (DbDown / QdrantDown) usually shows up here too.
+
+      # Search itself is erroring (not merely degrading to lexical). result="error"
+      # means run_search raised, not that hybrid fell back — that is result="degraded".
+      - uid: windex-search-error-rate
+        title: SearchErrorRate
+        condition: C
+        for: 10m
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: REPLACE_WITH_PROMETHEUS_DS_UID
+            model:
+              refId: A
+              expr: '(sum(rate(windex_search_requests_total{result="error"}[10m])) / clamp_min(sum(rate(windex_search_requests_total[10m])), 1e-9) > bool 0.05) * (sum(rate(windex_search_requests_total[10m])) > bool 0.01)'
+              instant: true
+              range: false
+              editorMode: code
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        labels:
+          app: windex
+          severity: warning
+        annotations:
+          summary: "Search error rate is elevated"
+          description: >-
+            Over 5% of searches errored (result="error", i.e. run_search raised —
+            not the benign degraded-to-lexical fallback) for 10m. Check the Search
+            row and the API log; QdrantDown is a common root cause.
+
+      # Relevance regression: the nightly `windex eval` NDCG on the always-on
+      # known-item leg dropped below baseline. Catches a bad model swap / index
+      # corruption / ranking regression that liveness alerts can't see.
+      - uid: windex-search-quality-regression
+        title: SearchQualityRegression
+        condition: C
+        for: 30m
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: REPLACE_WITH_PROMETHEUS_DS_UID
+            model:
+              refId: A
+              expr: windex_search_quality_ndcg{leg="known_item"}
+              instant: true
+              range: false
+              editorMode: code
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: lt
+                    params: [0.8]
+        noDataState: OK
+        execErrState: Error
+        labels:
+          app: windex
+          severity: warning
+        annotations:
+          summary: "Search quality (NDCG, known-item leg) has regressed"
+          description: >-
+            windex_search_quality_ndcg{leg="known_item"} < 0.8 for 30m (baseline
+            ~0.93). A relevance regression — suspect a model swap, index
+            corruption, or a ranking change. Re-run `windex eval` and check the
+            Search quality row. Tune the 0.8 threshold to the observed baseline.

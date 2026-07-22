@@ -6,7 +6,7 @@
   <img alt="windex — self-hosted web index" src="assets/banner-light.svg" width="820">
 </picture>
 
-*Fresh public datasets — CC-News, GitHub, Wikipedia, arXiv, the small web, Hacker News — continuously ingested, deduped, embedded with **your** model, and served as hybrid search over REST and MCP.*
+*Fresh public datasets — CC-News, GitHub, Wikipedia, arXiv, Hacker News, the small web, and developer docs (DevDocs + Hugging Face) — continuously ingested, deduped, embedded with **your** model, and served as hybrid search over REST and MCP.*
 
 ![Python](https://img.shields.io/badge/python-3.11%E2%80%933.12-c15f3c?style=flat-square&labelColor=29261f)
 &nbsp;
@@ -18,8 +18,8 @@
 
 A search index for agents, on your hardware. Everything runs self-hosted; the only external
 touchpoints are the public datasets themselves — Common Crawl's news feed, GH Archive and the
-GitHub API, Wikimedia's dumps, arXiv's OAI feed, the Algolia HN Search API, and the
-small-web blogs it politely polls.
+GitHub API, Wikimedia's dumps, arXiv's OAI feed, the Algolia HN Search API, the small-web
+blogs it politely polls, DevDocs' documentation bundles, and Hugging Face's docs.
 
 ## What it does
 
@@ -87,6 +87,15 @@ small-web blogs it politely polls.
   first pointed at a *single host*, so it self-throttles off HF's own published
   `ratelimit` header (the `pages` bucket: 1 req/3s) instead of reusing Small Web's
   many-hosts config. See [`docs/huggingface-source.md`](docs/huggingface-source.md).
+- **Chat memory** — the one source not *pulled* from an upstream: it's **pushed**.
+  An external app (a chat client) chunks each conversation and `POST`s the whole
+  chunk list to `/v1/memory/conversations/{uuid}` (bearer-token-guarded writes).
+  The server treats each conversation as a DevDocs-style full-replace unit — the
+  chunk set is rewritten to `memory/clean/<id>.parquet` and a text-hash ledger
+  re-embeds only the changed delta, so a finished turn re-embeds just its trailing
+  chunk while edits/deletes tombstone vanished chunk ids. The shared embed driver
+  then drains it exactly like every other parquet-backed source; the app never
+  computes embeddings.
 - **Hybrid search** — dense vectors from *your* embedding model (any OpenAI/TEI-compatible
   endpoint, or in-process sentence-transformers) fused with BM25 sparse vectors via RRF in
   [Qdrant](https://qdrant.tech). Semantic queries and exact-name lookups both work.
@@ -110,7 +119,9 @@ flowchart LR
         SW[Small Web feeds]
         DV[DevDocs bundles]
         HN[Algolia HN API]
+        HF[Hugging Face docs]
     end
+    MEM[chat memory<br/>push via API]
     subgraph pipeline [Pipeline]
         EX[extract + filter<br/>datatrove/FineWeb]
         DD[dedup<br/>ledger + MinHash]
@@ -133,6 +144,8 @@ flowchart LR
     SW --> EX
     DV --> PQ
     HN --> PQ
+    HF --> PQ
+    MEM --> PQ
     DD <--> PG
     EM <--> PG
     QD --> API --> DASH
@@ -298,6 +311,12 @@ Every job is idempotent — a rerun is a no-op, a crashed run resumes from its w
 15 6 * * 0  windex maintain --reindex                         # weekly: rebuild bloat-flagged indexes
 ```
 
+Prefer not to touch system cron? windex ships a **built-in scheduler**
+(`windex scheduler`) — a never-exiting loop that fires due entries from an editable
+`schedule` table (the same ingest/`daily`/`maintain`/`eval` jobs), so the whole
+fleet is supervised in-process. It's a first-class service in the container stack
+(see `compose.yaml`).
+
 ## Search API
 
 ```sh
@@ -382,6 +401,24 @@ was rebuilt from parquet staging with zero re-crawling.
   runtime (`env` / `polite` / `full`).
 - **Store tuning** — applied Postgres/Qdrant settings and their rationale are in
   [`docs/store-tuning.md`](docs/store-tuning.md); schema.sql carries the durable parts.
+- **Metrics & alerting** — `windex serve` exposes Prometheus metrics at `GET
+  /metrics` on `:8100` (fleet liveness, embed throughput vs. backlog, search RED,
+  the query-embed breaker, per-source log staleness). Point a self-hosted
+  Prometheus at it and import the **"windex ops" Grafana dashboard** — an Active-
+  alerts panel + a dependency/loop uptime timeline up top, then throughput, search,
+  search-quality, and per-source rows — plus nine alert rules for the outage/stall
+  failure modes (the 2026-07-17 gateway outage that silently stalled indexing for
+  ~36h is the one they exist to catch). Drop-in scrape config, dashboard JSON, and
+  alert rules live in [`ops/`](ops/).
+- **Search quality** — `windex eval` measures *relevance* (NDCG@k / MRR / Recall@k)
+  over a known-item proxy + a curated golden set (+ an optional LLM judge), writes a
+  row to `search_quality`, and the exporter surfaces the latest run on the dashboard.
+  Run it nightly from the scheduler so quality is tracked on a cadence, not ad hoc.
+- **Containerized deploy** — `compose.yaml` + `Containerfile` bring up the full
+  stack (Postgres + Qdrant + `windex serve` + the nine per-source embed-loops + the
+  scheduler) under rootless podman/Docker Compose; the embedding gateway runs as a
+  separate project the app reaches over the host network. For local dev, `scripts/dev.sh`
+  runs just Postgres + Qdrant via Apple's `container` CLI.
 
 ## Development
 

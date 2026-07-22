@@ -671,6 +671,36 @@ def hf_status() -> None:
         console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
 
 
+memory_app = typer.Typer(no_args_is_help=True,
+                         help="Chat-memory source (push-based; no pull ingest)")
+app.add_typer(memory_app, name="memory")
+
+
+@memory_app.command("status")
+def memory_status() -> None:
+    """Conversation + chunk pipeline counts for the pushed chat-memory source."""
+    from windex.memory_source import ingest as mingest
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        console.print(mingest.status(conn))
+
+
+@memory_app.command("embed")
+def memory_embed(limit: int = 100_000) -> None:
+    """One-shot embed of staged chat-memory chunks into Qdrant (the loop is the
+    unattended path). Respects the dashboard pause flag."""
+    from windex.memory_source.embed_index import embed_pending
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        if db.get_control(conn, "indexing", "running") == "paused":
+            console.print("[yellow]paused — skipping embed[/yellow]")
+            raise typer.Exit(0)
+        n = embed_pending(conn, settings, limit=limit)
+    console.print(f"[green]embedded {n} chunks[/green]")
+
+
 EMBED_SOURCES = {
     "ccnews": "windex.ccnews.embed_index",
     "wiki": "windex.wiki.embed_index",
@@ -680,6 +710,7 @@ EMBED_SOURCES = {
     "smallweb": "windex.smallweb.embed_index",
     "gh": "windex.github.embed_index",
     "hf": "windex.hf.embed_index",
+    "memory": "windex.memory_source.embed_index",
 }
 
 
@@ -732,6 +763,11 @@ def embed_loop(
     while True:
         try:
             with db.connect(settings.pg_dsn) as conn:
+                # Liveness heartbeat: the containerized loops run in separate
+                # containers, so `windex status`/the console read this instead of
+                # pgrep (see service.loop_states). Written every cycle — including
+                # while paused — so a paused-but-alive loop still reads as "up".
+                db.set_control(conn, f"loop_heartbeat_{source}", str(int(time_mod.time())))
                 if db.get_control(conn, "indexing", "running") == "paused":
                     console.print("paused — waiting")
                     time_mod.sleep(interval)
@@ -761,6 +797,40 @@ def embed_loop(
                 )
             # Backoff caps at 300s, so a dead endpoint is re-probed ~every 5 min.
             time_mod.sleep(min(interval * failures, 300))
+
+
+@app.command()
+def scheduler(
+    interval: int = typer.Option(60, help="Seconds between due-entry checks"),
+) -> None:
+    """Never-exiting timer loop for the editable job scheduler.
+
+    About every `interval` seconds it reads the `schedule` table and fires the
+    entries that are enabled and DUE (hour+minute match, weekday matches or is
+    NULL, and not already run this minute). Ingest entries additionally skip when
+    that source's ingest_enabled flag is off. Detached under `windex up`, it logs
+    to ~/.windex/logs/scheduler.log (the supervised process redirects stdout).
+
+    Robust like the embed loops: a Postgres blip is caught and the loop simply
+    waits for the next tick — a transient DB drop must never kill the scheduler
+    (the same failure mode that stalled indexing for ~36h on 2026-07-17).
+    """
+    import time as time_mod
+    from datetime import datetime
+
+    from windex.api import service
+
+    settings = get_settings()
+    console.print("scheduler loop started")
+    while True:
+        try:
+            fired = service.run_due(settings)
+            if fired:
+                stamp = datetime.now().isoformat(timespec="seconds")
+                console.print(f"{stamp} fired: {', '.join(fired)}")
+        except Exception as exc:  # noqa: BLE001 — a blip must not kill the loop
+            console.print(f"[red]scheduler tick failed: {exc}[/red]")
+        time_mod.sleep(interval)
 
 
 @app.command()
@@ -807,9 +877,50 @@ def maintain(
             console.print(f"{idx}: leaf density {density:.0f}% — healthy")
 
 
+@app.command("eval")
+def eval_cmd(
+    mode: str = typer.Option("hybrid", help="hybrid | dense | lexical"),
+    k: int = typer.Option(0, help="cutoff for NDCG@k / Recall@k (0 = config eval_k)"),
+    per_source: int = typer.Option(0, help="known-item samples per source (0 = config)"),
+    judge: bool = typer.Option(False, help="also run the LLM-as-judge leg (needs WINDEX_JUDGE_*)"),
+    persist: bool = typer.Option(True, help="write the run to search_quality"),
+) -> None:
+    """Measure SEARCH QUALITY (relevance): NDCG@k / MRR / Recall@k over a
+    known-item (title-as-query) proxy + a curated golden set (+ optional LLM
+    judge). Persists a row the Grafana search-quality panel trends. Scheduled via
+    `windex scheduler` so quality is measured on a cadence, not ad hoc."""
+    import subprocess
+
+    from windex.eval import run_eval
+    from windex.eval.harness import persist_run
+
+    settings = get_settings()
+    k = k or settings.eval_k
+    per_source = per_source or settings.eval_per_source
+    console.print(f"[cyan]eval[/cyan] mode={mode} k={k} per_source={per_source} judge={judge}")
+    result = run_eval(settings, per_source=per_source, k=k, mode=mode, llm_judge=judge)
+    ov = result["overall"]
+    console.print(f"  known-item  NDCG@{k}={ov[f'known_item_ndcg@{k}']:.4f}  MRR={ov['known_item_mrr']:.4f}")
+    if result["golden"]:
+        console.print(f"  golden      NDCG@{k}={ov.get(f'golden_ndcg@{k}')}  MRR={ov.get('golden_mrr')}  (n={result['golden']['n']})")
+    if result["judge"]:
+        console.print(f"  llm-judge   graded NDCG@{k}={result['judge'].get(f'graded_ndcg@{k}')}  (n={result['judge']['n']})")
+    for src, v in result["known_item"].items():
+        console.print(f"    {src:9s} n={v['n']:<3} ndcg@{k}={v[f'ndcg@{k}']:.3f} "
+                      f"mrr={v['mrr']:.3f} hit@{k}={v[f'hit@{k}']:.3f}")
+    if persist:
+        try:
+            sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                                 capture_output=True, text=True).stdout.strip()
+        except Exception:  # noqa: BLE001
+            sha = ""
+        persist_run(settings, result, sha)
+        console.print("[green]persisted to search_quality[/green]")
+
+
 @app.command()
 def reindex(
-    source: str = typer.Argument("all", help="news | repos | wiki | arxiv | smallweb | docs | hn | hf | all"),
+    source: str = typer.Argument("all", help="news | repos | wiki | arxiv | smallweb | docs | hn | hf | memory | all"),
     drop_collections: bool = typer.Option(True, help="Recreate Qdrant collections from scratch"),
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation"),
 ) -> None:
@@ -910,6 +1021,21 @@ def reindex(
                    WHERE source='hf' AND status='embedded'"""
             )
             console.print(f"[green]hf: {cur.rowcount} docs queued for re-embed[/green]")
+        # memory is push-staged like every other source: its parquet is the
+        # source of truth, so a model swap re-embeds it from staging too. `all`
+        # deliberately includes memory here (a reindex rebuilds every collection);
+        # search-side `all` still excludes it.
+        if source in ("memory", "all"):
+            if drop_collections:
+                name = qidx.collection_name("memory", settings.embed_model)
+                if client.collection_exists(name):
+                    client.delete_collection(name)
+                qidx.ensure_collection(client, "memory", settings.embed_model, settings.embed_dim)
+            cur.execute(
+                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
+                   WHERE source='memory' AND status='embedded'"""
+            )
+            console.print(f"[green]memory: {cur.rowcount} docs queued for re-embed[/green]")
         conn.commit()
     console.print(
         "run `windex ccnews embed-loop`, `windex gh embed`, `windex wiki embed`, "
@@ -1140,11 +1266,18 @@ def _collect_status(settings) -> dict:
     pg = _pg_ready(settings)
     qd = _qdrant_ready(settings)
     serve_up = jobs.serve_running()
+    sched_up = jobs.scheduler_running()
     loop_jobs = jobs.embed_loop_jobs()
     # Desired-state flags need the DB; if it's down, treat all as enabled so a
     # stopped loop still reports "down" rather than being silently hidden.
     enabled = service.get_loops_enabled(settings) if pg else {j.argv[1]: True for j in loop_jobs}
-    down = [] if serve_up else ["serve"]
+    # serve + the scheduler are always-on supervised members: absent ⇒ `down`,
+    # which the watchdog reads to reconcile via `windex up`.
+    down = []
+    if not serve_up:
+        down.append("serve")
+    if not sched_up:
+        down.append("scheduler")
     loops = []
     for job in loop_jobs:
         src = job.argv[1]
@@ -1156,12 +1289,13 @@ def _collect_status(settings) -> dict:
                       "pids": pids})
         if en and not running:
             down.append(src)  # enabled but not running → the watchdog restarts it
-    # "up" = serve + every ENABLED loop running (disabled loops don't count).
+    # "up" = serve + scheduler + every ENABLED loop running (disabled don't count).
     loops_up = all(entry["running"] for entry in loops if entry["enabled"])
     return {
-        "up": bool(pg and qd and serve_up and loops_up),
+        "up": bool(pg and qd and serve_up and sched_up and loops_up),
         "containers": {"postgres": {"reachable": pg}, "qdrant": {"reachable": qd}},
         "serve": {"running": serve_up, "port": 8100},
+        "scheduler": {"running": sched_up},
         "loops": loops,
         "down": down,
     }
@@ -1180,6 +1314,7 @@ def _print_status(settings) -> None:
     table.add_row("postgres", mark(st["containers"]["postgres"]["reachable"]), "")
     table.add_row("qdrant", mark(st["containers"]["qdrant"]["reachable"]), "")
     table.add_row("serve", mark(st["serve"]["running"], "up"), f":{st['serve']['port']}")
+    table.add_row("scheduler", mark(st["scheduler"]["running"], "up"), "")
     state_style = {"up": "[green]up[/green]", "down": "[red]down[/red]",
                    "disabled": "[dim]disabled[/dim]"}
     for entry in st["loops"]:
@@ -1195,6 +1330,7 @@ def up(
         None, help="Interface serve binds (default: WINDEX_SERVE_HOST, else 127.0.0.1)"),
     port: int = 8100,
     no_serve: bool = typer.Option(False, "--no-serve", help="Don't start the API server"),
+    no_scheduler: bool = typer.Option(False, "--no-scheduler", help="Don't start the job scheduler"),
     no_loops: bool = typer.Option(False, "--no-loops", help="Don't start the embed loops"),
     source: list[str] = typer.Option(
         [], "--source", help="Restrict the loops to these sources (repeatable); default all"),
@@ -1263,6 +1399,15 @@ def up(
             info = jobs.start_serve(host, port)
             console.print(f"[green]started serve[/green] pid {info['pid']} on {host}:{port}")
 
+    # 5b. Scheduler (unless suppressed): the always-on timer loop that fires the
+    # due schedule entries. Supervised like serve — the watchdog restarts it.
+    if not no_scheduler:
+        if jobs.scheduler_running():
+            console.print("scheduler already running")
+        else:
+            info = jobs.start_scheduler()
+            console.print(f"[green]started scheduler[/green] pid {info['pid']}")
+
     # 6. Loops (unless suppressed): start each ENABLED source that's down. A
     # disabled source (desired-state off) is skipped, so `up` — including the
     # watchdog's — never resurrects a loop the operator turned off.
@@ -1319,10 +1464,13 @@ def down(
         console.print(f"stopped loop {src}: {res['pids']}" if res["pids"]
                       else f"loop {src} not running")
 
-    # Only touch serve on a full down (no --source subset).
+    # Only touch serve + scheduler on a full down (no --source subset): both are
+    # managed processes `up` starts, so a full down stops them symmetrically.
     if not source:
         res = jobs.stop_serve()
         console.print(f"stopped serve: {res['pids']}" if res["pids"] else "serve not running")
+        res = jobs.stop_scheduler()
+        console.print(f"stopped scheduler: {res['pids']}" if res["pids"] else "scheduler not running")
 
     if not keep_containers:
         dev_sh = jobs.PROJECT_ROOT / "scripts" / "dev.sh"
@@ -1393,7 +1541,9 @@ def _refresh_script(sources: list[str], wx: str, root: str) -> str:
     second `refresh` can detect the sweep is already running via pgrep."""
     def expand(chain: str) -> str:
         return " && ".join(f'"{wx}" {step}' for step in chain.split(" && "))
-    blocks = [f"echo === refresh {s} === && {expand(REFRESH_CHAINS[s])}" for s in sources]
+    # On a source's success, record its ingest timestamp (freshness "last update").
+    blocks = [f'echo === refresh {s} === && {expand(REFRESH_CHAINS[s])} && "{wx}" _mark-ingest {s}'
+              for s in sources]
     body = " ; ".join(f"{{ {b} ; }}" for b in blocks)
     return f'true WINDEX_REFRESH; cd "{root}" && {body}'
 
@@ -1425,6 +1575,15 @@ def refresh(
         raise typer.Exit(0)
 
     sources = source or list(REFRESH_CHAINS)
+    if not source:
+        # A bare sweep honors the ingest desired-state; an explicit --source is a
+        # manual "check now" that runs regardless of the flag.
+        from windex.api import service
+        enabled = service.get_ingest_enabled(get_settings())
+        sources = [s for s in sources if enabled.get(s, True)]
+        if not sources:
+            console.print("[yellow]ingest is disabled for every source — nothing to do[/yellow]")
+            raise typer.Exit(0)
     script = _refresh_script(sources, str(jobs.VENV_BIN / "windex"), str(jobs.PROJECT_ROOT))
     if foreground:
         raise typer.Exit(subprocess.run(["bash", "-lc", script]).returncode)
@@ -1432,6 +1591,17 @@ def refresh(
     console.print(f"[green]refresh sweep started[/green] pid {pid} — sources: {', '.join(sources)}")
     console.print("staged content is indexed by the running embed loops; "
                   "follow ~/.windex/logs/refresh.log")
+
+
+@app.command("_mark-ingest", hidden=True)
+def _mark_ingest(source: str) -> None:
+    """Internal: record a successful ingest for a source (ingest_ts_<source>
+    control flag) so the freshness 'last update' column is accurate. Appended to
+    each refresh chain by _refresh_script."""
+    import time as time_mod
+
+    with db.connect(get_settings().pg_dsn) as conn:
+        db.set_control(conn, f"ingest_ts_{source}", str(int(time_mod.time())))
 
 
 if __name__ == "__main__":

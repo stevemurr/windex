@@ -152,7 +152,7 @@ def test_embed_jobs_use_the_supervised_loop():
     from windex.cli import EMBED_SOURCES
 
     embed_jobs = [j for j in JOBS.values() if j.name.endswith("-embed") or j.name == "embed-loop"]
-    assert len(embed_jobs) == 8  # one per embeddable source
+    assert len(embed_jobs) == 9  # one per embeddable source (incl. push-based memory)
     for j in embed_jobs:
         assert j.argv[0] == "embed-loop", f"{j.name} is not supervised: {j.argv}"
         assert j.argv[1] in EMBED_SOURCES, f"{j.name} targets unknown source {j.argv[1]}"
@@ -180,13 +180,13 @@ def test_serve_is_managed_but_not_in_the_whitelist():
     assert jobs.SERVE.pattern not in "/opt/venv/bin/windex serve-mcp"
 
 
-def test_embed_loop_jobs_are_the_eight_sources():
+def test_embed_loop_jobs_are_every_source():
     """The one place that answers 'which loops should be running' — reused by
     windex up/status, the watchdog, and windex_loop_up."""
     from windex.cli import EMBED_SOURCES
 
     loops = jobs.embed_loop_jobs()
-    assert len(loops) == 8
+    assert len(loops) == 9  # eight pull sources + push-based memory
     assert {j.argv[1] for j in loops} == set(EMBED_SOURCES)
     assert all(j.argv[0] == "embed-loop" for j in loops)
 
@@ -236,6 +236,21 @@ def test_loop_control_endpoint(client, monkeypatch):
     assert client.post("/v1/loops/bogus", json={"enabled": True}).status_code == 404
 
 
+def test_ingest_endpoint(client, monkeypatch):
+    import windex.api.service as svc
+
+    seen = {}
+    monkeypatch.setattr(svc, "set_ingest_enabled",
+                        lambda s, src, en: seen.__setitem__("v", (src, en)) or {"source": src, "ingest_enabled": en})
+    r = client.post("/v1/ingest/hf", json={"enabled": False})
+    assert r.status_code == 200 and seen["v"] == ("hf", False)
+
+    def _raise(s, src, en):
+        raise KeyError(src)
+    monkeypatch.setattr(svc, "set_ingest_enabled", _raise)
+    assert client.post("/v1/ingest/bogus", json={"enabled": True}).status_code == 404
+
+
 def test_system_action_endpoints(client, monkeypatch):
     import windex.api.service as svc
 
@@ -279,6 +294,133 @@ def test_freshness_and_schedule_endpoints(client, monkeypatch):
     assert client.get("/v1/schedule").json()[0]["name"] == "daily"
     assert client.post("/v1/schedule/daily/run").json()["action"] == "daily"
     assert client.post("/v1/schedule/bogus/run").status_code == 404
+
+
+def test_scheduler_is_managed_but_not_in_the_whitelist():
+    """The scheduler mirrors serve: a managed process the LAN-exposed /v1/jobs
+    whitelist must NOT be able to stop, but up/status/the watchdog manage it.
+    Its pattern must not cross-match serve/serve-mcp/embed-loop."""
+    assert "scheduler" not in jobs.JOBS
+    launched = " ".join([str(jobs.VENV_BIN / "windex"), "scheduler"])
+    assert jobs.SCHEDULER.pattern in launched
+    assert jobs.SCHEDULER.pattern not in "/opt/venv/bin/windex serve --host 127.0.0.1"
+    assert jobs.SCHEDULER.pattern not in "/opt/venv/bin/windex serve-mcp"
+    assert jobs.SCHEDULER.pattern not in "/opt/venv/bin/windex embed-loop hf"
+
+
+def test_is_due_matching():
+    """The pure due-entry predicate: enabled + hour/minute match + weekday
+    (or NULL) + not already run this minute."""
+    from datetime import datetime, timedelta
+
+    from windex.api import service
+
+    now = datetime(2026, 7, 20, 3, 15)
+    dow = (now.weekday() + 1) % 7  # schedule weekday convention: Sun=0
+    base = {"name": "x", "kind": "ingest", "target": "hf", "hour": 3, "minute": 15,
+            "weekday": None, "enabled": True, "last_run": None}
+
+    assert service._is_due(base, now)
+    assert not service._is_due({**base, "enabled": False}, now)       # disabled
+    assert not service._is_due({**base, "minute": 16}, now)           # wrong minute
+    assert not service._is_due({**base, "hour": 4}, now)              # wrong hour
+    assert service._is_due({**base, "weekday": dow}, now)             # weekday matches
+    assert not service._is_due({**base, "weekday": (dow + 1) % 7}, now)  # weekday off
+    # already fired this minute → not due; a prior minute → due again
+    assert not service._is_due({**base, "last_run": now}, now)
+    assert service._is_due({**base, "last_run": now - timedelta(minutes=1)}, now)
+
+
+def test_run_due_dispatch_and_ingest_gate(monkeypatch):
+    """One scheduler tick: fires enabled+due entries, gates ingest on the
+    source's ingest_enabled flag, dispatches ingest→refresh and command→windex,
+    stamps last_run, and skips not-due entries. Fully stubbed — no DB, no spawn."""
+    from datetime import datetime
+
+    from windex.api import service
+
+    now = datetime(2026, 7, 20, 3, 0)
+    entries = [
+        {"name": "ingest-ccnews", "kind": "ingest", "target": "ccnews", "hour": 3,
+         "minute": 0, "weekday": None, "enabled": True, "last_run": None},
+        {"name": "ingest-hf", "kind": "ingest", "target": "hf", "hour": 3,
+         "minute": 0, "weekday": None, "enabled": True, "last_run": None},
+        {"name": "daily", "kind": "command", "target": "daily", "hour": 3,
+         "minute": 0, "weekday": None, "enabled": True, "last_run": None},
+        {"name": "maintain", "kind": "command", "target": "maintain", "hour": 5,
+         "minute": 45, "weekday": None, "enabled": True, "last_run": None},  # not due
+    ]
+    spawned, marked = [], []
+    monkeypatch.setattr(service, "_read_schedule", lambda s: [dict(e) for e in entries])
+    monkeypatch.setattr(service, "get_ingest_enabled", lambda s: {"ccnews": True, "hf": False})
+    monkeypatch.setattr(service, "_spawn_windex", lambda args, log: spawned.append(args) or 1)
+    monkeypatch.setattr(service, "_mark_ran", lambda s, name, when: marked.append(name))
+
+    fired = service.run_due(object(), now)
+    assert set(fired) == {"ingest-ccnews", "daily"}   # hf gated off, maintain not due
+    assert set(marked) == {"ingest-ccnews", "daily"}
+    assert ["refresh", "--source", "ccnews"] in spawned   # ingest → refresh sweep
+    assert ["daily"] in spawned                            # command → windex daily
+    assert ["maintain"] not in spawned
+
+
+def test_run_due_survives_db_blip(monkeypatch):
+    """A failed table read must not raise out of the tick (the loop backs off)."""
+    from windex.api import service
+
+    def _boom(s):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(service, "_read_schedule", _boom)
+    assert service.run_due(object()) == []
+
+
+def test_schedule_crud_endpoints(client):
+    """CRUD over the seeded schedule table via the API (DB-touching)."""
+    listing = client.get("/v1/schedule").json()
+    names = {e["name"] for e in listing}
+    assert "daily" in names and "maintain" in names          # seeded command jobs
+    assert any(e["kind"] == "ingest" for e in listing)       # seeded ingest jobs
+    daily = next(e for e in listing if e["name"] == "daily")
+    assert {"kind", "target", "hour", "minute", "weekday", "enabled",
+            "last_run", "running"} <= set(daily)
+
+    # create a fresh ingest entry
+    r = client.put("/v1/schedule/test-ingest",
+                   json={"kind": "ingest", "target": "hf", "hour": 9, "minute": 30})
+    assert r.status_code == 200, r.text
+    got = next(e for e in client.get("/v1/schedule").json() if e["name"] == "test-ingest")
+    assert got["hour"] == 9 and got["minute"] == 30 and got["enabled"] is True
+
+    # partial edit preserves unspecified fields (hour/minute stay)
+    assert client.put("/v1/schedule/test-ingest", json={"enabled": False}).status_code == 200
+    got = next(e for e in client.get("/v1/schedule").json() if e["name"] == "test-ingest")
+    assert got["enabled"] is False and got["hour"] == 9
+
+    # invalid entries → 422
+    assert client.put("/v1/schedule/bad", json={"kind": "nope", "target": "x"}).status_code == 422
+    assert client.put("/v1/schedule/bad2", json={"kind": "ingest", "target": "nope"}).status_code == 422
+    assert client.put("/v1/schedule/bad3", json={"kind": "command", "target": "daily",
+                                                 "minute": 99}).status_code == 422
+    assert client.put("/v1/schedule/bad4", json={"enabled": True}).status_code == 422  # no kind/target on create
+
+    # delete (and a second delete is 404)
+    assert client.delete("/v1/schedule/test-ingest").status_code == 200
+    assert client.delete("/v1/schedule/test-ingest").status_code == 404
+
+
+def test_dataset_stats_endpoint(client, monkeypatch):
+    import windex.api.service as svc
+
+    monkeypatch.setattr(svc, "dataset_stats", lambda s, src: {
+        "source": src, "by_status": {"embedded": 5}, "total": 5,
+        "content_from": None, "content_to": None})
+    assert client.get("/v1/datasets/hf/stats").json()["source"] == "hf"
+
+    def _raise(s, src):
+        raise KeyError(src)
+    monkeypatch.setattr(svc, "dataset_stats", _raise)
+    assert client.get("/v1/datasets/bogus/stats").status_code == 404
 
 
 def test_activity_endpoint(client, monkeypatch):

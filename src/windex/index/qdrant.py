@@ -5,7 +5,7 @@ from qdrant_client import models as qm
 
 DENSE = "dense"
 SPARSE = "bm25"
-SOURCES = ("news", "repos", "wiki", "arxiv", "smallweb", "docs", "hn", "hf")
+SOURCES = ("news", "repos", "wiki", "arxiv", "smallweb", "docs", "hn", "hf", "memory")
 
 # payload fields that search filters on, indexed at collection creation
 PAYLOAD_INDEXES = {
@@ -39,6 +39,13 @@ PAYLOAD_INDEXES = {
            "root": qm.PayloadSchemaType.KEYWORD,     # transformers | agents-course | blog
            "kind": qm.PayloadSchemaType.KEYWORD,     # docs | learn | blog
            "published_at": qm.PayloadSchemaType.DATETIME},
+    # Pushed chat-history excerpts. Filtered by conversation_id (recall scoped to
+    # one chat) and published_at (date-windowed recall); chunk_index rides in the
+    # payload so a result can fetch its n±1 neighbours by id.
+    "memory": {"doc_id": qm.PayloadSchemaType.KEYWORD,
+               "conversation_id": qm.PayloadSchemaType.KEYWORD,
+               "chunk_index": qm.PayloadSchemaType.INTEGER,
+               "published_at": qm.PayloadSchemaType.DATETIME},
 }
 
 

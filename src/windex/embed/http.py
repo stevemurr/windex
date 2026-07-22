@@ -4,7 +4,7 @@ from typing import Literal
 
 import httpx
 
-from windex.embed.base import Embedder
+from windex.embed.base import Embedder, EmbedRejected
 
 Style = Literal["tei", "openai"]
 
@@ -41,6 +41,17 @@ class HttpEmbedder(Embedder):
         for attempt in range(self.retries):
             try:
                 return self._request(list(texts))
+            except httpx.HTTPStatusError as exc:
+                code = exc.response.status_code
+                # A 4xx (except 429 rate-limit) means the request itself is
+                # unacceptable — an over-long or malformed document. Retrying the
+                # identical payload can only fail again and wedge the loop, so
+                # surface it as EmbedRejected for the caller to isolate the input.
+                if 400 <= code < 500 and code != 429:
+                    detail = exc.response.text[:200].replace("\n", " ")
+                    raise EmbedRejected(code, detail) from exc
+                last_exc = exc
+                time.sleep(2**attempt)
             except (httpx.HTTPError, KeyError, ValueError) as exc:
                 last_exc = exc
                 time.sleep(2**attempt)

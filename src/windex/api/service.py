@@ -21,7 +21,8 @@ RESULT_FIELDS = ("url", "title", "snippet", "source", "published_at", "outlet",
                  "primary_category", "categories", "authors",
                  "framework", "version", "attribution",
                  "points", "num_comments", "author", "target_url",
-                 "root", "kind")  # hf: doc root (transformers) and docs|learn|blog
+                 "root", "kind",  # hf: doc root (transformers) and docs|learn|blog
+                 "conversation_id", "chunk_index")  # memory: source chat + chunk position
 
 
 def run_search(
@@ -40,6 +41,7 @@ def run_search(
     min_points: int | None = None,
     root: str | None = None,
     kind: str | None = None,
+    conversation_id: str | None = None,
 ) -> dict:
     t0 = time.monotonic()
     try:
@@ -48,6 +50,7 @@ def run_search(
             published_after=published_after, published_before=published_before,
             min_stars=min_stars, language=language, category=category, outlet=outlet,
             framework=framework, min_points=min_points, root=root, kind=kind,
+            conversation_id=conversation_id,
         )
     except Exception:
         # result=error covers e.g. an explicit mode=dense raised through the open
@@ -162,6 +165,34 @@ def prune_search_metrics(conn: psycopg.Connection, days: int = 30) -> int:
         deleted = cur.rowcount
     conn.commit()
     return deleted
+
+
+# --- chat-memory source (push-based) -----------------------------------------
+# Thin wrappers over memory_source.ingest, opening a pooled connection like every
+# other write path. The endpoints are the app's push interface (full-replace per
+# conversation), so they delegate straight through — validation lives at the
+# route (422) and staging IO failures surface as OSError (mapped to 503 there).
+
+def memory_replace(settings: Settings, conversation_id: str, title: str,
+                   chunks: list[dict]) -> dict:
+    from windex.memory_source import ingest as mingest
+
+    with db.pooled(settings.pg_dsn) as conn:
+        return mingest.replace_conversation(conn, settings, conversation_id, title, chunks)
+
+
+def memory_delete(settings: Settings, conversation_id: str) -> dict:
+    from windex.memory_source import ingest as mingest
+
+    with db.pooled(settings.pg_dsn) as conn:
+        return mingest.delete_conversation(conn, settings, conversation_id)
+
+
+def memory_status(settings: Settings) -> dict:
+    from windex.memory_source import ingest as mingest
+
+    with db.pooled(settings.pg_dsn) as conn:
+        return mingest.status(conn)
 
 
 def get_document(settings: Settings, doc_id: str) -> dict | None:
@@ -577,16 +608,35 @@ def loop_states(settings: Settings) -> list[dict]:
     watchdog closes) | disabled (intentionally off)."""
     from windex.api import jobs
 
+    import time
+
     enabled = get_loops_enabled(settings)
+    ingest = get_ingest_enabled(settings)
+    # Liveness comes from the per-loop Postgres heartbeat (embed_loop writes
+    # loop_heartbeat_<source> every cycle), not host pgrep — the loops run in
+    # separate containers with their own PID namespaces (and the slim image has no
+    # pgrep). A heartbeat within HEARTBEAT_STALE_SECS = the process is alive; the
+    # window exceeds the loop's max backoff (300s) so a probing-but-alive loop
+    # isn't misreported as down.
+    HEARTBEAT_STALE_SECS = 360
     out = []
-    for job in jobs.embed_loop_jobs():
-        src = job.argv[1]
-        pids = jobs._pids(job.pattern)
-        en = enabled.get(src, True)
-        out.append({
-            "source": src, "enabled": en, "running": bool(pids),
-            "state": "up" if pids else ("down" if en else "disabled"), "pids": pids,
-        })
+    with db.pooled(settings.pg_dsn) as conn:
+        now = int(time.time())
+        for job in jobs.embed_loop_jobs():
+            src = job.argv[1]
+            try:
+                last = int(db.get_control(conn, f"loop_heartbeat_{src}", "0"))
+            except ValueError:
+                last = 0
+            running = (now - last) < HEARTBEAT_STALE_SECS
+            en = enabled.get(src, True)
+            out.append({
+                "source": src, "enabled": en, "running": running,
+                "state": "up" if running else ("down" if en else "disabled"),
+                "pids": [],  # not meaningful across container PID namespaces
+                "ingest_enabled": ingest.get(src, True),
+                "log": job.name,  # /v1/logs/{name} key for the row's "read logs" button
+            })
     return out
 
 
@@ -606,6 +656,38 @@ def set_loop_enabled(settings: Settings, source: str, enabled: bool) -> dict:
     elif not enabled:
         jobs.stop(job.name)
     return {"source": source, "enabled": enabled, "state": ("up" if enabled else "disabled")}
+
+
+# --- ingest desired-state (symmetric to the embed loops) ---
+# "ingest" is the per-source fetch macro — `windex refresh --source X`: check the
+# source for new content → fetch → stage into Postgres → the embed loop queues
+# it. There is NO continuous ingest process; this flag gates whether the refresh
+# sweep and the scheduler auto-ingest the source. `ingest now` is a manual run.
+
+def get_ingest_enabled(settings: Settings) -> dict[str, bool]:
+    """{source: ingest enabled} from ingest_<source> flags (default enabled)."""
+    from windex.api import jobs
+
+    sources = [j.argv[1] for j in jobs.embed_loop_jobs()]
+    try:
+        with db.pooled(settings.pg_dsn) as conn:
+            return {s: db.get_control(conn, f"ingest_{s}", "enabled") != "disabled"
+                    for s in sources}
+    except Exception:  # noqa: BLE001 — a flag-read failure must not disable ingest
+        return {s: True for s in sources}
+
+
+def set_ingest_enabled(settings: Settings, source: str, enabled: bool) -> dict:
+    """Toggle whether this source is auto-ingested (by refresh + the scheduler).
+    Ingest is on-demand/scheduled — no process to start/stop, just the flag.
+    Raises KeyError for an unknown source."""
+    from windex.api import jobs
+
+    if source not in {j.argv[1] for j in jobs.embed_loop_jobs()}:
+        raise KeyError(source)
+    with db.pooled(settings.pg_dsn) as conn:
+        db.set_control(conn, f"ingest_{source}", "enabled" if enabled else "disabled")
+    return {"source": source, "ingest_enabled": enabled}
 
 
 def supervisor_status(settings: Settings) -> dict:
@@ -666,6 +748,16 @@ def freshness(settings: Settings) -> list[dict]:
     if not (hit and now - hit[0] < _PG_HEAVY_TTL):
         _warm_pg_heavy(settings)
     canon = {"ccnews": "news", "gh": "github"}  # loop name → corpus source
+    # last successful ingest per source (recorded by `windex refresh` via the
+    # ingest_ts_<source> control flag) — the "last update" column.
+    ingest_ts = {}
+    try:
+        with db.pooled(settings.pg_dsn) as conn:
+            for job in jobs.embed_loop_jobs():
+                v = db.get_control(conn, f"ingest_ts_{job.argv[1]}", "")
+                ingest_ts[job.argv[1]] = float(v) if v else None
+    except Exception:  # noqa: BLE001
+        pass
     out = []
     for job in jobs.embed_loop_jobs():
         src = job.argv[1]
@@ -678,45 +770,305 @@ def freshness(settings: Settings) -> list[dict]:
                 last = max(last or 0, (jobs.LOG_DIR / name).stat().st_mtime)
             except OSError:
                 pass
-        out.append({"source": src, "indexed": indexed, "pending": pending, "last_embed_ts": last})
+        out.append({"source": src, "indexed": indexed, "pending": pending,
+                    "last_embed_ts": last, "last_update_ts": ingest_ts.get(src)})
     return out
 
 
-# Recurring jobs the console can see + run on demand (windex doesn't auto-run
-# them without launchd, so the panel is how you fire them by hand).
-SCHEDULE = [
-    {"name": "daily", "label": "Daily freshness", "desc": "news + github: sync, process, embed", "cadence": "daily · 02:15"},
-    {"name": "refresh", "label": "Refresh all sources", "desc": "fetch new content for every source", "cadence": "on demand"},
-    {"name": "maintain", "label": "Store maintenance", "desc": "VACUUM/ANALYZE the churn tables", "cadence": "daily · 05:45"},
-]
-_SCHED_CMD = {"daily": ["daily"], "maintain": ["maintain"]}
-_SCHED_PATTERN = {"daily": "windex daily", "refresh": "WINDEX_REFRESH", "maintain": "windex maintain"}
-_SCHED_LOG = {"daily": "daily", "refresh": "refresh", "maintain": "maintain"}
+def dataset_stats(settings: Settings, source: str) -> dict:
+    """Per-dataset detail for the freshness row-click: doc counts broken out by
+    pipeline status, the total, and the content date span. Counts come from the
+    600s-cached rollup (cheap; warmed in the background if cold); the date range
+    uses the (source, published_at) index so min/max stays fast. Raises KeyError
+    for an unknown source."""
+    from windex.api import jobs
+
+    if source not in {j.argv[1] for j in jobs.embed_loop_jobs()}:
+        raise KeyError(source)
+    corpus = {"ccnews": "news", "gh": "github"}.get(source, source)
+    hit = _pg_heavy_cache.get(settings.pg_dsn)
+    if not hit:
+        _warm_pg_heavy(settings)
+    by_status = dict((hit[1].get("docs", {}) if hit else {}).get(corpus, {}))
+
+    content_from = content_to = None
+    try:
+        with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT min(published_at), max(published_at) FROM documents WHERE source = %s",
+                (corpus,))
+            row = cur.fetchone()
+            if row and row[0]:
+                content_from, content_to = row[0].isoformat(), row[1].isoformat()
+    except Exception:  # noqa: BLE001 — the panel degrades gracefully without dates
+        pass
+
+    return {"source": source, "by_status": by_status, "total": sum(by_status.values()),
+            "content_from": content_from, "content_to": content_to}
+
+
+# --- editable job scheduler (backed by the `schedule` table) ---
+# The hardcoded SCHEDULE list is gone: rows live in the DB (seeded by init_db,
+# edited via /v1/schedule), and the `windex scheduler` timer loop fires the ones
+# that are enabled + due. A 'command' entry maps its target through _SCHED_CMD;
+# an 'ingest' entry runs `windex refresh --source <target>`.
+_SCHED_CMD = {"daily": ["daily"], "maintain": ["maintain"], "eval": ["eval"]}
+_SCHED_LOG = {"daily": "daily", "maintain": "maintain", "eval": "eval"}
+# pgrep pattern that means "this entry is running now": command targets match
+# their own process; every ingest entry shares the refresh sweep's marker.
+_SCHED_PATTERN = {"daily": "windex daily", "maintain": "windex maintain"}
+_WEEKDAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+
+
+def _schedule_sources() -> set[str]:
+    """Valid ingest targets — the embed-loop source names (== EMBED_SOURCES),
+    minus the push sources. A push source (memory) has an embed loop but no pull
+    ingest to schedule, so it must never be an editable `ingest` target."""
+    from windex.api import jobs
+
+    return {j.argv[1] for j in jobs.embed_loop_jobs()} - jobs.PUSH_SOURCES
+
+
+def _read_schedule(settings: Settings) -> list[dict]:
+    """Raw schedule rows (last_run as a datetime). Not resilient — callers that
+    face the console wrap this; the scheduler tick lets a blip bubble to its
+    own catch/back-off."""
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT name, kind, target, hour, minute, weekday, enabled, last_run
+               FROM schedule ORDER BY hour, minute, name"""
+        )
+        rows = cur.fetchall()
+    return [
+        {"name": n, "kind": k, "target": t, "hour": h, "minute": m,
+         "weekday": w, "enabled": en, "last_run": lr}
+        for n, k, t, h, m, w, en, lr in rows
+    ]
+
+
+def _get_schedule_entry(settings: Settings, name: str) -> dict | None:
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT name, kind, target, hour, minute, weekday, enabled, last_run
+               FROM schedule WHERE name = %s""",
+            (name,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    return {"name": row[0], "kind": row[1], "target": row[2], "hour": row[3],
+            "minute": row[4], "weekday": row[5], "enabled": row[6], "last_run": row[7]}
+
+
+def list_schedule(settings: Settings) -> list[dict]:
+    """Read the schedule table (API-facing: last_run as ISO). Resilient to a
+    cold/missing DB — returns [] rather than raising."""
+    try:
+        rows = _read_schedule(settings)
+    except Exception:  # noqa: BLE001 — a cold DB must not break the console
+        return []
+    for r in rows:
+        r["last_run"] = r["last_run"].isoformat() if r["last_run"] else None
+    return rows
+
+
+def _dow_sun0(now: datetime) -> int:
+    """Day of week with Sunday=0 (the schedule.weekday convention). Python's
+    datetime.weekday() is Monday=0."""
+    return (now.weekday() + 1) % 7
+
+
+def _is_due(entry: dict, now: datetime) -> bool:
+    """Pure predicate: is this entry due to fire at `now`? Enabled, the hour and
+    minute match, the weekday matches (or is NULL = every day), and it has not
+    already fired within this same minute (last_run guard against a double-tick)."""
+    if not entry["enabled"]:
+        return False
+    if entry["hour"] != now.hour or entry["minute"] != now.minute:
+        return False
+    weekday = entry["weekday"]
+    if weekday is not None and weekday != _dow_sun0(now):
+        return False
+    last = entry.get("last_run")
+    if last is not None and (last.year, last.month, last.day, last.hour, last.minute) == \
+            (now.year, now.month, now.day, now.hour, now.minute):
+        return False
+    return True
+
+
+def _cadence(entry: dict) -> str:
+    when = f"{entry['hour']:02d}:{entry['minute']:02d}"
+    if entry["weekday"] is None:
+        return f"daily · {when}"
+    return f"{_WEEKDAYS[entry['weekday']]} · {when}"
+
+
+def _entry_running(entry: dict) -> bool:
+    from windex.api import jobs
+
+    if entry["kind"] == "command":
+        pattern = _SCHED_PATTERN.get(entry["target"])
+        return bool(pattern and jobs._pids(pattern))
+    # ingest entries all fire through the refresh sweep, tagged WINDEX_REFRESH
+    return bool(jobs._pids("WINDEX_REFRESH"))
 
 
 def schedule_status(settings: Settings) -> list[dict]:
-    """The recurring jobs + whether each is running + last-run time (its log's
-    mtime)."""
-    from windex.api import jobs
-
+    """The schedule entries with their editable fields + running state + last
+    run — the shape the console schedule editor reads. Resilient to a cold DB."""
+    try:
+        rows = _read_schedule(settings)
+    except Exception:  # noqa: BLE001
+        return []
     out = []
-    for item in SCHEDULE:
-        name = item["name"]
-        try:
-            last = (jobs.LOG_DIR / f"{_SCHED_LOG[name]}.log").stat().st_mtime
-        except OSError:
-            last = None
-        out.append({**item, "running": bool(jobs._pids(_SCHED_PATTERN[name])), "last_run_ts": last})
+    for e in rows:
+        last = e["last_run"]
+        label = (f"Ingest {e['target']}" if e["kind"] == "ingest"
+                 else {"daily": "Daily freshness",
+                       "maintain": "Store maintenance"}.get(e["target"], e["target"]))
+        out.append({
+            "name": e["name"], "kind": e["kind"], "target": e["target"],
+            "hour": e["hour"], "minute": e["minute"], "weekday": e["weekday"],
+            "enabled": e["enabled"],
+            "last_run": last.isoformat() if last else None,
+            "last_run_ts": last.timestamp() if last else None,
+            "running": _entry_running(e),
+            "label": label, "cadence": _cadence(e),
+        })
     return out
 
 
-def run_scheduled(settings: Settings, name: str) -> dict:
-    """Kick off a recurring job now (detached). Raises KeyError for an unknown name."""
-    if name == "refresh":
-        return run_refresh(settings)
-    if name not in _SCHED_CMD:
+def _validate_schedule_entry(e: dict) -> None:
+    """Raise ValueError if the entry is not a valid, dispatchable row."""
+    if e["kind"] not in ("ingest", "command"):
+        raise ValueError("kind must be 'ingest' or 'command'")
+    if not isinstance(e["hour"], int) or not (0 <= e["hour"] <= 23):
+        raise ValueError("hour must be 0-23")
+    if not isinstance(e["minute"], int) or not (0 <= e["minute"] <= 59):
+        raise ValueError("minute must be 0-59")
+    if e["weekday"] is not None and (not isinstance(e["weekday"], int)
+                                     or not (0 <= e["weekday"] <= 6)):
+        raise ValueError("weekday must be 0-6 (0=Sun) or null")
+    if e["kind"] == "command" and e["target"] not in _SCHED_CMD:
+        raise ValueError(f"command target must be one of {sorted(_SCHED_CMD)}")
+    if e["kind"] == "ingest" and e["target"] not in _schedule_sources():
+        raise ValueError(f"ingest target must be one of {sorted(_schedule_sources())}")
+
+
+def upsert_schedule(settings: Settings, entry: dict) -> dict:
+    """Create or update a schedule row. On an existing row, unspecified fields
+    are preserved (partial edit); on a create, kind + target are required and
+    hour/minute/weekday/enabled fall back to sensible defaults. Raises
+    ValueError (→ 422) for an invalid entry."""
+    name = entry.get("name")
+    if not name:
+        raise ValueError("name is required")
+    existing = _get_schedule_entry(settings, name)
+    if existing is None:
+        merged = {
+            "name": name,
+            "kind": entry.get("kind"),
+            "target": entry.get("target"),
+            "hour": entry.get("hour", 0),
+            "minute": entry.get("minute", 0),
+            "weekday": entry.get("weekday"),
+            "enabled": entry.get("enabled", True),
+        }
+        if merged["kind"] is None or merged["target"] is None:
+            raise ValueError("kind and target are required to create a schedule entry")
+    else:
+        merged = {k: existing[k] for k in
+                  ("name", "kind", "target", "hour", "minute", "weekday", "enabled")}
+        for k in ("kind", "target", "hour", "minute", "weekday", "enabled"):
+            if k in entry:
+                merged[k] = entry[k]
+    merged["enabled"] = bool(merged["enabled"])
+    _validate_schedule_entry(merged)
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO schedule (name, kind, target, hour, minute, weekday, enabled)
+               VALUES (%(name)s, %(kind)s, %(target)s, %(hour)s, %(minute)s,
+                       %(weekday)s, %(enabled)s)
+               ON CONFLICT (name) DO UPDATE SET
+                   kind = EXCLUDED.kind, target = EXCLUDED.target,
+                   hour = EXCLUDED.hour, minute = EXCLUDED.minute,
+                   weekday = EXCLUDED.weekday, enabled = EXCLUDED.enabled""",
+            merged,
+        )
+        conn.commit()
+    merged["cadence"] = _cadence(merged)
+    return merged
+
+
+def delete_schedule(settings: Settings, name: str) -> dict:
+    """Delete a schedule row. Raises KeyError (→ 404) if it does not exist."""
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM schedule WHERE name = %s", (name,))
+        deleted = cur.rowcount
+        conn.commit()
+    if not deleted:
         raise KeyError(name)
-    return {"action": name, "pid": _spawn_windex(_SCHED_CMD[name], _SCHED_LOG[name])}
+    return {"deleted": name}
+
+
+def dispatch_entry(settings: Settings, entry: dict) -> dict:
+    """Fire one schedule entry now (detached), regardless of due-ness: ingest →
+    `windex refresh --source <target>`; command → the mapped windex command.
+    Raises KeyError for an unknown/unmapped target."""
+    kind, target = entry["kind"], entry["target"]
+    if kind == "ingest":
+        return run_refresh(settings, [target])
+    if kind == "command":
+        if target not in _SCHED_CMD:
+            raise KeyError(target)
+        return {"action": target, "pid": _spawn_windex(_SCHED_CMD[target], _SCHED_LOG[target])}
+    raise KeyError(kind)
+
+
+def run_scheduled(settings: Settings, name: str) -> dict:
+    """Run a schedule entry now (detached). A manual run ignores the ingest
+    desired-state flag (like an explicit `refresh --source`). Raises KeyError
+    (→ 404) for an unknown name."""
+    entry = _get_schedule_entry(settings, name)
+    if entry is None:
+        raise KeyError(name)
+    return dispatch_entry(settings, entry)
+
+
+def _mark_ran(settings: Settings, name: str, when: datetime) -> None:
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute("UPDATE schedule SET last_run = %s WHERE name = %s", (when, name))
+        conn.commit()
+
+
+def run_due(settings: Settings, now: datetime | None = None) -> list[str]:
+    """One scheduler tick: fire every enabled + due entry, stamping last_run.
+    Ingest entries additionally skip when the source's ingest_enabled flag is
+    off. Returns the names fired. Resilient: a failed table read yields [] so the
+    loop backs off and retries; a single entry's dispatch failure is logged and
+    does not abort the rest of the tick."""
+    now = now or datetime.now()
+    try:
+        entries = _read_schedule(settings)
+    except Exception:  # noqa: BLE001 — DB blip: skip this tick, retry next
+        return []
+    ingest_enabled: dict[str, bool] | None = None
+    fired: list[str] = []
+    for e in entries:
+        if not _is_due(e, now):
+            continue
+        if e["kind"] == "ingest":
+            if ingest_enabled is None:
+                ingest_enabled = get_ingest_enabled(settings)
+            if not ingest_enabled.get(e["target"], True):
+                continue
+        try:
+            dispatch_entry(settings, e)
+            _mark_ran(settings, e["name"], now)
+            fired.append(e["name"])
+        except Exception:  # noqa: BLE001 — one bad entry must not stop the tick
+            pass
+    return fired
 
 
 def activity(settings: Settings) -> list[dict]:
@@ -751,6 +1103,9 @@ def activity(settings: Settings) -> list[dict]:
                     "error": False})
     out.append({"name": "server", "label": "API server", "group": "service",
                 "running": jobs.serve_running(), "last_ts": mtimes.get("server"), "error": False})
+    out.append({"name": "scheduler", "label": "Job scheduler", "group": "service",
+                "running": jobs.scheduler_running(), "last_ts": mtimes.get("scheduler"),
+                "error": False})
     out.append({"name": "watchdog", "label": "Supervisor", "group": "service",
                 "running": bool(jobs._pids("scripts/watchdog.sh")), "last_ts": mtimes.get("watchdog"),
                 "error": False})
