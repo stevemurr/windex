@@ -591,6 +591,32 @@ def hn_status() -> None:
         console.print({r[0]: r[1] for r in cur.fetchall()}, "documents")
 
 
+@hn_app.command("tombstone-empty")
+def hn_tombstone_empty() -> None:
+    """One-time cleanup: mark fully-empty hn docs (blank title AND body) 'deleted'
+    and drop their vectors. Run while indexing is paused; idempotent."""
+    from windex.hn import cleanup
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        n = cleanup.tombstone_empty_stories(conn, settings)
+    console.print(f"[green]hn: tombstoned {n} empty docs[/green]")
+
+
+@hn_app.command("backfill-duplicates")
+def hn_backfill_duplicates() -> None:
+    """One-time cleanup: mark exact-hash duplicate hn docs 'duplicate' of the
+    earliest canonical and drop embedded dups' vectors. Run AFTER tombstone-empty,
+    while indexing is paused; idempotent."""
+    from windex.hn import cleanup
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        out = cleanup.backfill_exact_duplicates(conn, settings)
+    console.print(f"[green]hn: marked {out['marked_duplicate']} duplicates, "
+                  f"dropped {out['vectors_dropped']} vectors[/green]")
+
+
 hf_app = typer.Typer(no_args_is_help=True,
                      help="Hugging Face ingestion (huggingface.co docs, courses, blog)")
 app.add_typer(hf_app, name="hf")
