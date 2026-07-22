@@ -25,9 +25,10 @@ from windex.textguard import is_empty_text
 console = Console()
 
 
-def _drop_points(settings: Settings, doc_ids: list[str]) -> None:
-    """Best-effort delete of hn Qdrant points (a down index leaves the ledger
-    change standing; the point is dropped on the next reindex)."""
+def _drop_points(settings: Settings, doc_ids: list[str], chunk: int = 4000) -> None:
+    """Best-effort delete of hn Qdrant points, CHUNKED — a single delete of 100k+
+    ids times out (observed: 138,902 ids @ 30s). A down index leaves the ledger
+    change standing; the point is dropped on the next reindex."""
     if not doc_ids:
         return
     try:
@@ -37,13 +38,16 @@ def _drop_points(settings: Settings, doc_ids: list[str]) -> None:
         from windex.embed.pipeline import point_id
         from windex.index import qdrant as qidx
 
-        client = QdrantClient(url=settings.qdrant_url, timeout=30)
+        client = QdrantClient(url=settings.qdrant_url, timeout=180)
         try:
-            client.delete(
-                collection_name=qidx.alias_name("hn"),
-                points_selector=qm.PointIdsList(points=[point_id(i) for i in doc_ids]),
-                wait=True,
-            )
+            for i in range(0, len(doc_ids), chunk):
+                client.delete(
+                    collection_name=qidx.alias_name("hn"),
+                    points_selector=qm.PointIdsList(
+                        points=[point_id(x) for x in doc_ids[i:i + chunk]]
+                    ),
+                    wait=True,
+                )
         finally:
             client.close()
     except Exception as exc:  # index absent/unreachable: the ledger change stands

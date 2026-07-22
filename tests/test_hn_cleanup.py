@@ -22,6 +22,29 @@ def _write_hn_parquet(settings, ref, ids, titles, texts):
     pq.write_table(pa.table({"id": ids, "title": titles, "story_text": texts}), path)
 
 
+def test_drop_points_chunks_large_deletes(settings, monkeypatch):
+    """A single delete of 100k+ ids times out; _drop_points must chunk."""
+    import qdrant_client
+
+    calls = []
+
+    class FakeClient:
+        def __init__(self, **kw):
+            pass
+
+        def delete(self, collection_name, points_selector, wait=None):
+            calls.append(len(points_selector.points))
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(qdrant_client, "QdrantClient", FakeClient)
+    monkeypatch.setattr("windex.index.qdrant.alias_name", lambda s: "hn__pytest-model")
+
+    cleanup._drop_points(settings, [f"hn:{i}" for i in range(9000)], chunk=4000)
+    assert calls == [4000, 4000, 1000]  # chunked, not one 9000-id call
+
+
 def test_tombstone_empty_marks_deleted_and_drops_only_true_empties(pg, settings, monkeypatch):
     ref = "hn/clean/w.parquet"
     _write_hn_parquet(settings, ref, ["hn:1", "hn:2", "hn:3"],
