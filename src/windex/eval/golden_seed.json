@@ -1,0 +1,730 @@
+[
+  {
+    "query": "modeling how COVID-19 spreads between people through the air and direct contact, and how travel and mitigation policies affect outbreaks",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:2107.12785"
+    ],
+    "note": "'A mechanistic model for airborne and direct human-to-human transmission of COVID-19...'; epidemiology; verified rank=1"
+  },
+  {
+    "query": "why comparing reinforcement learning algorithms with only a handful of runs per benchmark is statistically unreliable and how to fix evaluation practice",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:2108.13264"
+    ],
+    "note": "'Deep Reinforcement Learning at the Edge of the Statistical Precipice'; ML/RL evaluation methodology; verified rank=1"
+  },
+  {
+    "query": "stability of a rotating black hole surrounded by anisotropic fluid matter under superradiant amplification",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:2111.03316"
+    ],
+    "note": "'Superradiance and Stability of Kerr Black Hole Enclosed by Anisotropic Fluid Matter'; general relativity; verified rank=1"
+  },
+  {
+    "query": "using an adversarial image-to-image neural network to automatically segment the liver in CT scans",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:1707.08037"
+    ],
+    "note": "'Automatic Liver Segmentation Using an Adversarial Image-to-Image Network'; medical imaging/CV; verified rank=1"
+  },
+  {
+    "query": "searching for oscillating scalar field dark matter using precision comparisons of atomic hyperfine transition frequencies",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:1604.08514"
+    ],
+    "note": "'Searching for an oscillating massive scalar field as a dark matter candidate using atomic hyperfine frequency comparisons'; particle/astro physics; verified rank=1"
+  },
+  {
+    "query": "selecting language model training data to improve automatic speech recognition of rare words",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:2203.05008"
+    ],
+    "note": "'Sentence-Select: Large-Scale Language Model Data Selection for Rare-Word Speech Recognition'; NLP/ASR; verified rank=1"
+  },
+  {
+    "query": "stochastic modeling of how avian influenza outbreaks recur via bird-to-bird and environmental transmission routes",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:1703.04869"
+    ],
+    "note": "'The roles of direct and environmental transmission in stochastic avian flu epidemic recurrence'; epidemiology; verified rank=1"
+  },
+  {
+    "query": "an attack that eavesdrops on quantum secure direct communication protocols using an invisible photon",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:quant-ph/0508002"
+    ],
+    "note": "'Eavesdropping on the \"ping-pong\" type quantum communication protocols with invisible photon'; quantum information; verified rank=1"
+  },
+  {
+    "query": "using disentangled graph neural network representations to improve session-based recommendation",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:2201.03482"
+    ],
+    "note": "'Disentangled Graph Neural Networks for Session-based Recommendation'; ML/recommender systems; verified rank=1"
+  },
+  {
+    "query": "experimental evidence for a hidden flux phase in a topological kagome superconductor material",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:2107.10714"
+    ],
+    "note": "'Evidence of a hidden flux phase in the topological kagome metal CsV3Sb5'; condensed matter physics; verified rank=1"
+  },
+  {
+    "query": "predicting the folded 3D conformation of a protein from its raw sequence without using known homologous structures",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:1110.5091"
+    ],
+    "note": "'3D Protein Structure Predicted from Sequence'; computational biology; verified rank=1 (broader phrasing 'ab initio folding...' scored rank=10, this phrasing works)"
+  },
+  {
+    "query": "critical study examining the effectiveness and pitfalls of reinforcement learning approaches for macro block placement in chip design",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:2109.02587"
+    ],
+    "note": "'Delving into Macro Placement with Reinforcement Learning'; EDA/chip design; verified rank=2"
+  },
+  {
+    "query": "popular account of the discovery of the optimal sphere packing arrangement in eight dimensions using specially constructed magic functions",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:1607.02111"
+    ],
+    "note": "'A Breakthrough in Sphere Packing: The Search for Magic Functions'; mathematics; verified rank=2"
+  },
+  {
+    "query": "approximation algorithms for the asymmetric traveling salesman problem restricted to graphs of bounded genus",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:0909.2849"
+    ],
+    "note": "'The Asymmetric Traveling Salesman Problem on Graphs with Bounded Genus'; theoretical CS/combinatorics; verified rank=1"
+  },
+  {
+    "query": "how does bash expand a wildcard pattern like star into matching filenames",
+    "source": "docs",
+    "relevant": [
+      "docs:bash/filename-expansion"
+    ],
+    "note": "Bash manual page for pathname/glob expansion; query uses 'wildcard'/'star' instead of the title's 'filename expansion' term. Verified rank=1."
+  },
+  {
+    "query": "how do I return a value from a function in PHP",
+    "source": "docs",
+    "relevant": [
+      "docs:php/function.return"
+    ],
+    "note": "PHP manual page for the `return` keyword. Hard case: must beat the closely related docs:php/functions.returning-values page. Verified rank=3 (top5: functions.returning-values, function.internal, function.return, sqlite3.createfunction, function.uopz-get-return)."
+  },
+  {
+    "query": "which specific CSS property sets only the color (not width or style) of the divider line between multicol layout columns",
+    "source": "docs",
+    "relevant": [
+      "docs:css/column-rule-color"
+    ],
+    "note": "Must be disambiguated from the sibling longhands column-rule-width/column-rule-style and the column-rule shorthand. Verified rank=1."
+  },
+  {
+    "query": "what PostgreSQL column type should I use to store IP addresses and subnets",
+    "source": "docs",
+    "relevant": [
+      "docs:postgresql~18/datatype-net-types"
+    ],
+    "note": "Postgres network address types (inet/cidr) chapter; query is task-oriented, not the chapter title. Beats docs:postgresql~18/functions-net for top spot in some phrasings. Verified rank=2 (top5: functions-net, datatype-net-types, docker network_create, python ipaddress, docker swarm-mode)."
+  },
+  {
+    "query": "how to get a subrange of key-value pairs from a BTreeMap in Rust",
+    "source": "docs",
+    "relevant": [
+      "docs:rust/std/collections/btree_map/struct.range"
+    ],
+    "note": "Rust std BTreeMap::range() struct page. Hard case: must outrank the parent docs:rust/std/collections/btree_map/struct.btreemap page itself. Verified rank=2."
+  },
+  {
+    "query": "how to normalize unicode strings so equivalent forms compare equal in JavaScript",
+    "source": "docs",
+    "relevant": [
+      "docs:javascript/global_objects/string/normalize"
+    ],
+    "note": "String.prototype.normalize(). Good cross-language semantic test: top5 includes Python's unicodedata module and PHP's Normalizer class as close competitors. Verified rank=1."
+  },
+  {
+    "query": "C11 atomic compare-and-swap function",
+    "source": "docs",
+    "relevant": [
+      "docs:c/atomic/atomic_compare_exchange"
+    ],
+    "note": "atomic_compare_exchange_weak/strong page; query uses the common 'CAS' terminology instead of the C standard's own name. Verified rank=1."
+  },
+  {
+    "query": "guide to defining and using enumerated constants in Python",
+    "source": "docs",
+    "relevant": [
+      "docs:python~3.14/howto/enum"
+    ],
+    "note": "The Enum HOWTO guide. Hard case: must outrank the more literal docs:python~3.14/library/enum reference page for a 'guide/how to use' style query. Verified rank=3 (top5: library/enum, C language/enum, howto/enum, php enumerations, howto/pyporting)."
+  },
+  {
+    "query": "which HTTP method is used to perform a diagnostic loopback of the request",
+    "source": "docs",
+    "relevant": [
+      "docs:http/reference/methods/trace"
+    ],
+    "note": "HTTP TRACE method reference; query paraphrases the method's purpose (diagnostic loopback) rather than naming it. Verified rank=1."
+  },
+  {
+    "query": "how to check how much disk space Docker images and containers are using",
+    "source": "docs",
+    "relevant": [
+      "docs:docker/engine/reference/commandline/system_df/index"
+    ],
+    "note": "`docker system df` CLI reference; query is a task description, not the command name. Verified rank=1."
+  },
+  {
+    "query": "how to replay commits from one branch on top of another branch in git",
+    "source": "docs",
+    "relevant": [
+      "docs:git/git-rebase"
+    ],
+    "note": "git-rebase manpage. Hard case: candidate pool includes git-replay, git-cherry-pick, and git-merge as plausible competitors for this description. Verified rank=2 (git-replay edges ahead on some phrasing but git-rebase lands rank 2)."
+  },
+  {
+    "query": "how to adjust the space between individual characters in Tailwind",
+    "source": "docs",
+    "relevant": [
+      "docs:tailwindcss/letter-spacing"
+    ],
+    "note": "Tailwind's letter-spacing utility page. Cross-docset disambiguation test: must outrank the plain CSS docs:css/letter-spacing property page since the query says 'Tailwind'. Verified rank=1."
+  },
+  {
+    "query": "why does a component keep its state when it moves position in the React tree, and when does it reset",
+    "source": "docs",
+    "relevant": [
+      "docs:react/learn/preserving-and-resetting-state"
+    ],
+    "note": "React 'Preserving and Resetting State' learn page; query is a conceptual question mirroring the page's actual content, not its title wording. Verified rank=1."
+  },
+  {
+    "query": "kubernetes object that enforces minimum and maximum resource usage per pod in a namespace",
+    "source": "docs",
+    "relevant": [
+      "docs:kubernetes/policy-resources/limit-range-v1/index"
+    ],
+    "note": "LimitRange v1 API reference. Hard case: must outrank the parent policy-resources index and the closely related ResourceQuota page. Verified rank=3 (top5: policy-resources/index, resource-quota-v1, limit-range-v1, service-account-v1, runtime-class-v1)."
+  },
+  {
+    "query": "a tool to import a static website into WordPress",
+    "source": "github",
+    "relevant": [
+      "gh:Automattic/static-site-importer"
+    ],
+    "note": "web/CMS migration tool; verified rank=1"
+  },
+  {
+    "query": "a URL shortener service",
+    "source": "github",
+    "relevant": [
+      "gh:tomato-architecture/url-shortener-tomato-architecture"
+    ],
+    "note": "web service; verified rank=3"
+  },
+  {
+    "query": "real-time object detection on Android using YOLO",
+    "source": "github",
+    "relevant": [
+      "gh:akshaysurya24/android-yolo-object-detection"
+    ],
+    "note": "ML/computer vision on mobile; verified rank=1"
+  },
+  {
+    "query": "speech to text for React Native apps",
+    "source": "github",
+    "relevant": [
+      "gh:adelbeke/react-native-speech-to-text"
+    ],
+    "note": "ML/speech recognition, mobile SDK; verified rank=1"
+  },
+  {
+    "query": "implementations of recommendation system algorithms",
+    "source": "github",
+    "relevant": [
+      "gh:raliev/recommender-algorithms"
+    ],
+    "note": "ML/data, algorithm reference repo; verified rank=1"
+  },
+  {
+    "query": "an educational implementation of a vector database",
+    "source": "github",
+    "relevant": [
+      "gh:ahmadhattab/Educational-Vector-Database"
+    ],
+    "note": "ML/data infra, from-scratch vector DB for learning; verified rank=2"
+  },
+  {
+    "query": "a library for authenticating as a GitHub App",
+    "source": "github",
+    "relevant": [
+      "gh:AmadeusITGroup/gh-app-auth"
+    ],
+    "note": "devtools/auth library; verified rank=1"
+  },
+  {
+    "query": "a task queue for AI agents",
+    "source": "github",
+    "relevant": [
+      "gh:block/agent-task-queue"
+    ],
+    "note": "devtools, agent orchestration infra; verified rank=1"
+  },
+  {
+    "query": "a tool that explains what a regex pattern does",
+    "source": "github",
+    "relevant": [
+      "gh:kapilpokhrel/regexplain"
+    ],
+    "note": "devtools, regex explainer CLI/tool; verified rank=1"
+  },
+  {
+    "query": "a linter for dbt YAML files",
+    "source": "github",
+    "relevant": [
+      "gh:VDFaller/dbt-lint-yaml"
+    ],
+    "note": "data engineering devtool; verified rank=1"
+  },
+  {
+    "query": "a Kubernetes operator for deploying Anubis",
+    "source": "github",
+    "relevant": [
+      "gh:eznix86/anubis-kubernetes-operator"
+    ],
+    "note": "devtools/infra, k8s operator; verified rank=1"
+  },
+  {
+    "query": "a tool to encrypt text",
+    "source": "github",
+    "relevant": [
+      "gh:MuradIsazade777/Text-Encryptor"
+    ],
+    "note": "security/crypto utility; verified rank=1"
+  },
+  {
+    "query": "a tool for linting and checking PromQL queries for mistakes",
+    "source": "hn",
+    "relevant": [
+      "hn:48609652"
+    ],
+    "note": "Show HN: Pedantic.run – Lint PromQL Queries; verified rank=1"
+  },
+  {
+    "query": "an open source scanner that checks if a URL is a phishing or scam link",
+    "source": "hn",
+    "relevant": [
+      "hn:46944321"
+    ],
+    "note": "Show HN: Susscore – Open-source link scanner to check if a URL is sketchy; verified rank=1"
+  },
+  {
+    "query": "a tool that calculates how long it takes to read a speech or script out loud",
+    "source": "hn",
+    "relevant": [
+      "hn:45886687"
+    ],
+    "note": "Show HN: A tool to estimate how long your script/speech will take to read aloud; verified rank=1"
+  },
+  {
+    "query": "self-hosted catalog for documenting a company's internal APIs",
+    "source": "hn",
+    "relevant": [
+      "hn:47599948"
+    ],
+    "note": "Show HN: Apindex – self-hosted API catalog to map and understand internal APIs; verified rank=1"
+  },
+  {
+    "query": "an embeddable Raft consensus algorithm library written in Rust",
+    "source": "hn",
+    "relevant": [
+      "hn:46692236"
+    ],
+    "note": "Show HN: D-engine – Embeddable Raft consensus for Rust; verified rank=1"
+  },
+  {
+    "query": "analysis of Hacker News side projects that grew to $500 in monthly revenue",
+    "source": "hn",
+    "relevant": [
+      "hn:46932483"
+    ],
+    "note": "Show HN: Analyzing 9 years of HN side projects that reached $500/month; verified rank=1"
+  },
+  {
+    "query": "worried that telling a client I accept Bitcoin payments will make me seem crazy",
+    "source": "hn",
+    "relevant": [
+      "hn:9432901"
+    ],
+    "note": "Ask HN: I mentioned I accept Bitcoin to a client, will they think I'm crazy?; verified rank=1"
+  },
+  {
+    "query": "a status dashboard tracking the Fukushima nuclear disaster",
+    "source": "hn",
+    "relevant": [
+      "hn:2350630"
+    ],
+    "note": "Ask HN: JapanStatus.org, a dashboard for the nuclear accident in Fukushima; verified rank=1"
+  },
+  {
+    "query": "a years-old security bug leaves almost all Android phones vulnerable to hijacking",
+    "source": "hn",
+    "relevant": [
+      "hn:5988680"
+    ],
+    "note": "Four-year old flaw makes '99%' of Android phones open to hijacking; verified rank=1"
+  },
+  {
+    "query": "running privileged x86 instructions from userspace using VT-x virtualization on Linux",
+    "source": "hn",
+    "relevant": [
+      "hn:6516692"
+    ],
+    "note": "Dune allows running privileged instructions in userland using VT-x on Linux; verified rank=1"
+  },
+  {
+    "query": "the Cursor AI coding assistant now works inside JetBrains IDEs",
+    "source": "hn",
+    "relevant": [
+      "hn:47249367"
+    ],
+    "note": "Cursor is now available in JetBrains IDEs (ACP); verified rank=1"
+  },
+  {
+    "query": "employees fired after exploiting a bug to grab free mooncakes",
+    "source": "hn",
+    "relevant": [
+      "hn:12508091"
+    ],
+    "note": "Alibaba fires employees for hacking their way to free mooncakes; verified rank=1"
+  },
+  {
+    "query": "Wildfires in Spain kill more than a dozen people, several of them British tourists",
+    "source": "news",
+    "relevant": [
+      "news:3af4b95427205a508ef1"
+    ],
+    "note": "Spain wildfires death toll incl. 7 British nationals of 13 killed (straitstimes/us1poets angle); verified rank=1"
+  },
+  {
+    "query": "British Columbia firefighters pioneer drone-assisted controlled burns to fight wildfires",
+    "source": "news",
+    "relevant": [
+      "news:8a92b4f30fbf8a0fca80"
+    ],
+    "note": "B.C. crews use drone in controlled burn, a Canadian first (narcity.com); verified rank=1"
+  },
+  {
+    "query": "California brings in hundreds of goats and sheep to graze away wildfire fuel",
+    "source": "news",
+    "relevant": [
+      "news:4560cf33b6c71d7c82c0"
+    ],
+    "note": "California deploys 400 goats and sheep to eat invasive weed fuelling wildfires; verified rank=1"
+  },
+  {
+    "query": "Lithuania raises alarm over Hungarian bank's Russia links as it seeks to buy Baltic lender Luminor",
+    "source": "news",
+    "relevant": [
+      "news:32ba4a6ec55a4e0f06ef"
+    ],
+    "note": "Lithuania flags OTP Bank's Russian ties in Luminor acquisition deal; verified rank=1"
+  },
+  {
+    "query": "Scientists develop a fast 3D-printing process to make personalized contact lenses",
+    "source": "news",
+    "relevant": [
+      "news:e2b0c18cf944e0198a6d"
+    ],
+    "note": "3D printing breakthrough produces custom contact lenses in 20 minutes (newatlas.com); verified rank=1"
+  },
+  {
+    "query": "New AI method lets drug discovery models generalize to molecules outside their training set",
+    "source": "news",
+    "relevant": [
+      "news:a180ff691f4bfb85055f"
+    ],
+    "note": "AI breakthrough helps drug discovery models adapt beyond training data; verified rank=3"
+  },
+  {
+    "query": "India revives its indigenous jet engine program after years of setbacks",
+    "source": "news",
+    "relevant": [
+      "news:9ce646b9ddc5c4eb2c6c"
+    ],
+    "note": "Kaveri Engine 2.0: can India's fighter jet setback become its biggest defence breakthrough (newsx.com); verified rank=3"
+  },
+  {
+    "query": "Carolina's NHL team dominates Montreal and nears a spot in the Stanley Cup Final",
+    "source": "news",
+    "relevant": [
+      "news:4b7cd63d414d41ecffd3"
+    ],
+    "note": "Carolina Hurricanes dominate Canadiens, 1 win away from Stanley Cup Final; verified rank=1"
+  },
+  {
+    "query": "Cincinnati's mayor requests state and federal help to repair infrastructure damaged by recent floods",
+    "source": "news",
+    "relevant": [
+      "news:71deb15f9bdbe813a558"
+    ],
+    "note": "Cincinnati Mayor Aftab Pureval outlines infrastructure fixes, seeks state/federal aid after flooding; verified rank=1"
+  },
+  {
+    "query": "Toronto's mayor moves to outlaw personalized surveillance-based pricing at supermarkets",
+    "source": "news",
+    "relevant": [
+      "news:2e1d1217d7d65afe076e"
+    ],
+    "note": "Mayor Chow wants to ban 'surveillance pricing' at Toronto grocery stores; verified rank=1"
+  },
+  {
+    "query": "A mayor in France is given police protection after being threatened by a drug trafficking gang",
+    "source": "news",
+    "relevant": [
+      "news:20852b02d2a8ed60f304"
+    ],
+    "note": "French Mayor placed under protection after drug gang threat in Ales; verified rank=3"
+  },
+  {
+    "query": "Man accused of setting a school bus on fire in Times Square during Knicks championship celebrations",
+    "source": "news",
+    "relevant": [
+      "news:f339eb4cd5e3cc664110"
+    ],
+    "note": "NYC man faces arson charge for allegedly setting Times Square school bus fire after Knicks championship; verified rank=1"
+  },
+  {
+    "query": "how to keep your encrypted disks and drive aliases in sync across shell setups",
+    "source": "smallweb",
+    "relevant": [
+      "smallweb:c1a6af94a522b84cff1f"
+    ],
+    "note": "VeraCrypt aliases/shell workflow post; verified rank=1"
+  },
+  {
+    "query": "passing environment variables into a Node app during a Docker image build",
+    "source": "smallweb",
+    "relevant": [
+      "smallweb:8ba80381d7b115ceedfc"
+    ],
+    "note": "Docker build-arg vs runtime env for a Node app; verified rank=1"
+  },
+  {
+    "query": "could you actually put AI data centers in orbit and cool them with the vacuum of space",
+    "source": "smallweb",
+    "relevant": [
+      "smallweb:9843dff27d0f41ef9895"
+    ],
+    "note": "Physics of space-based AI data centers; verified rank=1"
+  },
+  {
+    "query": "building a home server rig out of a laptop mainboard with Dokku for deploys",
+    "source": "smallweb",
+    "relevant": [
+      "smallweb:16388210fa1256321505"
+    ],
+    "note": "Home hosting with Framework mainboard + Dokku + Cloudflare; verified rank=1"
+  },
+  {
+    "query": "setting up a highly available authoritative DNS setup with PowerDNS in production",
+    "source": "smallweb",
+    "relevant": [
+      "smallweb:9168c34625339ab51358"
+    ],
+    "note": "PowerDNS self-hosting, part 2 HA/production; verified rank=1"
+  },
+  {
+    "query": "installation notes for running FreeBSD on a 2011 MacBook Air",
+    "source": "smallweb",
+    "relevant": [
+      "smallweb:e710f5ecdf0df52ee29b"
+    ],
+    "note": "FreeBSD-on-old-MacBook-Air install notes; verified rank=1"
+  },
+  {
+    "query": "using the engine's built-in A-star pathfinding system in Unreal Engine 4.25",
+    "source": "smallweb",
+    "relevant": [
+      "smallweb:a144e50850acf41dfef8"
+    ],
+    "note": "Builtin A* pathfinding in UE4.25; verified rank=1"
+  },
+  {
+    "query": "pulling the audio track out of an MKV video file with ffmpeg",
+    "source": "smallweb",
+    "relevant": [
+      "smallweb:db539ae6c408a0ad3ff6"
+    ],
+    "note": "Extract audio from MKV using FFmpeg how-to; verified rank=1"
+  },
+  {
+    "query": "SQL injection vulnerability disclosure in a Prestashop product import module",
+    "source": "smallweb",
+    "relevant": [
+      "smallweb:a64829e8347c5094337e"
+    ],
+    "note": "CVE-2023-39675 SQLi writeup for SimpleImportProduct Prestashop module; verified rank=1"
+  },
+  {
+    "query": "an overview of the Gemini protocol as a stripped-down alternative to the web",
+    "source": "smallweb",
+    "relevant": [
+      "smallweb:8ea38aebd004fc2981e6"
+    ],
+    "note": "Gemini protocol vs the web explainer; verified rank=1"
+  },
+  {
+    "query": "applying the event sourcing pattern to spreadsheets for flexibility",
+    "source": "smallweb",
+    "relevant": [
+      "smallweb:9f1df5b98626ea19c2af"
+    ],
+    "note": "Event-source your spreadsheets for flexibility/maintainability; verified rank=1"
+  },
+  {
+    "query": "a counterexample in computational geometry involving Steiner triangulations",
+    "source": "smallweb",
+    "relevant": [
+      "smallweb:03e804bdbc03e8aed60e"
+    ],
+    "note": "Counterexample for Steiner triangulation (math/CS blog); verified rank=1"
+  },
+  {
+    "query": "naturalist who proposed the theory of evolution by natural selection",
+    "source": "wiki",
+    "relevant": [
+      "wiki:8145410"
+    ],
+    "note": "Charles Darwin; domain=science/biology; verified rank=1"
+  },
+  {
+    "query": "1986 nuclear reactor meltdown in Soviet Ukraine",
+    "source": "wiki",
+    "relevant": [
+      "wiki:2589713"
+    ],
+    "note": "Chernobyl disaster; domain=history/event; verified rank=1"
+  },
+  {
+    "query": "gene editing technology based on a bacterial immune system",
+    "source": "wiki",
+    "relevant": [
+      "wiki:2146034"
+    ],
+    "note": "CRISPR; domain=science/biotech; verified rank=1"
+  },
+  {
+    "query": "collapse of the Berlin Wall in 1989",
+    "source": "wiki",
+    "relevant": [
+      "wiki:61917089"
+    ],
+    "note": "Fall of the Berlin Wall; domain=history; verified rank=1"
+  },
+  {
+    "query": "ancient fortification stretching thousands of miles across northern China",
+    "source": "wiki",
+    "relevant": [
+      "wiki:5094570"
+    ],
+    "note": "Great Wall of China; domain=history/geography; verified rank=1"
+  },
+  {
+    "query": "scientist behind germ theory who pioneered vaccination against rabies and anthrax",
+    "source": "wiki",
+    "relevant": [
+      "wiki:17740"
+    ],
+    "note": "Louis Pasteur; domain=science/biography; verified rank=1"
+  },
+  {
+    "query": "Serbian-American inventor known for his work on alternating current",
+    "source": "wiki",
+    "relevant": [
+      "wiki:21473"
+    ],
+    "note": "Nikola Tesla; domain=technology/biography; verified rank=1"
+  },
+  {
+    "query": "prehistoric stone circle monument in southern England",
+    "source": "wiki",
+    "relevant": [
+      "wiki:27633"
+    ],
+    "note": "Stonehenge; domain=history/archaeology; verified rank=1"
+  },
+  {
+    "query": "F. Scott Fitzgerald novel about a mysterious millionaire and Daisy Buchanan",
+    "source": "wiki",
+    "relevant": [
+      "wiki:76033"
+    ],
+    "note": "The Great Gatsby; domain=culture/literature; verified rank=1"
+  },
+  {
+    "query": "12th century Cambodian temple complex built by the Khmer Empire",
+    "source": "wiki",
+    "relevant": [
+      "wiki:189351"
+    ],
+    "note": "Angkor Wat; domain=history/geography; verified rank=1"
+  },
+  {
+    "query": "brewed drink made from roasted beans that contains caffeine",
+    "source": "wiki",
+    "relevant": [
+      "wiki:604727"
+    ],
+    "note": "Coffee; domain=culture/everyday; verified rank=1"
+  },
+  {
+    "query": "American multinational technology company specializing in internet search and online advertising",
+    "source": "wiki",
+    "relevant": [
+      "wiki:1092923"
+    ],
+    "note": "Google; domain=technology/company; verified rank=1"
+  },
+  {
+    "query": "Pacific Ocean trench that is the deepest part of the world's oceans",
+    "source": "wiki",
+    "relevant": [
+      "wiki:19036"
+    ],
+    "note": "Mariana Trench; domain=geography/science; verified rank=1"
+  },
+  {
+    "query": "attention is all you need",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:1706.03762"
+    ],
+    "note": "COVERAGE ANCHOR — the Transformer paper is absent (OAI-PMH harvests by last-modified datestamp; its record sits in a not-yet-harvested recent window). Scores 0 until the arxiv 2023-2026 re-harvest; flips 0->hit when it lands."
+  },
+  {
+    "query": "transformer architecture self-attention",
+    "source": "arxiv",
+    "relevant": [
+      "arxiv:1706.03762"
+    ],
+    "note": "Same coverage anchor from a longer, non-title query."
+  }
+]

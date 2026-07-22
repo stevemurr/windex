@@ -1,62 +1,41 @@
 """The curated golden set: (query -> relevant doc ids) regression anchors.
 
-Small and hand-maintained — its job is catching obvious regressions and pinning
-known-answer queries, not broad coverage (the known-item proxy does breadth).
-Grows over time; a deployment can extend it without a code change by pointing
-WINDEX_EVAL_GOLDEN at a JSON file of the same shape."""
+Hand/agent-curated and VERIFIED against the live index — each anchor retrieves
+its doc at rank <=3 under production hybrid search (the two arxiv coverage anchors
+are the deliberate exception: they score 0 until the corpus gap they pin is
+filled). Its job is catching regressions and pinning known-answer queries; the
+known-item title proxy does breadth.
+
+The anchors live in golden_seed.json (DATA, not code) so the set grows without a
+code change; a deployment can add more via WINDEX_EVAL_GOLDEN pointing at a JSON
+file of the same shape. Each entry: {"query", "source", "relevant": [doc_id, ...],
+"note"?}; doc ids follow the stable convention news:<hash>, gh:owner/repo,
+arxiv:<id>, wiki:<pageid>, docs:<set>/<page>, hn:<id>, smallweb:<...>.
+"""
 
 import json
 import logging
 import os
+from pathlib import Path
 
 log = logging.getLogger("windex.eval")
 
-# Each: {"query", "source", "relevant": [doc_id, ...], "note"?}
-# doc ids follow the stable convention: news:<hash>, gh:owner/repo, arxiv:<id>, …
-SEED: list[dict] = [
-    {
-        "query": "attention is all you need",
-        "source": "arxiv",
-        "relevant": ["arxiv:1706.03762"],
-        "note": "COVERAGE ANCHOR — the Transformer paper. OAI-PMH harvests by "
-                "last-modified datestamp, not submission date, so this heavily-"
-                "revised paper's record lands in a recent window; it scores 0 "
-                "until that window is harvested (arxiv 2023-2026 re-harvest, "
-                "2026-07-22). Flips to a hit once it lands — a live coverage signal.",
-    },
-    {
-        "query": "transformer architecture self-attention",
-        "source": "arxiv",
-        "relevant": ["arxiv:1706.03762"],
-        "note": "Same coverage anchor from a longer, non-title query.",
-    },
-    # --- semantic anchors on docs actually in the corpus (regression pins) ---
-    {
-        "query": "how do bash arrays work",
-        "source": "docs",
-        "relevant": ["docs:bash/arrays"],
-    },
-    {
-        "query": "ansi c style string quoting in bash",
-        "source": "docs",
-        "relevant": ["docs:bash/ansi_002dc-quoting"],
-    },
-    {
-        "query": "evaluate arithmetic in the shell",
-        "source": "docs",
-        "relevant": ["docs:bash/arithmetic-expansion"],
-    },
-    {
-        "query": "tab completion scripting example for bash",
-        "source": "docs",
-        "relevant": ["docs:bash/a-programmable-completion-example"],
-    },
-]
+_SEED_PATH = Path(__file__).with_name("golden_seed.json")
+
+
+def _bundled() -> list[dict]:
+    """The verified anchors shipped in golden_seed.json (next to this module)."""
+    try:
+        data = json.loads(_SEED_PATH.read_text())
+        return [e for e in data if e.get("query") and e.get("relevant")]
+    except Exception as e:  # noqa: BLE001 — a missing/bad seed must not break eval
+        log.warning("could not load golden_seed.json: %r", e)
+        return []
 
 
 def load_golden() -> list[dict]:
-    """SEED plus any entries in the JSON file at WINDEX_EVAL_GOLDEN (if set)."""
-    golden = list(SEED)
+    """The bundled seed plus any entries in the JSON file at WINDEX_EVAL_GOLDEN."""
+    golden = _bundled()
     path = os.environ.get("WINDEX_EVAL_GOLDEN", "")
     if path and os.path.exists(path):
         try:
