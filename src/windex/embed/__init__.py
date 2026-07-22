@@ -27,14 +27,18 @@ from windex.embed.base import Embedder
 # Live queries are never budgeted (index/search.py), but they still queue behind
 # whatever a slot is already chewing — which is why batch size, not budget, is
 # what gets a query under its 8s deadline while indexing runs.
-# "full" sat at the measured knee (12) until the gateway grew per-key tiers:
-# the bulk key now hard-caps at 6 concurrent and 429s the rest, so 6 is the
-# binding limit (and the flat throughput curve above says it costs little).
+# "full" was briefly pinned to 6 because the litellm bulk key hard-capped at 6
+# concurrent and 429'd the rest — but that cap REJECTED excess (429) rather than
+# queuing it, so it 429-stormed the loops; removed 2026-07-22 (litellm config +
+# key DB both uncapped; vLLM does real continuous-batching backpressure). With
+# the artificial cap gone, budget sits at the measured GPU saturation knee (8):
+# the flat curve above shows higher buys ~1 doc/s at real congestion-collapse
+# risk (unbounded in-flight is what crashed the box on 2026-07-21).
 PROFILES = {
     "polite": {"embed_concurrency": 2, "embed_batch_size": 8,
                "embed_throttle_seconds": 1.0, "embed_global_budget": 4},
     "full": {"embed_concurrency": 8, "embed_batch_size": 8,
-             "embed_throttle_seconds": 0.0, "embed_global_budget": 6},
+             "embed_throttle_seconds": 0.0, "embed_global_budget": 8},
 }
 
 
