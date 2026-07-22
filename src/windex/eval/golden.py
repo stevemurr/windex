@@ -18,14 +18,38 @@ SEED: list[dict] = [
         "query": "attention is all you need",
         "source": "arxiv",
         "relevant": ["arxiv:1706.03762"],
-        "note": "COVERAGE REGRESSION ANCHOR — corpus ends 2017-12-28, so this "
-                "scores 0 until the arxiv 2018+ backfill (Phase 5). Expected.",
+        "note": "COVERAGE ANCHOR — the Transformer paper. OAI-PMH harvests by "
+                "last-modified datestamp, not submission date, so this heavily-"
+                "revised paper's record lands in a recent window; it scores 0 "
+                "until that window is harvested (arxiv 2023-2026 re-harvest, "
+                "2026-07-22). Flips to a hit once it lands — a live coverage signal.",
     },
     {
         "query": "transformer architecture self-attention",
         "source": "arxiv",
         "relevant": ["arxiv:1706.03762"],
-        "note": "Same coverage anchor from a longer query.",
+        "note": "Same coverage anchor from a longer, non-title query.",
+    },
+    # --- semantic anchors on docs actually in the corpus (regression pins) ---
+    {
+        "query": "how do bash arrays work",
+        "source": "docs",
+        "relevant": ["docs:bash/arrays"],
+    },
+    {
+        "query": "ansi c style string quoting in bash",
+        "source": "docs",
+        "relevant": ["docs:bash/ansi_002dc-quoting"],
+    },
+    {
+        "query": "evaluate arithmetic in the shell",
+        "source": "docs",
+        "relevant": ["docs:bash/arithmetic-expansion"],
+    },
+    {
+        "query": "tab completion scripting example for bash",
+        "source": "docs",
+        "relevant": ["docs:bash/a-programmable-completion-example"],
     },
 ]
 
