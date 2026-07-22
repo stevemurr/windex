@@ -31,6 +31,13 @@ broken and when did it break* without hunting:
   the SearchQualityRegression alert).
 - **API internals** (collapsed) — HTTP rate, 5xx/4xx error rate, and p95 by
   handler; background-job uptime; gateway probe duration.
+- **Data integrity** — the ingest-ledger side of the corpus, from
+  `windex_watermark_rows`: a table of every per-source ledger row *not* in a
+  healthy/benign state (excludes `done`/`pending`/`active`/`removed`/`no_llms`, so
+  it shows failed / held / dead / partial / stuck — content that never reached the
+  corpus), a **Failed ingest units** total + a by-source breakdown, and a
+  timeseries so a rising failure count is dated. This is the set of numbers for
+  chasing down where a source silently lost data.
 - **Source: $source** — a per-source row (repeats over `label_values(windex_documents,
   source)`): backlog vs embedded, embeds/min, loop up/down, and embed-log
   staleness (yellow >5m, red >15m — a wedged-but-alive loop).
@@ -101,6 +108,7 @@ updating both this dir and the exporter.
 |--------|------|--------|---------|
 | `windex_documents` | gauge | `source`, `status` | Document rows by source and status (`deduped`, `embedded`, `duplicate`, …). |
 | `windex_repos` | gauge | `status` | Repo rows by status. |
+| `windex_watermark_rows` | gauge | `source`, `table`, `status` | Per-source ingest-ledger rows by status. `status=failed\|held` (or a stuck `partial`) = an ingest unit that never reached the corpus — the data-integrity signal `windex_documents` can't show. Feeds the **Data integrity** row. |
 | `windex_loop_up` | gauge | `source` | 1 if the source's embed-loop process is alive. |
 | `windex_job_up` | gauge | `job` | 1 if a registered non-loop job is alive. |
 | `windex_indexing_paused` | gauge | — | 1 if the indexing control flag is `paused`. |

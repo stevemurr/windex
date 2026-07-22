@@ -107,6 +107,29 @@ def _canonical_source(cli_source: str) -> str:
     return _SOURCE_CANON.get(cli_source, cli_source)
 
 
+# Per-source ingest-ledger tables surfaced by windex_watermark_rows, each paired
+# with its corpus-vocabulary source (matching windex_documents, so a dashboard can
+# join the two). A row stuck at 'failed'/'held' here is an ingest unit that never
+# reached the corpus — the data-integrity signal the doc-level windex_documents
+# can't show. documents and repos have their own families (windex_documents /
+# windex_repos) and are deliberately NOT repeated. Two ledgers can share a source
+# (github's gharchive_files, hf's roots+posts), which is why `table` is a label of
+# its own. All are small, status-indexed tables, so a scrape-time GROUP BY is cheap
+# (and it rides the 10s scrape cache). The list is fixed in code — see the SQL note
+# in _db_metrics about interpolating the identifier.
+_WATERMARK_TABLES: tuple[tuple[str, str], ...] = (
+    ("news", "warc_files"),
+    ("github", "gharchive_files"),
+    ("wiki", "wiki_dumps"),
+    ("arxiv", "arxiv_windows"),
+    ("hn", "hn_windows"),
+    ("docs", "docsets"),
+    ("smallweb", "feeds"),
+    ("hf", "hf_roots"),
+    ("hf", "hf_posts"),
+)
+
+
 def _log_source(stem: str) -> str:
     """Canonical corpus source for an embed-loop log file, or "" for any other
     log. ~/.windex/logs carries both naming conventions seen in the wild —
@@ -346,6 +369,32 @@ class WindexCollector:
             for status, n in cur.fetchall():
                 repos.add_metric([status], float(n))
             families.append(repos)
+
+            # Per-source ingest ledgers by status — the data-integrity counterpart
+            # to windex_documents (see _WATERMARK_TABLES). Each table is guarded on
+            # its own: a single missing/locked table degrades to "that table absent
+            # from the page", never a zeroed windex_db_up for the whole scrape (the
+            # failed-read is exactly what an integrity alert would be watching).
+            watermark = GaugeMetricFamily(
+                "windex_watermark_rows",
+                "Per-source ingest-ledger rows by source, table and status. A row at "
+                "status=failed|held (or a stuck partial) is an ingest unit that never "
+                "reached the corpus — the integrity signal windex_documents can't "
+                "show. Gauge: a retry moves rows failed->pending.",
+                labels=["source", "table", "status"])
+            for source, table in _WATERMARK_TABLES:
+                try:
+                    # `table` comes from the fixed in-code allowlist above, never
+                    # user input — safe to interpolate (an identifier can't be a
+                    # bind parameter).
+                    cur.execute(f"SELECT status, count(*) FROM {table} GROUP BY status")  # noqa: S608
+                    for status, n in cur.fetchall():
+                        watermark.add_metric([source, table, status], float(n))
+                except Exception as exc:  # noqa: BLE001 — one table must not blank the page
+                    conn.rollback()
+                    log.warning("metrics: watermark read of %s failed, skipping: %s",
+                                table, exc)
+            families.append(watermark)
 
             cur.execute("SELECT key, value FROM control")
             flags = dict(cur.fetchall())

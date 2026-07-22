@@ -87,6 +87,28 @@ def test_windex_documents_matches_seeded_rows(client, pg):
     assert "windex_docs{" not in text and "\nwindex_docs " not in text
 
 
+def test_windex_watermark_rows_matches_seeded_rows(client, pg):
+    """Per-source ingest-ledger counts by (source, table, status). warc_files
+    carries a fixed schema (path, status) so it seeds cleanly; the assertions pin
+    the source→table mapping and prove an empty ledger emits no bogus sample."""
+    with pg.cursor() as cur:
+        cur.execute(
+            "INSERT INTO warc_files (path, status) VALUES "
+            "('crawl-data/CC-NEWS/a.warc.gz', 'failed'), "
+            "('crawl-data/CC-NEWS/b.warc.gz', 'failed'), "
+            "('crawl-data/CC-NEWS/c.warc.gz', 'done')")
+    pg.commit()
+    prom._scrape_cache.clear()
+    text = client.get("/metrics").text
+    assert _value(text, "windex_watermark_rows",
+                  source="news", table="warc_files", status="failed") == 2.0
+    assert _value(text, "windex_watermark_rows",
+                  source="news", table="warc_files", status="done") == 1.0
+    # an empty ledger contributes no sample (not a spurious zero)
+    assert _value(text, "windex_watermark_rows",
+                  source="arxiv", table="arxiv_windows", status="failed") is None
+
+
 def test_windex_repos_matches_seeded_rows(client, pg):
     with pg.cursor() as cur:
         cur.execute(
@@ -322,6 +344,7 @@ def test_metrics_endpoint_excluded_from_http_metrics(client):
 CONTRACT = {
     "windex_documents": ("gauge", frozenset({"source", "status"})),
     "windex_repos": ("gauge", frozenset({"status"})),
+    "windex_watermark_rows": ("gauge", frozenset({"source", "table", "status"})),
     "windex_loop_up": ("gauge", frozenset({"source"})),
     "windex_job_up": ("gauge", frozenset({"job"})),
     "windex_gateway_up": ("gauge", frozenset()),
