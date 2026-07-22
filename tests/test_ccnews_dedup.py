@@ -29,8 +29,8 @@ def _write_extracted(dir: Path, rows: list[dict]) -> None:
             "text": [r["text"] for r in rows],
             "id": [r.get("rec_id", f"rec-{i}") for i, r in enumerate(rows)],
             "metadata": [
-                {"url": r["url"], "title": r.get("title", "t"), "date": "2026-07-13T00:00:00",
-                 "language": "en"}
+                {"url": r["url"], "title": r.get("title", "t"),
+                 "date": r.get("date", "2026-07-13T00:00:00"), "language": "en"}
                 for r in rows
             ],
         }
@@ -43,6 +43,16 @@ def _run(pg, tmp_path, rows, batch="b1", day=DAY):
     _write_extracted(extracted, rows)
     clean = tmp_path / "clean" / f"{batch}.parquet"
     return dd.run_dedup(pg, extracted, clean, f"clean/{batch}.parquet", day), clean
+
+
+def test_run_dedup_clamps_garbage_published_at(pg, tmp_path):
+    """An extracted 'date' far outside the plausible window must land as NULL
+    published_at in the ledger, not the garbage value (Defect C: date clamp)."""
+    _run(pg, tmp_path,
+         [{"text": STORY_A, "url": "https://a.com/1", "date": "2500-01-01T00:00:00"}])
+    with pg.cursor() as cur:
+        cur.execute("SELECT published_at FROM documents WHERE source='news'")
+        assert cur.fetchone()[0] is None
 
 
 def test_batch_exact_and_near_dups_collapse(pg, tmp_path):

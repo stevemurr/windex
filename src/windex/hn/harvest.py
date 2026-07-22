@@ -329,12 +329,9 @@ def _existing(cur: psycopg.Cursor, ids: list[str]) -> dict[str, tuple[str, str]]
 
 
 def _parse_date(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
-        return None
+    from windex.dateparse import parse_and_clamp
+
+    return parse_and_clamp(value)
 
 
 def _story_batch(rows: list[dict]) -> pa.RecordBatch:

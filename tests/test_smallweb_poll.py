@@ -351,6 +351,25 @@ def test_poll_stages_then_repoll_adds_no_new_rows(pg, sw_settings):
         assert cur.fetchone()[0] == n_after_first
 
 
+def test_stage_batch_clamps_garbage_published_at(pg, sw_settings):
+    """A feed pubDate far outside the plausible window must land as NULL
+    published_at, not the garbage value (Defect C: date clamp guard)."""
+    _seed_feed(pg, "https://blog.example/feed", "blog.example")
+    raw = _rss(
+        _rss_item("Post A", "https://blog.example/a", body=POST_A,
+                  pubdate="Fri, 01 Jan 2500 00:00:00 GMT")
+    )
+    client = _mock_client(
+        lambda req: httpx.Response(200, content=raw,
+                                   headers={"content-type": "application/rss+xml"})
+    )
+    t = swpoll.poll(pg, sw_settings, max_feeds=1, filters=LIGHT, client=client)
+    assert t["staged"] == 1
+    with pg.cursor() as cur:
+        cur.execute("SELECT published_at FROM documents WHERE source='smallweb'")
+        assert cur.fetchone()[0] is None
+
+
 def test_poll_all_active_terminates_after_one_pass(pg, sw_settings):
     """max_feeds=None ('all active', the documented default) must poll every
     active feed once and STOP. active_feeds() re-serves feeds oldest-last_polled

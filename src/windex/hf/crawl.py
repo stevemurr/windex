@@ -453,12 +453,9 @@ def stage_posts(conn: psycopg.Connection, settings: Settings, posts: list[dict],
 
 
 def _parse_ts(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
-        return None
+    from windex.dateparse import parse_and_clamp
+
+    return parse_and_clamp(value)
 
 
 # --- entry point ------------------------------------------------------------

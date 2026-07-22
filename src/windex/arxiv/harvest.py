@@ -295,12 +295,9 @@ def mark_window(
 # --- ingest ----------------------------------------------------------------
 
 def _parse_date(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
-        return None
+    from windex.dateparse import parse_and_clamp
+
+    return parse_and_clamp(value)
 
 
 def _existing_hashes(cur: psycopg.Cursor, ids: list[str]) -> dict[str, str]:
