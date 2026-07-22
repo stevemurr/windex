@@ -257,6 +257,36 @@ def custom_delete_source(settings: Settings, name: str) -> dict | None:
         return cingest.delete_source(conn, settings, name)
 
 
+_STATIC_SEARCH_SOURCES = {"news", "github", "wiki", "arxiv", "smallweb", "docs",
+                          "hn", "hf", "memory", "all"}
+
+
+def validate_source(settings: Settings, source: str) -> str:
+    """Return ``source`` if it is a valid /v1/search source — a built-in static
+    source (or ``all``), or a registered custom source name — else raise
+    ValueError (the route maps that to 422, preserving the bogus-source contract).
+    Custom names are checked against a short module-level TTL cache so per-query
+    validation doesn't hit Postgres on every search; a DB blip degrades to the
+    last known set rather than rejecting a real source."""
+    if source in _STATIC_SEARCH_SOURCES:
+        return source
+    now = time.monotonic()
+    hit = _source_cache.get(settings.pg_dsn)
+    if not hit or now - hit[0] > _SOURCE_TTL:
+        try:
+            from windex.custom_source import registry
+
+            with db.pooled(settings.pg_dsn) as conn:
+                names = {i["name"] for i in registry.list_all(conn)}
+        except Exception:  # noqa: BLE001 — DB blip: reuse the last known set
+            names = hit[1] if hit else set()
+        _source_cache[settings.pg_dsn] = (now, names)
+        hit = (now, names)
+    if source in hit[1]:
+        return source
+    raise ValueError(f"unknown source: {source}")
+
+
 def get_document(settings: Settings, doc_id: str) -> dict | None:
     with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
         cur.execute(

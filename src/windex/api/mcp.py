@@ -31,8 +31,9 @@ def search_index(
     conversation_id: str | None = None,
 ) -> dict:
     """Search the index. source: news | github | wiki | arxiv | smallweb |
-    docs | hn | hf | memory | all (memory = the user's pushed chat history; it is
-    NOT included in 'all' and must be asked for explicitly). `conversation_id`
+    docs | hn | hf | memory | all, or a registered custom source name (memory and
+    custom sources = the user's private pushed indexes; NEITHER is included in
+    'all' and each must be asked for explicitly by name). `conversation_id`
     scopes a source=memory search to one conversation. `category` filters arxiv
     results by primary category
     (e.g. cs.LG); `outlet` filters smallweb results by feed host (e.g.
@@ -47,8 +48,10 @@ def search_index(
     with stable ids, URLs, titles, and snippets."""
     from datetime import datetime
 
+    settings = get_settings()
+    service.validate_source(settings, source)  # unknown source → tool error, not a bogus fan-out
     return service.run_search(
-        get_settings(),
+        settings,
         query,
         source=source,
         limit=limit,

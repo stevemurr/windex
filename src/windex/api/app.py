@@ -56,8 +56,8 @@ def console_preview() -> HTMLResponse:
 @app.get("/v1/search")
 def search(
     q: str = Query(min_length=1),
-    source: Literal["news", "github", "wiki", "arxiv", "smallweb", "docs", "hn",
-                    "hf", "memory", "all"] = "all",
+    source: str = Query("all", description="news | github | wiki | arxiv | smallweb | "
+                        "docs | hn | hf | memory | all, or a registered custom source name"),
     limit: int = Query(10, ge=1, le=50),
     mode: Literal["hybrid", "dense", "lexical"] = "hybrid",
     published_after: datetime | None = None,
@@ -79,8 +79,13 @@ def search(
     conversation_id: str | None = Query(None, max_length=64,
                                         description="Memory: scope recall to one conversation uuid"),
 ) -> dict:
+    settings = get_settings()
+    try:
+        service.validate_source(settings, source)  # 422 on an unknown source
+    except ValueError:
+        raise HTTPException(422, f"unknown source: {source}")
     return service.run_search(
-        get_settings(), q, source=source, limit=limit, mode=mode,
+        settings, q, source=source, limit=limit, mode=mode,
         published_after=published_after, published_before=published_before,
         min_stars=min_stars, language=language, category=category, outlet=outlet,
         framework=framework, min_points=min_points, root=root, kind=kind,

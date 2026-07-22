@@ -191,6 +191,28 @@ def _memory_filter(conversation_id: str | None, published_after: datetime | None
     return conds
 
 
+# Built-in search sources (corpus vocabulary + `all`). Any name outside this set
+# is a registered custom source, served from its own <name>_current alias.
+_STATIC_SOURCES = {"news", "github", "wiki", "arxiv", "smallweb", "docs", "hn",
+                   "hf", "memory", "all"}
+
+
+def _custom_filter(published_after: datetime | None, published_before: datetime | None):
+    # A custom source's collection indexes only doc_id + published_at
+    # (qdrant.CUSTOM_PAYLOAD_INDEXES), so the sole search filter is the date
+    # window (same shape as news). The opaque `extra` blob is carried in results
+    # but not filterable.
+    conds = []
+    if published_after or published_before:
+        conds.append(
+            qm.FieldCondition(
+                key="published_at",
+                range=qm.DatetimeRange(gte=published_after, lte=published_before),
+            )
+        )
+    return conds
+
+
 def _arxiv_filter(category: str | None, published_after: datetime | None,
                   published_before: datetime | None):
     # arXiv indexes primary_category (keyword) and published_at (submission date),
@@ -372,6 +394,13 @@ def search(
     if source == "memory":
         targets.append(("memory", qidx.alias_name("memory"),
                         _memory_filter(conversation_id, published_after, published_before)))
+    # A registered custom source (any non-static name — validated at the route)
+    # is served from its own alias. Like memory, it is DELIBERATELY excluded from
+    # "all" (that branch is a static name, so this never fires for it): a
+    # web-search fan-out must never silently pull a user's private index in.
+    if source not in _STATIC_SOURCES:
+        targets.append((source, qidx.alias_name(source),
+                        _custom_filter(published_after, published_before)))
     # Encode the query once, not once per target collection (source=all fans out
     # to 8 collections and re-encoded the same string for each).
     query_sparse = _sparse_vector(q) if mode in ("hybrid", "lexical") else None

@@ -372,3 +372,55 @@ def test_embed_round_trip_all_custom_sources(pg, settings, qclient, fake_embedde
 
     # idempotent: a second pass embeds nothing
     assert embed_index.embed_pending(pg, settings, limit=10) == 0
+
+
+# --- W4 [live-service] search extension --------------------------------------
+
+def test_search_accepts_registered_source_and_rejects_bogus(client, monkeypatch):
+    monkeypatch.setattr(
+        service_mod, "index_search",
+        lambda *a, **k: {"results": [], "degraded": False,
+                         "timings": {"embed_query_ms": 0, "search_ms": 0}},
+    )
+    client.post("/v1/sources", json={"name": "email"})
+    service_mod._source_cache.clear()  # let validate_source see the new source
+    # a registered custom source is a valid search source
+    assert client.get("/v1/search", params={"q": "x", "source": "email"}).status_code == 200
+    # an unregistered name is STILL 422 (preserve the existing bogus-source contract)
+    assert client.get("/v1/search", params={"q": "x", "source": "bogus"}).status_code == 422
+    # static sources are unaffected
+    assert client.get("/v1/search", params={"q": "x", "source": "wiki"}).status_code == 200
+
+
+def test_search_returns_embedded_custom_doc_and_excludes_from_all(
+    pg, settings, qclient, fake_embedder, monkeypatch,
+):
+    import windex.embed.pipeline as embed_pipeline
+    from windex.api import service as svc
+    from windex.custom_source import embed_index
+
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
+    registry.create(pg, "email")
+    cingest.upsert_docs(pg, settings, "email",
+                        [_doc("m1", "flight confirmation to tokyo next week",
+                              title="Trip", extra={"from": "airline"})])
+    assert embed_index.embed_pending(pg, settings, limit=10) == 1
+
+    # source=<name> returns the doc, with `extra` surfaced through RESULT_FIELDS
+    res = svc.run_search(settings, "flight confirmation", source="email",
+                         mode="lexical", limit=5)
+    hit = next((r for r in res["results"] if r["id"] == "email:m1"), None)
+    assert hit is not None and hit["extra"] == {"from": "airline"}
+
+    # source=all deliberately EXCLUDES the custom source
+    res_all = svc.run_search(settings, "flight confirmation", source="all",
+                             mode="lexical", limit=5)
+    assert all(r["id"] != "email:m1" for r in res_all["results"])
+
+
+def test_search_unbuilt_custom_source_returns_empty_not_500(pg, settings, qclient):
+    from windex.api import service as svc
+
+    registry.create(pg, "email")  # registered, but nothing embedded → no alias yet
+    res = svc.run_search(settings, "anything", source="email", mode="lexical", limit=5)
+    assert res["results"] == []  # "serve what exists" guard, not a 500
