@@ -73,6 +73,42 @@ def _stage(pg, settings, n, text_ref="news/clean/drv.parquet", prefix="d"):
     return ids
 
 
+def _stage_texts(pg, settings, items, text_ref="news/clean/e.parquet"):
+    """Stage news docs with explicit (id_suffix, title, text) triples so a test
+    controls exactly which docs compose to empty. Clean parquet + 'deduped' ledger."""
+    path = settings.staging_dir / text_ref
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ids = [f"news:{s}" for s, _, _ in items]
+    pq.write_table(
+        pa.table({
+            "id": ids,
+            "url": [f"https://x/{i}" for i in range(len(items))],
+            "canonical_url": [f"https://x/{i}" for i in range(len(items))],
+            "title": [t for _, t, _ in items],
+            "published_at": [None] * len(items),
+            "lang": ["en"] * len(items),
+            "text": [x for _, _, x in items],
+        }),
+        path, row_group_size=8,
+    )
+    with pg.cursor() as cur:
+        cur.executemany(
+            """INSERT INTO documents (id, source, url, title, status, text_ref)
+               VALUES (%s, 'news', %s, %s, 'deduped', %s)""",
+            [(i, f"https://x/{k}", items[k][1], text_ref) for k, i in enumerate(ids)],
+        )
+    pg.commit()
+    return ids
+
+
+def _status_of(pg, doc_id):
+    with pg.cursor() as cur:
+        cur.execute(
+            "SELECT status, indexed_at, embedded_model FROM documents WHERE id = %s", (doc_id,)
+        )
+        return cur.fetchone()
+
+
 def _embedded(pg) -> set[str]:
     with pg.cursor() as cur:
         cur.execute("SELECT id FROM documents WHERE status = 'embedded'")
@@ -363,3 +399,101 @@ def test_runtime_profile_bounds_inflight_batches(pg, settings, fake_embedder, mo
     news_embed.embed_pending(pg, settings, limit=1000)
 
     assert live["peak"] <= 2, f"polite profile exceeded its concurrency: {live['peak']}"
+
+
+def test_empty_doc_is_isolated_and_marked_empty_not_embedded(pg, settings, fake_embedder,
+                                                             monkeypatch):
+    """A fully-empty composed doc (blank title AND body) must never be embedded: it
+    lands status='empty' with no Qdrant point and no indexed_at, while every real
+    doc in the batch still embeds. An empty string is NOT a server rejection, so
+    without the guard it upserts a junk vector (the 7 empty hn vectors)."""
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
+    fake = FakeQdrant()
+    monkeypatch.setattr(embed_pipeline, "QdrantClient", lambda **kw: fake)
+    monkeypatch.setattr(embed_pipeline.qidx, "ensure_collection", lambda *a, **k: "c")
+
+    _stage_texts(pg, settings, [
+        ("good0", "Doc 0", "real body " * 10),
+        ("empty1", "", ""),
+        ("good2", "Doc 2", "real body " * 10),
+        ("good3", "Doc 3", "real body " * 10),
+    ])
+
+    n = news_embed.embed_pending(pg, settings, limit=100)
+
+    assert n == 3
+    assert _embedded(pg) == {"news:good0", "news:good2", "news:good3"}
+    status, indexed_at, model = _status_of(pg, "news:empty1")
+    assert status == "empty" and indexed_at is None and model is None
+    upserted = {p.payload["doc_id"] for batch in fake.upserted for p in batch}
+    assert "news:empty1" not in upserted
+    with pg.cursor() as cur:
+        cur.execute("SELECT count(*) FROM documents WHERE status = 'deduped'")
+        assert cur.fetchone()[0] == 0  # nothing left wedged for a re-crash
+
+
+def test_title_only_doc_is_not_treated_as_empty(pg, settings, fake_embedder, monkeypatch):
+    """~91% of hn is a legitimate title-only link post: a present title with an
+    empty body must embed normally. The guard is whitespace-only, NOT a length
+    threshold — this is the load-bearing regression guard."""
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
+    fake = FakeQdrant()
+    monkeypatch.setattr(embed_pipeline, "QdrantClient", lambda **kw: fake)
+    monkeypatch.setattr(embed_pipeline.qidx, "ensure_collection", lambda *a, **k: "c")
+
+    _stage_texts(pg, settings, [("t", "Latvia Startups", "")])
+
+    n = news_embed.embed_pending(pg, settings, limit=100)
+
+    assert n == 1
+    assert _embedded(pg) == {"news:t"}
+    upserted = {p.payload["doc_id"] for batch in fake.upserted for p in batch}
+    assert "news:t" in upserted
+
+
+def test_whitespace_only_doc_is_treated_as_empty(pg, settings, fake_embedder, monkeypatch):
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
+    fake = FakeQdrant()
+    monkeypatch.setattr(embed_pipeline, "QdrantClient", lambda **kw: fake)
+    monkeypatch.setattr(embed_pipeline.qidx, "ensure_collection", lambda *a, **k: "c")
+
+    _stage_texts(pg, settings, [("ws", "   ", "  \n\t ")])
+
+    n = news_embed.embed_pending(pg, settings, limit=100)
+
+    assert n == 0
+    assert _status_of(pg, "news:ws")[0] == "empty"
+    assert fake.upserted == []
+
+
+def test_all_empty_batch_never_calls_the_embedder(pg, settings, monkeypatch):
+    """An all-empty batch must be short-circuited before the embedder is touched —
+    proves the network call is skipped, not just the vector discarded afterward."""
+
+    class BoomEmbedder:
+        model_id = "pytest-model"
+        dim = 8
+
+        def embed_batch(self, texts):
+            raise AssertionError("embedder called on an all-empty batch")
+
+        def ping(self):
+            return True
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: BoomEmbedder())
+    fake = FakeQdrant()
+    monkeypatch.setattr(embed_pipeline, "QdrantClient", lambda **kw: fake)
+    monkeypatch.setattr(embed_pipeline.qidx, "ensure_collection", lambda *a, **k: "c")
+
+    _stage_texts(pg, settings, [("e0", "", ""), ("e1", "  ", "")])
+
+    n = news_embed.embed_pending(pg, settings, limit=100)
+
+    assert n == 0
+    with pg.cursor() as cur:
+        cur.execute("SELECT count(*) FROM documents WHERE status = 'empty'")
+        assert cur.fetchone()[0] == 2
+    assert fake.upserted == []

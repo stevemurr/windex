@@ -58,6 +58,7 @@ from windex.embed import build_embedder, with_runtime_profile
 from windex.embed.base import embed_isolating
 from windex.index import qdrant as qidx
 from windex.sanitize import strip_smuggled
+from windex.textguard import is_empty_text
 
 _NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # uuid5 namespace
 
@@ -208,34 +209,47 @@ def _upserter(up_q: queue.Queue, client: QdrantClient, collection: str) -> None:
 
 def _embed_batch(rows: list[dict], spec: SourceSpec, embedder, bm25, up_q: queue.Queue,
                  max_chars: int, throttle: float, stop: threading.Event
-                 ) -> tuple[cf.Future, list[str]]:
+                 ) -> tuple[cf.Future, list[str], list[str]]:
     """Embed worker: dense + sparse, hand the points to an upsert thread, and go
     straight back for more work — the Qdrant round-trip must not hold this slot.
 
-    Returns (future, rejected_ids): `future` resolves (via the upserter) to the
-    ids whose vectors landed; `rejected_ids` are docs the server *permanently*
-    rejected (over-long/malformed) — isolated via embed_isolating so one poison
-    document can't wedge the whole source's backlog (the 2026-07-20 gh wedge this
-    driver never guarded against). The caller marks them 'failed' so the pass
-    advances instead of re-selecting and re-crashing on them every run."""
+    Returns (future, rejected_ids, empty_ids): `future` resolves (via the
+    upserter) to the ids whose vectors landed; `rejected_ids` are docs the server
+    *permanently* rejected (over-long/malformed) — isolated via embed_isolating so
+    one poison document can't wedge the whole source's backlog (the 2026-07-20 gh
+    wedge this driver never guarded against); `empty_ids` are docs whose composed
+    text is empty/whitespace-only — never sent to the embedder (the server accepts
+    "" and returns a junk vector; there is no 4xx for embed_isolating to catch), so
+    they land a terminal 'empty' status with no Qdrant point. The caller marks
+    rejected 'failed' and empty 'empty' so the pass advances instead of
+    re-selecting them every run."""
     texts = [compose_text(r, spec.text_field, max_chars) for r in rows]
-    dense, ok = embed_isolating(embedder, texts)
-    if throttle:
-        time.sleep(throttle)  # leave the embedding server a gap for queries
-    good = [i for i in range(len(rows)) if ok[i]]
-    rejected_ids = [rows[i]["id"] for i in range(len(rows)) if not ok[i]]
+    keep = [i for i in range(len(rows)) if not is_empty_text(texts[i])]
+    empty_ids = [rows[i]["id"] for i in range(len(rows)) if is_empty_text(texts[i])]
 
     fut: cf.Future = cf.Future()
-    if not good:
-        fut.set_result([])  # nothing to upsert (whole batch rejected)
-        return fut, rejected_ids
+    if not keep:
+        fut.set_result([])  # nothing to embed/upsert (whole batch empty)
+        return fut, [], empty_ids
 
+    dense, ok = embed_isolating(embedder, [texts[i] for i in keep])
+    if throttle:
+        time.sleep(throttle)  # leave the embedding server a gap for queries
+    good_pos = [j for j in range(len(keep)) if ok[j]]  # positions within `keep`
+    good = [keep[j] for j in good_pos]                 # row indices that embedded
+    rejected_ids = [rows[keep[j]]["id"] for j in range(len(keep)) if not ok[j]]
+
+    if not good:
+        fut.set_result([])  # nothing to upsert (all kept docs rejected)
+        return fut, rejected_ids, empty_ids
+
+    dense_good = [dense[j] for j in good_pos]  # aligned to `good`
     sparse = list(bm25.embed([texts[i] for i in good]))
     points = [
         qm.PointStruct(
             id=point_id(rows[i]["id"]),
             vector={
-                qidx.DENSE: dense[i],
+                qidx.DENSE: dense_good[j],
                 qidx.SPARSE: qm.SparseVector(
                     indices=sparse[j].indices.tolist(),
                     values=sparse[j].values.tolist(),
@@ -247,7 +261,7 @@ def _embed_batch(rows: list[dict], spec: SourceSpec, embedder, bm25, up_q: queue
     ]
     if not _put(up_q, (points, [rows[i]["id"] for i in good], fut), stop):
         fut.cancel()
-    return fut, rejected_ids
+    return fut, rejected_ids, empty_ids
 
 
 def embed_pending(conn: psycopg.Connection, settings: Settings, spec: SourceSpec,
@@ -332,7 +346,7 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, spec: SourceSpec
                     continue
                 # FIFO: only the *commit* waits in order — the pool and the
                 # upsert threads keep running ahead regardless.
-                inner_fut, rejected_ids = inflight.popleft().result()
+                inner_fut, rejected_ids, empty_ids = inflight.popleft().result()
                 ids = sorted(inner_fut.result())  # embed → vectors durable
                 # One statement over a single sorted id array: this UPDATE and a
                 # source's ingest upsert lock the same `documents` rows, and taking
@@ -342,19 +356,21 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, spec: SourceSpec
                 # malformed, isolated by embed_isolating) are marked 'failed' in the
                 # same statement so the pass advances instead of re-selecting and
                 # re-crashing on them forever.
-                all_ids = sorted(ids + rejected_ids)
+                all_ids = sorted(ids + rejected_ids + empty_ids)
                 with conn.cursor() as cur:
                     cur.execute(
                         """
                         UPDATE documents
-                        SET status = CASE WHEN id = ANY(%s) THEN 'embedded' ELSE 'failed' END,
+                        SET status = CASE WHEN id = ANY(%s) THEN 'embedded'
+                                          WHEN id = ANY(%s) THEN 'empty'
+                                          ELSE 'failed' END,
                             embedded_model = CASE WHEN id = ANY(%s) THEN %s
                                                   ELSE embedded_model END,
                             indexed_at = CASE WHEN id = ANY(%s) THEN now()
                                               ELSE indexed_at END
                         WHERE id = ANY(%s)
                         """,
-                        (ids, ids, settings.embed_model, ids, all_ids),
+                        (ids, empty_ids, ids, settings.embed_model, ids, all_ids),
                     )
                 conn.commit()  # only now: the vectors are already in Qdrant
                 total += len(ids)
