@@ -194,6 +194,29 @@ def plan_incremental(conn: psycopg.Connection, days: int, now: datetime | None =
     return frm, until
 
 
+def reclaim_stale(conn: psycopg.Connection, older_than_minutes: int = 60) -> int:
+    """Return long-'processing' windows to 'pending'. Returns the count reclaimed.
+
+    A killed harvest/backfill leaves its window claimed forever: pending_windows()
+    only selects 'pending', so nothing ever retries it and that month is silently
+    absent from the index. This is the exact bug that stranded three years of arXiv
+    (see arxiv.harvest.reclaim_stale) — the fix was never ported to hn until now.
+    mark_window() stamps processed_at at claim time and a real window finishes in
+    minutes, so reclaim purely on age: a window claimed seconds ago is never stolen
+    from a live worker. A NULL processed_at only occurs on rows claimed before that
+    stamping existed; those legacy strands are reclaimed too.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE hn_windows SET status = 'pending' WHERE status = 'processing' "
+            "AND (processed_at IS NULL OR processed_at < now() - make_interval(mins => %s))",
+            (older_than_minutes,),
+        )
+        n = cur.rowcount or 0
+    conn.commit()
+    return n
+
+
 def pending_windows(conn: psycopg.Connection, limit: int) -> list[tuple[int, int]]:
     """Oldest-first (from_ts, until_ts) pairs still pending."""
     with conn.cursor() as cur:
@@ -218,7 +241,8 @@ def mark_window(
             """UPDATE hn_windows SET status = %s,
                queries = coalesce(%s, queries), hits = coalesce(%s, hits),
                staged = coalesce(%s, staged), refreshed = coalesce(%s, refreshed),
-               processed_at = CASE WHEN %s IN ('done', 'failed') THEN now() ELSE processed_at END
+               processed_at = CASE WHEN %s IN ('done', 'failed', 'processing')
+                                   THEN now() ELSE processed_at END
                WHERE from_ts = %s AND until_ts = %s""",
             (status, stats.get("queries"), stats.get("hits"),
              stats.get("staged"), stats.get("refreshed"), status, frm, until),
@@ -468,6 +492,10 @@ def harvest(
     """Process pending windows oldest-first via Algolia. Returns aggregate
     stats. A single failed window is marked failed and skipped so a long
     backfill survives it; repeated back-to-back failures still abort."""
+    # A killed run leaves its window 'processing' forever; reclaim before planning.
+    reclaimed = reclaim_stale(conn)
+    if reclaimed:
+        console.print(f"[yellow]reclaimed {reclaimed} stale window(s) from a killed run[/yellow]")
     totals = {"windows": 0, "queries": 0, "hits": 0, "staged": 0, "skipped": 0, "refreshed": 0}
     consecutive_failures = 0
     own = client is None

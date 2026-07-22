@@ -111,40 +111,38 @@ def count_watch_events(path: Path) -> dict[int, tuple[str, int]]:
     return counts
 
 
+_UPSERT_SQL = """
+    INSERT INTO repos (repo_id, full_name, star_events)
+    VALUES (%s, %s, %s)
+    ON CONFLICT (repo_id) DO UPDATE SET
+        star_events = repos.star_events + EXCLUDED.star_events,
+        full_name = EXCLUDED.full_name
+    """
+
+
 def upsert_counts(conn: psycopg.Connection, counts: dict[int, tuple[str, int]]) -> None:
     rows = [(rid, name, n) for rid, (name, n) in counts.items()]
     with conn.cursor() as cur:
         for row in rows:
+            # Per-row SAVEPOINT: a full_name collision (rename + recreate) rolls
+            # back only THIS row, not the whole hour's accumulated star_events.
+            # conn.rollback() aborted the entire transaction, silently discarding
+            # every earlier repo's increments — and scan() then marked the hour
+            # done, so they were lost for good.
+            cur.execute("SAVEPOINT r")
             try:
-                cur.execute(
-                    """
-                    INSERT INTO repos (repo_id, full_name, star_events)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (repo_id) DO UPDATE SET
-                        star_events = repos.star_events + EXCLUDED.star_events,
-                        full_name = EXCLUDED.full_name
-                    """,
-                    row,
-                )
+                cur.execute(_UPSERT_SQL, row)
             except psycopg.errors.UniqueViolation:
-                # full_name reused by a different repo_id (rename + recreate):
-                # the newer event stream wins the name.
-                conn.rollback()
-                with conn.cursor() as c2:
-                    c2.execute(
-                        "UPDATE repos SET full_name = full_name || '#stale:' || repo_id WHERE full_name = %s",
-                        (row[1],),
-                    )
-                    c2.execute(
-                        """
-                        INSERT INTO repos (repo_id, full_name, star_events)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (repo_id) DO UPDATE SET
-                            star_events = repos.star_events + EXCLUDED.star_events,
-                            full_name = EXCLUDED.full_name
-                        """,
-                        row,
-                    )
+                cur.execute("ROLLBACK TO SAVEPOINT r")
+                # full_name reused by a different repo_id: the newer event stream
+                # wins the name; the incumbent is #stale-suffixed.
+                cur.execute(
+                    "UPDATE repos SET full_name = full_name || '#stale:' || repo_id "
+                    "WHERE full_name = %s AND repo_id <> %s",
+                    (row[1], row[0]),
+                )
+                cur.execute(_UPSERT_SQL, row)
+            cur.execute("RELEASE SAVEPOINT r")
     conn.commit()
 
 

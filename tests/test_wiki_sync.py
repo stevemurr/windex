@@ -130,3 +130,39 @@ def test_mark_updates_status_and_counts(pg, monkeypatch):
         cur.execute("SELECT status, doc_counts->>'staged' FROM wiki_dumps WHERE name=%s", (name,))
         assert cur.fetchone() == ("done", "7")
     assert wsync.pending_shards(pg, 10) == []
+
+
+def test_sync_rearms_a_failed_shard_but_not_a_done_one(pg, monkeypatch):
+    """A shard marked 'failed' by a transient ingest error must be retried on the
+    next scheduled `wiki sync` (ON CONFLICT DO NOTHING left it failed forever, so
+    its ~112k articles were silently never ingested for that snapshot). A 'done'
+    shard must NOT be re-armed."""
+    monkeypatch.setattr(wsync, "list_dates", lambda c: ["20260712"])
+    monkeypatch.setattr(wsync, "list_content_dir", lambda c, date, wiki: _content_dir(date, 2))
+    wsync.sync(pg, "enwiki")
+    failed = "enwiki_content-20260712-00000.json.bz2"
+    done = "enwiki_content-20260712-00001.json.bz2"
+    wsync.mark(pg, [failed], "failed")
+    wsync.mark(pg, [done], "done")
+    assert wsync.pending_shards(pg, 10) == []  # neither is pending
+
+    wsync.sync(pg, "enwiki")  # re-run for the same still-newest snapshot
+    assert [n for n, _ in wsync.pending_shards(pg, 10)] == [failed]  # only the failed one re-armed
+
+
+def test_reclaim_stale_frees_processing_shards_from_a_killed_run(pg):
+    """A killed ingest leaves its shard 'processing'; pending_shards() only selects
+    'pending', so it is silently skipped forever. Reclaim on age; never steal a
+    shard a live worker just claimed."""
+    with pg.cursor() as cur:
+        cur.execute("INSERT INTO wiki_dumps (name, dump_date, status, processed_at) "
+                    "VALUES ('s-stale', '20260712', 'processing', now() - interval '3 hours')")
+        cur.execute("INSERT INTO wiki_dumps (name, dump_date, status, processed_at) "
+                    "VALUES ('s-live', '20260712', 'processing', now())")
+    pg.commit()
+
+    assert wsync.reclaim_stale(pg, older_than_minutes=60) == 1
+    assert [n for n, _ in wsync.pending_shards(pg, 10)] == ["s-stale"]
+    with pg.cursor() as cur:
+        cur.execute("SELECT status FROM wiki_dumps WHERE name='s-live'")
+        assert cur.fetchone()[0] == "processing", "stole a shard from a live worker"

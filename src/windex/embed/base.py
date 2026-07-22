@@ -32,6 +32,17 @@ class Embedder(abc.ABC):
         except Exception:
             return False
 
+    def close(self) -> None:
+        """Release any held resources (an HTTP connection pool). Default no-op so
+        in-process backends need not implement it. Callers that build a one-off
+        embedder (a query, one embed pass) must close it so its pool doesn't leak."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
 
 def embed_isolating(
     embedder: Embedder, texts: Sequence[str]

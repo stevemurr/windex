@@ -239,17 +239,33 @@ def replace_conversation(
         conn.rollback()
         raise
     stats["deleted"] = apply_tombstones(conn, settings, missing)
+    if not rows:
+        # Emptied conversation (the documented 'conversation emptied' push): the
+        # ledger is tombstoned above, but the empty branch never wrote/renamed a
+        # parquet, so the OLD one still holds the full chat text. Remove it.
+        _unlink_clean(settings, cid)
     return stats
+
+
+def _unlink_clean(settings: Settings, cid: str) -> None:
+    """Remove a conversation's clean parquet (+ its tmp sibling). Called once its
+    ledger rows are tombstoned — otherwise deleting/emptying a conversation leaves
+    the full chat text on the staging volume indefinitely (an unbounded leak and a
+    'delete' that doesn't actually delete the content). Best-effort."""
+    clean = settings.staging_dir / f"memory/clean/{cid}.parquet"
+    clean.unlink(missing_ok=True)
+    clean.with_suffix(".parquet.tmp").unlink(missing_ok=True)
 
 
 def delete_conversation(conn: psycopg.Connection, settings: Settings,
                         conversation_id: str) -> dict:
     """Tombstone every live ledger row under ``memory:<cid>/`` + best-effort
-    Qdrant delete. Idempotent: deleting a conversation with nothing live returns
-    ``deleted: 0``."""
+    Qdrant delete, and remove the conversation's clean parquet. Idempotent:
+    deleting a conversation with nothing live returns ``deleted: 0``."""
     with conn.cursor() as cur:
         missing = sorted(_ledger_ids_for_conversation(cur, conversation_id))
     deleted = apply_tombstones(conn, settings, missing)
+    _unlink_clean(settings, conversation_id)
     return {"conversation_id": conversation_id, "deleted": deleted}
 
 

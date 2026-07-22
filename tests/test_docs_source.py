@@ -282,6 +282,32 @@ def test_ingest_stages_parquet_and_ledger(pg, docs_settings):
     assert dsync.pending_docsets(pg, ["flask"]) == []
 
 
+def test_empty_db_json_does_not_wipe_an_existing_docset(pg, docs_settings, monkeypatch):
+    """A truncated/glitched db.json (200 with a {} body) over a docset that
+    already has ingested pages must NOT tombstone the whole docset and bank the
+    new mtime as 'done' (never retried). ingest marks it 'failed' and leaves the
+    corpus intact until a plausible db.json arrives."""
+    tombstoned = []
+    monkeypatch.setattr(dingest, "apply_tombstones",
+                        lambda conn, s, ids: tombstoned.extend(ids) or len(ids))
+    _seed_docsets(pg)
+    _ingest_flask(pg, docs_settings)  # 3 pages ingested, docset marked done
+
+    bumped = [dict(d) for d in MANIFEST]
+    bumped[0]["mtime"] += 100  # flask pending again
+    _seed_docsets(pg, bumped)
+    _ingest_flask(pg, docs_settings, db={})  # db.json comes back empty
+
+    assert tombstoned == [], "empty db.json mass-tombstoned an existing docset"
+    with pg.cursor() as cur:
+        cur.execute("SELECT status, ingested_mtime FROM docsets WHERE slug='flask'")
+        status, ingested = cur.fetchone()
+        assert status == "failed"          # not falsely 'done'
+        assert ingested == 1739347690      # mtime NOT advanced past the bad fetch
+        cur.execute("SELECT count(*) FROM documents WHERE source='docs' AND status <> 'deleted'")
+        assert cur.fetchone()[0] == 3      # pages intact
+
+
 def test_refresh_reembeds_only_changed_pages_and_tombstones_removed(pg, docs_settings, monkeypatch):
     # tombstoning must never resolve the live docs_current alias from a test:
     # point it at a collection that cannot exist (delete becomes a clean skip)

@@ -28,6 +28,9 @@ class Reranker(abc.ABC):
     def scores(self, query: str, documents: Sequence[str]) -> list[float]:
         """Relevance score per document, aligned to input order (higher = better)."""
 
+    def close(self) -> None:
+        """Release any held resources (an HTTP connection pool). Default no-op."""
+
 
 class HttpReranker(Reranker):
     """Client for a self-hosted rerank endpoint. Speaks the de-facto standard
@@ -72,6 +75,9 @@ class HttpReranker(Reranker):
             if 0 <= i < len(docs):
                 out[i] = float(r.get("relevance_score", r.get("score", 0.0)))
         return out
+
+    def close(self) -> None:
+        self._client.close()
 
 
 def build_reranker(settings) -> Reranker | None:

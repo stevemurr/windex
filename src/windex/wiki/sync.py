@@ -74,8 +74,14 @@ def sync(conn: psycopg.Connection, wiki: str, client: httpx.Client | None = None
             return 0
         with conn.cursor() as cur:
             cur.executemany(
+                # Re-arm a 'failed' shard of the still-current snapshot back to
+                # 'pending' so the nightly `wiki sync && wiki ingest` retries it —
+                # DO NOTHING left a shard failed forever, silently dropping its
+                # ~112k articles. 'done'/'processing' rows are untouched.
                 """INSERT INTO wiki_dumps (name, dump_date, bytes)
-                   VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (name) DO UPDATE SET status = 'pending'
+                   WHERE wiki_dumps.status = 'failed'""",
                 [(name, date, size) for name, size in files],
                 returning=False,
             )
@@ -85,6 +91,27 @@ def sync(conn: psycopg.Connection, wiki: str, client: httpx.Client | None = None
     finally:
         if own:
             client.close()
+
+
+def reclaim_stale(conn: psycopg.Connection, older_than_minutes: int = 60) -> int:
+    """Return long-'processing' shards to 'pending'. Returns the count reclaimed.
+
+    A killed ingest leaves its shard 'processing' (mark(..., 'processing')
+    committed, done/failed never reached); pending_shards() only selects 'pending'
+    and sync() only re-arms 'failed', so it is invisible forever — the shard's
+    articles silently absent, no error (the arxiv failure class). mark() stamps
+    processed_at at claim time and a shard finishes in minutes, so reclaim purely
+    on age; a shard claimed seconds ago is never stolen from a live worker.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE wiki_dumps SET status = 'pending' WHERE status = 'processing' "
+            "AND (processed_at IS NULL OR processed_at < now() - make_interval(mins => %s))",
+            (older_than_minutes,),
+        )
+        n = cur.rowcount or 0
+    conn.commit()
+    return n
 
 
 def pending_shards(conn: psycopg.Connection, limit: int) -> list[tuple[str, str]]:

@@ -124,3 +124,6 @@ class BudgetedEmbedder(Embedder):
 
     def ping(self) -> bool:
         return self.inner.ping()  # health checks must not queue behind a backfill
+
+    def close(self) -> None:
+        self.inner.close()  # the budget wrapper holds no resources; the inner does

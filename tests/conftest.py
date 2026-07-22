@@ -98,6 +98,9 @@ class FakeEmbedder:
     def ping(self):
         return True
 
+    def close(self):
+        pass  # honors the Embedder.close() contract (a one-off pass closes it)
+
 
 @pytest.fixture()
 def fake_embedder():

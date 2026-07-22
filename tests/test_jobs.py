@@ -18,6 +18,56 @@ def test_build_argv_typed_and_bounded():
         jobs.build_argv(job, {"batch_size": 8, "rm_rf": "/"})
 
 
+def test_stop_pattern_survives_permission_error_on_retry(monkeypatch):
+    """A PermissionError on the fallback os.kill (same condition that triggered
+    the fallback) must be swallowed, not surface as an unhandled 500 — the inner
+    retry only caught ProcessLookupError."""
+    monkeypatch.setattr(jobs, "_pids", lambda pat: [4242])
+    monkeypatch.setattr(jobs.os, "getpgid",
+                        lambda pid: (_ for _ in ()).throw(PermissionError()))
+    monkeypatch.setattr(jobs.os, "kill",
+                        lambda pid, sig: (_ for _ in ()).throw(PermissionError()))
+    out = jobs._stop_pattern("ccnews-run", "pat")  # must not raise
+    assert out == {"stopped": "ccnews-run", "pids": [4242]}
+
+
+def test_start_serializes_concurrent_launches(monkeypatch, tmp_path):
+    """TOCTOU: two near-simultaneous starts both passed the _pids() check and
+    double-spawned. The spawn must be serialized so exactly one wins."""
+    import threading
+    import time
+
+    monkeypatch.setattr(jobs, "LOG_DIR", tmp_path)  # keep the lockfile out of ~/.windex
+    spawned = []
+
+    monkeypatch.setattr(jobs, "_pids", lambda pat: [1] if spawned else [])
+    monkeypatch.setattr(jobs, "build_argv", lambda job, p: ["x"])
+
+    def fake_spawn(name, argv):
+        time.sleep(0.05)  # widen the check→spawn window so an unlocked start races
+        spawned.append(name)
+        return 123
+
+    monkeypatch.setattr(jobs, "_spawn", fake_spawn)
+
+    errors = []
+
+    def run():
+        try:
+            jobs.start("ccnews-run", {})
+        except RuntimeError:
+            errors.append(1)  # lost the race → "already running"
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(spawned) == 1, "double-spawn: check-and-spawn was not serialized"
+    assert len(errors) == 1  # the loser got 'already running'
+
+
 def test_build_argv_choice_and_date_validation():
     with pytest.raises(ValueError, match="must be one of"):
         jobs.build_argv(jobs.JOBS["reindex"], {"source": "everything; rm -rf /"})

@@ -28,9 +28,13 @@ def search_index(
     framework: str | None = None,
     root: str | None = None,
     kind: str | None = None,
+    conversation_id: str | None = None,
 ) -> dict:
     """Search the index. source: news | github | wiki | arxiv | smallweb |
-    docs | hn | hf | all. `category` filters arxiv results by primary category
+    docs | hn | hf | memory | all (memory = the user's pushed chat history; it is
+    NOT included in 'all' and must be asked for explicitly). `conversation_id`
+    scopes a source=memory search to one conversation. `category` filters arxiv
+    results by primary category
     (e.g. cs.LG); `outlet` filters smallweb results by feed host (e.g.
     example.com); `framework` filters docs results by framework (e.g. python,
     react); `min_points` filters hn results by score (mirrors github's
@@ -56,6 +60,7 @@ def search_index(
         framework=framework,
         root=root,
         kind=kind,
+        conversation_id=conversation_id,
     )
 
 
@@ -63,8 +68,8 @@ def search_index(
 def get_document(doc_id: str) -> dict:
     """Fetch the stored full text and metadata for a search result id
     (news:<hash>, gh:owner/repo, wiki:<page_id>, arxiv:<paper_id>,
-    smallweb:<hash>, docs:<slug>/<path>, hn:<item_id>, or
-    hf:docs/<root>/<path> | hf:blog/<slug>)."""
+    smallweb:<hash>, docs:<slug>/<path>, hn:<item_id>,
+    hf:docs/<root>/<path> | hf:blog/<slug>, or memory:<conversation_id>/<chunk_index>)."""
     doc = service.get_document(get_settings(), doc_id)
     return doc or {"error": f"unknown document id: {doc_id}"}
 

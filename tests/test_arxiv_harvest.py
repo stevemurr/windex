@@ -354,3 +354,24 @@ def test_reclaim_stale_frees_windows_from_a_killed_run(pg):
         assert cur.fetchone()[0] == "processing", "stole a window from a live worker"
         cur.execute("SELECT status FROM arxiv_windows WHERE from_date='2010-01-01'")
         assert cur.fetchone()[0] == "done"
+
+
+def test_reclaim_ignores_a_window_claimed_via_mark_window(pg):
+    """The race in reclaim_stale: mark_window('processing') must stamp
+    processed_at AT CLAIM TIME, otherwise a freshly-claimed window has
+    processed_at NULL, which reclaim_stale treats as stale and steals — a nightly
+    harvest firing while a manual backfill is actively working that same window
+    (both then race the same tmp parquet). A claim from one moment ago must never
+    be reclaimable."""
+    from windex.arxiv import harvest as ah
+
+    ah.plan_backfill(pg, 2007, 2007)
+    ah.mark_window(pg, "2007-01-01", "2007-12-31", "processing")  # claimed just now
+    with pg.cursor() as cur:
+        cur.execute("SELECT processed_at FROM arxiv_windows WHERE from_date='2007-01-01'")
+        assert cur.fetchone()[0] is not None, "claim did not stamp processed_at"
+
+    assert ah.reclaim_stale(pg, older_than_minutes=60) == 0
+    with pg.cursor() as cur:
+        cur.execute("SELECT status FROM arxiv_windows WHERE from_date='2007-01-01'")
+        assert cur.fetchone()[0] == "processing"

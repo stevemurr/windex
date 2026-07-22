@@ -55,6 +55,7 @@ from qdrant_client import models as qm
 from windex import db
 from windex.config import Settings
 from windex.embed import build_embedder, with_runtime_profile
+from windex.embed.base import embed_isolating
 from windex.index import qdrant as qidx
 from windex.sanitize import strip_smuggled
 
@@ -115,7 +116,10 @@ def compose_text(row: dict, text_field: str, max_chars: int) -> str:
     slip under the char cap while blowing the model's token window (see sanitize)."""
     title = strip_smuggled(row.get("title") or "")
     body = strip_smuggled(row.get(text_field) or "")
-    return ((title + "\n\n") if title else "") + body[:max_chars]
+    # Bound the WHOLE composed string, not just the body: slicing only the body
+    # and prepending an unbounded title let a long title push the total back over
+    # the char≈token cap (the 400-and-retry-forever failure sanitize.py prevents).
+    return (((title + "\n\n") if title else "") + body)[:max_chars]
 
 
 def _put(q: queue.Queue, item, stop: threading.Event) -> bool:
@@ -203,33 +207,47 @@ def _upserter(up_q: queue.Queue, client: QdrantClient, collection: str) -> None:
 
 
 def _embed_batch(rows: list[dict], spec: SourceSpec, embedder, bm25, up_q: queue.Queue,
-                 max_chars: int, throttle: float, stop: threading.Event) -> cf.Future:
+                 max_chars: int, throttle: float, stop: threading.Event
+                 ) -> tuple[cf.Future, list[str]]:
     """Embed worker: dense + sparse, hand the points to an upsert thread, and go
     straight back for more work — the Qdrant round-trip must not hold this slot.
-    Returns the Future the upserter resolves once the vectors have landed."""
+
+    Returns (future, rejected_ids): `future` resolves (via the upserter) to the
+    ids whose vectors landed; `rejected_ids` are docs the server *permanently*
+    rejected (over-long/malformed) — isolated via embed_isolating so one poison
+    document can't wedge the whole source's backlog (the 2026-07-20 gh wedge this
+    driver never guarded against). The caller marks them 'failed' so the pass
+    advances instead of re-selecting and re-crashing on them every run."""
     texts = [compose_text(r, spec.text_field, max_chars) for r in rows]
-    dense = embedder.embed_batch(texts)
+    dense, ok = embed_isolating(embedder, texts)
     if throttle:
         time.sleep(throttle)  # leave the embedding server a gap for queries
-    sparse = list(bm25.embed(texts))
+    good = [i for i in range(len(rows)) if ok[i]]
+    rejected_ids = [rows[i]["id"] for i in range(len(rows)) if not ok[i]]
+
+    fut: cf.Future = cf.Future()
+    if not good:
+        fut.set_result([])  # nothing to upsert (whole batch rejected)
+        return fut, rejected_ids
+
+    sparse = list(bm25.embed([texts[i] for i in good]))
     points = [
         qm.PointStruct(
-            id=point_id(r["id"]),
+            id=point_id(rows[i]["id"]),
             vector={
                 qidx.DENSE: dense[i],
                 qidx.SPARSE: qm.SparseVector(
-                    indices=sparse[i].indices.tolist(),
-                    values=sparse[i].values.tolist(),
+                    indices=sparse[j].indices.tolist(),
+                    values=sparse[j].values.tolist(),
                 ),
             },
-            payload={"doc_id": r["id"], "source": spec.source, **spec.payload(r)},
+            payload={"doc_id": rows[i]["id"], "source": spec.source, **spec.payload(rows[i])},
         )
-        for i, r in enumerate(rows)
+        for j, i in enumerate(good)
     ]
-    fut: cf.Future = cf.Future()
-    if not _put(up_q, (points, [r["id"] for r in rows], fut), stop):
+    if not _put(up_q, (points, [rows[i]["id"] for i in good], fut), stop):
         fut.cancel()
-    return fut
+    return fut, rejected_ids
 
 
 def embed_pending(conn: psycopg.Connection, settings: Settings, spec: SourceSpec,
@@ -314,20 +332,29 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, spec: SourceSpec
                     continue
                 # FIFO: only the *commit* waits in order — the pool and the
                 # upsert threads keep running ahead regardless.
-                ids = inflight.popleft().result().result()  # embed → vectors durable
-                # Sorted: this UPDATE and a source's ingest upsert lock the same
-                # `documents` rows, and taking them in different orders deadlocks
-                # — it killed two wiki shards on 2026-07-16 (5% of the corpus).
-                # Every batch writer to `documents` must lock in id order.
-                ids = sorted(ids)
+                inner_fut, rejected_ids = inflight.popleft().result()
+                ids = sorted(inner_fut.result())  # embed → vectors durable
+                # One statement over a single sorted id array: this UPDATE and a
+                # source's ingest upsert lock the same `documents` rows, and taking
+                # them in different orders deadlocks — it killed two wiki shards on
+                # 2026-07-16 (5% of the corpus). Every batch writer to `documents`
+                # must lock in id order. Permanently-rejected docs (over-long /
+                # malformed, isolated by embed_isolating) are marked 'failed' in the
+                # same statement so the pass advances instead of re-selecting and
+                # re-crashing on them forever.
+                all_ids = sorted(ids + rejected_ids)
                 with conn.cursor() as cur:
                     cur.execute(
                         """
                         UPDATE documents
-                        SET status = 'embedded', embedded_model = %s, indexed_at = now()
+                        SET status = CASE WHEN id = ANY(%s) THEN 'embedded' ELSE 'failed' END,
+                            embedded_model = CASE WHEN id = ANY(%s) THEN %s
+                                                  ELSE embedded_model END,
+                            indexed_at = CASE WHEN id = ANY(%s) THEN now()
+                                              ELSE indexed_at END
                         WHERE id = ANY(%s)
                         """,
-                        (settings.embed_model, ids),
+                        (ids, ids, settings.embed_model, ids, all_ids),
                     )
                 conn.commit()  # only now: the vectors are already in Qdrant
                 total += len(ids)
@@ -355,4 +382,5 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, spec: SourceSpec
             t.join(timeout=60)
         reader.join(timeout=5)
         client.close()
+        embedder.close()  # release the bulk embedder's HTTP pool (built per pass)
     return total

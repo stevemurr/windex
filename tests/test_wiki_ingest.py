@@ -79,7 +79,7 @@ def test_ingest_stages_parquet_and_ledger(pg, settings, monkeypatch):
     _seed_pending(pg, [name])
 
     totals = wingest.ingest(pg, settings, max_files=1, chunk_rows=2)  # 2 chunks over 3 arts
-    assert totals == {"files": 1, "articles": 3, "staged": 3, "skipped": 0}
+    assert totals == {"files": 1, "articles": 3, "staged": 3, "skipped": 0, "refreshed": 0}
 
     text_ref = "wiki/clean/enwiki_content-20260712-00000.parquet"
     table = pq.read_table(settings.staging_dir / text_ref)
@@ -138,7 +138,7 @@ def test_reingest_skips_unchanged_articles(pg, settings, monkeypatch):
 
     _seed_pending(pg, [s1], date="20260719")
     totals = wingest.ingest(pg, settings, max_files=1, chunk_rows=8)
-    assert totals == {"files": 1, "articles": 3, "staged": 1, "skipped": 2}
+    assert totals == {"files": 1, "articles": 3, "staged": 1, "skipped": 2, "refreshed": 0}
 
     with pg.cursor() as cur:
         cur.execute("SELECT id, status, text_ref FROM documents WHERE source='wiki' ORDER BY id")
@@ -151,3 +151,97 @@ def test_reingest_skips_unchanged_articles(pg, settings, monkeypatch):
     # the new shard's clean parquet holds only the changed article
     new_table = pq.read_table(settings.staging_dir / rows["wiki:39"][1])
     assert new_table.num_rows == 1
+
+
+def test_reingest_refreshes_metadata_on_page_move_without_reembed(pg, settings, monkeypatch):
+    """A page whose TEXT is unchanged but whose title/url changed (a Wikipedia
+    page move) must have its ledger metadata refreshed AND its Qdrant payload
+    refreshed in place — search results are built from the payload, so a rename
+    would otherwise show the stale title/url forever. The article must NOT be
+    re-embedded (text unchanged), staying 'embedded'."""
+    a_old = _article(12, "Anarchism", "Stable body text that never changes. " * 5, incoming=500)
+    # same page_id + identical text, but renamed (title + derived url change) and
+    # backlinks grew — the payload refresh piggybacks incoming_links
+    a_new = _article(12, "Anarchism (philosophy)", "Stable body text that never changes. " * 5,
+                     incoming=800)
+    s0 = "enwiki_content-20260712-00000.json.bz2"
+    s1 = "enwiki_content-20260719-00000.json.bz2"
+    monkeypatch.setattr(wingest.httpx, "Client",
+                        lambda *a, **k: _FakeClient({s0: _make_dump([a_old]), s1: _make_dump([a_new])}))
+
+    _seed_pending(pg, [s0], date="20260712")
+    wingest.ingest(pg, settings, max_files=1, chunk_rows=8)
+    with pg.cursor() as cur:
+        cur.execute("UPDATE documents SET status='embedded', embedded_model='m', indexed_at=now() "
+                    "WHERE source='wiki'")
+    pg.commit()
+
+    refreshed: list = []
+    monkeypatch.setattr("windex.wiki.embed_index.refresh_payloads",
+                        lambda settings, arts: refreshed.extend(arts) or len(arts))
+
+    _seed_pending(pg, [s1], date="20260719")
+    totals = wingest.ingest(pg, settings, max_files=1, chunk_rows=8)
+
+    assert totals["staged"] == 0 and totals["skipped"] == 1  # not re-embedded
+    with pg.cursor() as cur:
+        cur.execute("SELECT status, title, url FROM documents WHERE id='wiki:12'")
+        status, title, url = cur.fetchone()
+    assert status == "embedded"  # still embedded, no re-embed queued
+    assert title == "Anarchism (philosophy)"  # ledger metadata refreshed
+    assert url == "https://en.wikipedia.org/wiki/Anarchism_%28philosophy%29"
+    # the Qdrant payload was refreshed in place for exactly the moved article
+    assert [a["id"] for a in refreshed] == ["wiki:12"]
+    assert refreshed[0]["incoming_links"] == 800
+
+
+def test_unchanged_article_with_unchanged_metadata_is_not_refreshed(pg, settings, monkeypatch):
+    """The refresh must be bounded to genuinely-changed metadata — a byte-identical
+    re-ingest of an embedded article triggers no payload refresh (a 112k-article
+    shard must not fire 112k set_payload calls)."""
+    a = _article(12, "Anarchism", "Body stays the same. " * 5, incoming=500)
+    s0 = "enwiki_content-20260712-00000.json.bz2"
+    s1 = "enwiki_content-20260719-00000.json.bz2"
+    monkeypatch.setattr(wingest.httpx, "Client",
+                        lambda *aa, **k: _FakeClient({s0: _make_dump([a]), s1: _make_dump([a])}))
+    _seed_pending(pg, [s0], date="20260712")
+    wingest.ingest(pg, settings, max_files=1, chunk_rows=8)
+    with pg.cursor() as cur:
+        cur.execute("UPDATE documents SET status='embedded' WHERE source='wiki'")
+    pg.commit()
+
+    refreshed: list = []
+    monkeypatch.setattr("windex.wiki.embed_index.refresh_payloads",
+                        lambda settings, arts: refreshed.extend(arts) or len(arts))
+    _seed_pending(pg, [s1], date="20260719")
+    wingest.ingest(pg, settings, max_files=1, chunk_rows=8)
+    assert refreshed == []  # nothing changed → nothing refreshed
+
+
+def test_orphaned_parquet_removed_when_ledger_write_fails_after_rename(pg, settings, monkeypatch):
+    """stage_shard renames tmp→clean BEFORE the ledger executemany. If that write
+    fails (the id-order deadlock killed real shards on 2026-07-16), the exception
+    cleanup must remove clean_path — not the already-renamed tmp_path — or a fully
+    written parquet is orphaned on the staging volume, referenced by no ledger row."""
+    import psycopg
+
+    name = "enwiki_content-20260712-00000.json.bz2"
+    dump = _make_dump([_article(12, "T", "some body text here " * 10)])
+    monkeypatch.setattr(wingest.httpx, "Client", lambda *a, **k: _FakeClient({name: dump}))
+    _seed_pending(pg, [name])
+
+    orig = psycopg.Cursor.executemany
+
+    def boom(self, query, params=None, *a, **k):
+        if "INSERT INTO documents" in str(query):
+            raise RuntimeError("simulated post-rename DB failure")
+        return orig(self, query, params, *a, **k)
+
+    monkeypatch.setattr(psycopg.Cursor, "executemany", boom)
+    wingest.ingest(pg, settings, max_files=1, chunk_rows=8)  # survives: shard marked failed
+
+    clean_path = settings.staging_dir / "wiki/clean/enwiki_content-20260712-00000.parquet"
+    assert not clean_path.exists(), "orphaned clean parquet left after post-rename failure"
+    with pg.cursor() as cur:
+        cur.execute("SELECT status FROM wiki_dumps WHERE name=%s", (name,))
+        assert cur.fetchone()[0] == "failed"

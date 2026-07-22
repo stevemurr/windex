@@ -10,8 +10,11 @@ from windex.github import tail
 
 
 def _seed_warcs(pg, n=4):
+    # Same crawl day, unique sequence numbers: a batch spanning several days is
+    # deliberately split (see test_run_batches_splits_batches_at_day_boundaries),
+    # so keep these on one day to exercise multi-WARC batching.
     paths = [
-        f"crawl-data/CC-NEWS/2026/07/CC-NEWS-2026071{i}000000-0000{i}.warc.gz"
+        f"crawl-data/CC-NEWS/2026/07/CC-NEWS-20260714000000-{i:05d}.warc.gz"
         for i in range(1, n + 1)
     ]
     with pg.cursor() as cur:
@@ -123,6 +126,74 @@ def test_run_batches_waits_while_paused(pg, settings, monkeypatch):
     staged = runner.run_batches(pg, settings, batch_size=2, pause_poll_seconds=0.01)
     assert sleeps, "runner must poll while paused"
     assert staged == 2  # resumed and processed after unpause
+
+
+def test_run_batches_splits_batches_at_day_boundaries(pg, settings, monkeypatch):
+    """run_dedup stamps every minhash band row with a single `day` (paths[0]'s).
+    A batch straddling midnight would mis-date the later day's near-dup bands and
+    prune them a day early, narrowing the syndication window for exactly the
+    boundary-crossing articles. So a batch must never span two crawl days."""
+    dayA = [f"crawl-data/CC-NEWS/2026/07/CC-NEWS-20260713000000-{i:05d}.warc.gz" for i in range(3)]
+    dayB = [f"crawl-data/CC-NEWS/2026/07/CC-NEWS-20260714000000-{i:05d}.warc.gz" for i in range(2)]
+    with pg.cursor() as cur:
+        cur.executemany("INSERT INTO warc_files (path) VALUES (%s)", [(p,) for p in dayA + dayB])
+    pg.commit()
+
+    seen_days, seen_counts = [], []
+
+    def fake_download(batch, dest):
+        seen_counts.append(len(batch))
+        out = []
+        for p in batch:
+            f = settings.ccnews_downloads_dir / Path(p).name
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(b"w")
+            out.append(f)
+        return out
+
+    monkeypatch.setattr(runner.download, "download_batch", fake_download)
+    monkeypatch.setattr(runner.pipeline, "process_batch", lambda **kw: None)
+    monkeypatch.setattr(
+        runner.dd, "run_dedup",
+        lambda conn, extracted_dir, clean_path, text_ref, day: seen_days.append(day) or {"clean_out": 1},
+    )
+
+    # batch_size far exceeds the queue: without the split this is ONE batch of 5.
+    runner.run_batches(pg, settings, batch_size=16)
+    assert seen_days == [date(2026, 7, 13), date(2026, 7, 14)]  # one batch per day
+    assert seen_counts == [3, 2]  # day A's 3 WARCs, then day B's 2
+
+
+def test_run_batches_reclaims_stale_processing_before_running(pg, settings, monkeypatch):
+    """A WARC stranded in 'processing' by a prior killed run must be picked back up
+    (reclaimed to pending) on the next run, not silently skipped forever."""
+    path = "crawl-data/CC-NEWS/2026/07/CC-NEWS-20260714000000-09999.warc.gz"
+    with pg.cursor() as cur:
+        cur.execute("INSERT INTO warc_files (path, status, processed_at) "
+                    "VALUES (%s, 'processing', now() - interval '3 hours')", (path,))
+    pg.commit()
+
+    def fake_download(batch, dest):
+        out = []
+        for p in batch:
+            f = settings.ccnews_downloads_dir / Path(p).name
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(b"w")
+            out.append(f)
+        return out
+
+    monkeypatch.setattr(runner.download, "download_batch", fake_download)
+    monkeypatch.setattr(runner.pipeline, "process_batch", lambda **kw: None)
+    monkeypatch.setattr(
+        runner.dd, "run_dedup",
+        lambda conn, extracted_dir, clean_path, text_ref, day: {"clean_out": 1},
+    )
+
+    staged = runner.run_batches(pg, settings, batch_size=4)
+    assert staged == 1  # the stranded WARC was reclaimed and processed
+    with pg.cursor() as cur:
+        cur.execute("SELECT status FROM warc_files WHERE path=%s", (path,))
+        assert cur.fetchone()[0] == "done"
 
 
 def test_batch_id_stable():

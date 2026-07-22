@@ -150,27 +150,44 @@ def hydrate(
                             t["topic"]["name"]
                             for t in (node.get("repositoryTopics") or {}).get("nodes") or []
                         ]
-                        cur.execute(
-                            """
+                        upd_params = (
+                            stars,
+                            node.get("description"),
+                            topics,
+                            (node.get("primaryLanguage") or {}).get("name"),
+                            (node.get("defaultBranchRef") or {}).get("name"),
+                            node.get("pushedAt"),
+                            status,
+                            node["nameWithOwner"],
+                            node["databaseId"],
+                        )
+                        upd_sql = """
                             UPDATE repos SET
                                 stars = %s, description = %s, topics = %s,
                                 primary_language = %s, default_branch = %s,
                                 pushed_at = %s, readme_fetched_at = now(), status = %s,
                                 full_name = %s
                             WHERE repo_id = %s
-                            """,
-                            (
-                                stars,
-                                node.get("description"),
-                                topics,
-                                (node.get("primaryLanguage") or {}).get("name"),
-                                (node.get("defaultBranchRef") or {}).get("name"),
-                                node.get("pushedAt"),
-                                status,
-                                node["nameWithOwner"],
-                                node["databaseId"],
-                            ),
-                        )
+                            """
+                        # Per-repo SAVEPOINT: writing GitHub's current name can
+                        # collide with another row's full_name (rename + recreate).
+                        # Without this the UniqueViolation aborts the whole batch
+                        # uncommitted, so the same batch re-selects and re-crashes
+                        # every run — hydration wedged behind one repo. On collision,
+                        # #stale-suffix the incumbent (as tail.upsert_counts does)
+                        # and retry, rather than crash.
+                        cur.execute("SAVEPOINT h")
+                        try:
+                            cur.execute(upd_sql, upd_params)
+                        except psycopg.errors.UniqueViolation:
+                            cur.execute("ROLLBACK TO SAVEPOINT h")
+                            cur.execute(
+                                "UPDATE repos SET full_name = full_name || '#stale:' || repo_id "
+                                "WHERE full_name = %s AND repo_id <> %s",
+                                (node["nameWithOwner"], node["databaseId"]),
+                            )
+                            cur.execute(upd_sql, upd_params)
+                        cur.execute("RELEASE SAVEPOINT h")
                         readme = _extract_readme(node) if status == "hydrated" else None
                         if readme:
                             readme_rows.append(

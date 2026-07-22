@@ -188,6 +188,11 @@ def reclaim_stale(conn: psycopg.Connection, older_than_minutes: int = 60) -> int
     stranded exactly this way — three years of arXiv missing, no error anywhere.
     Windows are processed one at a time and a real one finishes in minutes, so
     an hour of 'processing' means the worker is gone.
+
+    Staleness is keyed on processed_at, which mark_window() stamps at claim time,
+    so a window claimed seconds ago is NOT reclaimable (no stealing from a live
+    worker). A NULL processed_at only occurs on rows claimed before that stamping
+    existed; those legacy strands are still reclaimed.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -270,11 +275,16 @@ def mark_window(
     stats = stats or {}
     with conn.cursor() as cur:
         cur.execute(
+            # processed_at is stamped on the 'processing' claim too, not just on
+            # done/failed: reclaim_stale keys staleness off it, so a fresh claim
+            # must carry a recent timestamp or a concurrent reclaim would treat
+            # it as NULL/stale and steal an actively-processing window.
             """UPDATE arxiv_windows SET status = %s,
                token = coalesce(%s, token),
                pages = coalesce(%s, pages), records = coalesce(%s, records),
                staged = coalesce(%s, staged), deleted = coalesce(%s, deleted),
-               processed_at = CASE WHEN %s IN ('done', 'failed') THEN now() ELSE processed_at END
+               processed_at = CASE WHEN %s IN ('done', 'failed', 'processing')
+                                   THEN now() ELSE processed_at END
                WHERE from_date = %s AND until_date = %s""",
             (status, token, stats.get("pages"), stats.get("records"),
              stats.get("staged"), stats.get("deleted"), status, frm, until),
@@ -347,11 +357,14 @@ def apply_tombstones(conn: psycopg.Connection, settings: Settings, doc_ids: list
         from windex.index import qdrant as qidx
 
         client = QdrantClient(url=settings.qdrant_url, timeout=30)
-        client.delete(
-            collection_name=qidx.alias_name("arxiv"),
-            points_selector=qm.PointIdsList(points=[point_id(i) for i in doc_ids]),
-            wait=True,  # tombstones are rare; deletion should be visible on return
-        )
+        try:
+            client.delete(
+                collection_name=qidx.alias_name("arxiv"),
+                points_selector=qm.PointIdsList(points=[point_id(i) for i in doc_ids]),
+                wait=True,  # tombstones are rare; deletion should be visible on return
+            )
+        finally:
+            client.close()  # short-lived per-window client; don't leak its pool
     except Exception as exc:  # index absent/unreachable: ledger tombstone stands
         console.print(f"[yellow]tombstone: qdrant delete skipped ({exc})[/yellow]")
     return marked

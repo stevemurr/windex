@@ -74,6 +74,31 @@ def test_hydrate_statuses_and_readme_parquet(pg, settings, monkeypatch):
     assert table.num_rows == 1 and table.column("full_name")[0].as_py() == "a/keeper"
 
 
+def test_hydrate_handles_full_name_collision(pg, settings, monkeypatch):
+    """A candidate that resolves (via GitHub's redirect) to a full_name another
+    repo_id already holds must not raise UniqueViolation out of hydrate() and
+    wedge the batch forever (same batch re-selected + re-crashed every run). The
+    incumbent is #stale-suffixed and the newer repo wins the name."""
+    with pg.cursor() as cur:
+        cur.execute("INSERT INTO repos (repo_id, full_name, star_events, status) "
+                    "VALUES (1, 'o/candidate', 5, 'candidate')")
+        cur.execute("INSERT INTO repos (repo_id, full_name, stars, status) "
+                    "VALUES (2, 'o/taken', 99, 'hydrated')")
+    pg.commit()
+    # candidate 1 now resolves to 'o/taken', which repo_id 2 already owns
+    responses = {"r0": _node(1, "o/taken", stars=50)}
+    monkeypatch.setattr(hydrate, "_post", lambda client, pool, q: {"data": responses})
+
+    stats = hydrate.hydrate(pg, tokens=["t1"], readme_dir=settings.repos_staging_dir / "readme",
+                            star_threshold=10, limit=40)
+    assert stats["hydrated"] == 1
+    with pg.cursor() as cur:
+        cur.execute("SELECT status, full_name FROM repos WHERE repo_id = 1")
+        assert cur.fetchone() == ("hydrated", "o/taken")  # newer repo won the name
+        cur.execute("SELECT full_name FROM repos WHERE repo_id = 2")
+        assert cur.fetchone()[0] == "o/taken#stale:2"  # incumbent suffixed
+
+
 def test_hydrate_requires_tokens(pg, settings):
     with pytest.raises(ValueError, match="tokens"):
         hydrate.hydrate(pg, tokens=[], readme_dir=settings.repos_staging_dir, star_threshold=10)

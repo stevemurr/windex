@@ -182,6 +182,42 @@ def test_stage_root_returns_early_when_llms_txt_is_gone(pg, settings_hf, root_ro
     assert len(fetcher.calls) == 1  # no page fetches attempted
 
 
+def test_carry_forward_propagates_a_read_failure(tmp_path):
+    """A genuine read failure (corrupt/truncated file, staging drive detached)
+    must PROPAGATE, not be swallowed as 'nothing to carry'. Swallowing drops the
+    failed page from the full-replace parquet while its ledger row still points at
+    this text_ref — the embed reader then finds nothing and it sits deduped
+    forever, erroring for no one (the exact class embed/pipeline warns against)."""
+    bad = tmp_path / "bad.parquet"
+    bad.write_bytes(b"not a valid parquet file")  # exists, but unreadable
+    with pytest.raises(Exception):  # noqa: B017 — pyarrow's error type is its own
+        hcrawl._carry_forward(bad, ["hf:docs/x/y"], ["id", "url", "title", "text"])
+
+
+def test_empty_llms_txt_over_existing_pages_fails_rather_than_wiping(
+    pg, settings_hf, root_row, monkeypatch
+):
+    """An llms.txt that fetches but lists no pages, over a root that already has
+    ingested pages, is a glitch/format-change signal — NOT 'every page vanished'.
+    Treat it as a failure so the root stays pending and retries (rather than
+    banking the empty hash as 'done' and never revisiting), and do NOT tombstone
+    the existing pages (a mass-wipe on a transient empty)."""
+    tombstoned = []
+    monkeypatch.setattr(hcrawl, "apply_tombstones",
+                        lambda conn, s, ids: tombstoned.extend(ids) or len(ids))
+    hcrawl.stage_root(pg, settings_hf, root_row, _fetcher())  # 2 pages ingested
+
+    empty = _fetcher(**{
+        "https://huggingface.co/docs/transformers/llms.txt": "# Transformers\n\n(no links here)\n",
+    })
+    stats = hcrawl.stage_root(pg, settings_hf, root_row, empty)
+    assert stats["failed"] > 0, "empty listing must not read as a clean sync"
+    assert tombstoned == [], "existing pages were mass-tombstoned on an empty listing"
+    with pg.cursor() as cur:
+        cur.execute("SELECT count(*) FROM documents WHERE source='hf' AND status <> 'deleted'")
+        assert cur.fetchone()[0] == 2  # both pages still live
+
+
 def test_documents_batch_write_is_sorted_by_id(pg, settings_hf, root_row, monkeypatch):
     """Regression (2026-07-16): ingest and the embed loop lock the same
     `documents` rows; different orders deadlock and cost a chunk of a corpus.

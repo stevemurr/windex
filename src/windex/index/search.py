@@ -3,6 +3,7 @@ BM25 fused with RRF server-side. mode=lexical works without a configured
 embedding model, which lets the API run before the model arrives."""
 
 import logging
+import threading
 import time
 from datetime import datetime
 from typing import Literal
@@ -20,18 +21,29 @@ log = logging.getLogger("windex.search")
 Mode = Literal["hybrid", "dense", "lexical"]
 
 _client: QdrantClient | None = None
+_client_lock = threading.Lock()
 _reranker: Reranker | None = None
 _reranker_key: tuple | None = None
+_reranker_lock = threading.Lock()
 
 
 def _get_reranker(settings: Settings) -> Reranker | None:
     """Process-wide reranker (holds an httpx pool), rebuilt only if its config
-    changes. Returns None when no reranker is configured (reranking skipped)."""
+    changes. Returns None when no reranker is configured (reranking skipped).
+
+    /v1/search runs in Starlette's threadpool, so the read-check-rebuild is locked
+    (else two threads race the global) and the previous reranker's httpx pool is
+    closed before it is replaced (a runtime model swap would otherwise leak it)."""
     global _reranker, _reranker_key
     key = (settings.rerank_endpoint, settings.rerank_model)
     if key != _reranker_key:
-        _reranker = build_reranker(settings)
-        _reranker_key = key
+        with _reranker_lock:
+            if key != _reranker_key:
+                old = _reranker
+                _reranker = build_reranker(settings)
+                _reranker_key = key
+                if old is not None:
+                    old.close()  # release the replaced reranker's connection pool
     return _reranker
 
 
@@ -39,13 +51,17 @@ def _qdrant(settings: Settings) -> QdrantClient:
     """One process-wide client: it holds an httpx connection pool, and building
     one per request meant a fresh pool (and handshake) for every search."""
     global _client
+    # Double-checked locking: /v1/search runs in Starlette's threadpool, so
+    # concurrent cold requests could each build a client and leak all but one.
     if _client is None:
-        # Via client_from_url so the query timeout is owned in ONE place —
-        # this used to build its own client and silently kept the 5s default
-        # while qdrant.py's was raised, 500ing cold searches (2026-07-19).
-        from windex.index.qdrant import client_from_url
+        with _client_lock:
+            if _client is None:
+                # Via client_from_url so the query timeout is owned in ONE place —
+                # this used to build its own client and silently kept the 5s default
+                # while qdrant.py's was raised, 500ing cold searches (2026-07-19).
+                from windex.index.qdrant import client_from_url
 
-        _client = client_from_url(settings.qdrant_url)
+                _client = client_from_url(settings.qdrant_url)
     return _client
 
 
@@ -295,6 +311,7 @@ def search(
             degraded = True
         else:
             t_embed = time.monotonic()
+            embedder = None
             try:
                 embedder = build_embedder(settings, timeout=settings.embed_query_timeout)
                 # Chat-memory recall is framed differently from web search; use
@@ -314,6 +331,12 @@ def search(
             else:
                 breaker.record_success()
             finally:
+                # Release this query's HTTP pool — build_embedder returns a fresh
+                # one-off embedder per request (no cache), so leaving it open leaks
+                # a pool per /v1/search. (None-guarded: build_embedder itself could
+                # raise before binding.)
+                if embedder is not None:
+                    embedder.close()
                 # Observe every real attempt (success OR failure, including the
                 # mode=dense re-raise via finally); the breaker short-circuit above
                 # never reaches this branch, so the histogram measures only genuine
@@ -357,13 +380,20 @@ def search(
     reranker = _get_reranker(settings)
     fetch_limit = max(settings.rerank_top_k, limit) if reranker else limit
     t_search = time.monotonic()
-    for _, alias, conds in targets:
+    for src, alias, conds in targets:
         if alias not in aliases and alias not in existing:
             continue  # collection not built yet — serve what exists
-        results.extend(
-            _query_collection(client, alias, q, mode, fetch_limit, conds, settings,
-                              query_dense, query_sparse)
-        )
+        try:
+            results.extend(
+                _query_collection(client, alias, q, mode, fetch_limit, conds, settings,
+                                  query_dense, query_sparse)
+            )
+        except Exception as exc:  # noqa: BLE001 — one collection must not sink the fan-out
+            # A transient per-collection failure (timeout, a collection briefly
+            # locked while ensure_collection builds a payload index mid-reindex)
+            # must degrade gracefully, not 500 the whole source=all request — the
+            # healthy collections still answer, same best-effort spirit as rerank.
+            log.warning("search: collection %s (%s) failed, skipping: %r", src, alias, exc)
     search_ms = (time.monotonic() - t_search) * 1000
 
     # Rerank the fused pool by true (query, passage) relevance. This is the

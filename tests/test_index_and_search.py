@@ -109,3 +109,50 @@ def test_search_skips_missing_collections(settings, monkeypatch):
     monkeypatch.setattr(searchmod.qidx, "alias_name", lambda source: "does_not_exist")
     resp = searchmod.search(settings, "anything", source="github", mode="lexical")
     assert resp["results"] == []
+
+
+def test_query_embedder_is_closed_after_each_search(qclient, settings, seeded_collection, monkeypatch):
+    """The per-query embedder holds an httpx connection pool; a hybrid/dense
+    search builds one and must close it, not leak a pool per /v1/search request."""
+    closed = []
+
+    class TrackingEmbedder:
+        model_id = "pytest-model"
+        dim = 8
+
+        def embed_batch(self, texts):
+            return [[0.1] * 8 for _ in texts]
+
+        def ping(self):
+            return True
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(searchmod.qidx, "alias_name", lambda source: seeded_collection)
+    import windex.embed as embed_mod
+
+    monkeypatch.setattr(embed_mod, "build_embedder",
+                        lambda s, timeout=None, **kw: TrackingEmbedder())
+    searchmod.search(settings, "transit bus lanes", source="news", mode="hybrid", limit=3)
+    assert closed, "per-query embedder was not closed — its HTTP pool leaks per request"
+
+
+def test_search_survives_one_collection_error(qclient, settings, seeded_collection, monkeypatch):
+    """A transient failure querying ONE collection (e.g. it is briefly locked
+    while ensure_collection builds a payload index mid-reindex) must not 500 the
+    whole source=all fan-out — the healthy collections still answer."""
+    monkeypatch.setattr(searchmod.qidx, "alias_name", lambda source: seeded_collection)
+    real = searchmod._query_collection
+    calls = {"n": 0}
+
+    def flaky(*args, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("collection locked mid-reindex")
+        return real(*args, **kw)
+
+    monkeypatch.setattr(searchmod, "_query_collection", flaky)
+    resp = searchmod.search(settings, "transit bus lanes", source="all", mode="lexical", limit=3)
+    assert resp["results"], "one collection error took down the whole fan-out"
+    assert calls["n"] > 1, "did not continue past the failing collection"

@@ -74,6 +74,31 @@ class _Client:
         return self.responses.pop(0)
 
 
+def test_get_retries_on_transport_error(monkeypatch):
+    """A connection-level httpx error (dropped/half-closed socket, read timeout)
+    must be retried with backoff, not propagate out of _get and crash the whole
+    sweep — hydrate._post catches httpx.HTTPError for exactly this; _get didn't."""
+    import httpx
+
+    sleeps = []
+    monkeypatch.setattr(discover.time, "sleep", lambda s: sleeps.append(s))
+
+    class _FlakyClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, url, params=None, headers=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise httpx.ReadTimeout("connection dropped mid-sweep")
+            return _Resp(200, body={"total_count": 0, "items": []})
+
+    client = _FlakyClient()
+    out = discover._get(client, "t", {"q": "x", "page": 1})
+    assert out["total_count"] == 0 and client.calls == 2
+    assert len(sleeps) == 1  # backed off once, then succeeded
+
+
 def test_get_secondary_limit_honors_retry_after(monkeypatch):
     sleeps = []
     monkeypatch.setattr(discover.time, "sleep", lambda s: sleeps.append(s))

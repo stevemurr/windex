@@ -350,6 +350,47 @@ def test_stats_endpoint_reports_pipeline_state_and_totals(client, pg):
     assert t["news_coverage"] == ["2026-07-01", "2026-07-10"]
 
 
+def test_stats_embed_queue_uses_repos_hydrated_for_github(client, pg):
+    """GitHub's embed backlog lives in repos.status='hydrated', NOT documents
+    ('deduped') — github never writes a 'deduped' documents row. The old
+    projection always reported 0 for github, masking a stalled gh-embed loop even
+    with a large backlog of hydrated-but-unembedded repos."""
+    with pg.cursor() as cur:
+        cur.execute("INSERT INTO repos (repo_id, full_name, status) VALUES "
+                    "(1, 'o/a', 'hydrated'), (2, 'o/b', 'hydrated'), (3, 'o/c', 'embedded')")
+    pg.commit()
+    q = client.get("/v1/stats").json()["queues"]["embed"]
+    assert q["by_source"]["github"] == 2  # two hydrated repos awaiting a vector
+
+
+def test_schedule_eval_entry_can_report_running():
+    """_SCHED_PATTERN omitted 'eval', so schedule_status always reported the
+    seeded nightly eval job as not-running (an operator can't see it, and could
+    launch a second concurrent one)."""
+    from windex.api import service
+
+    import windex.api.jobs as jobs
+    orig = jobs._pids
+    try:
+        jobs._pids = lambda pat: [42] if pat == "windex eval" else []
+        assert service._entry_running({"kind": "command", "target": "eval"}) is True
+    finally:
+        jobs._pids = orig
+
+
+def test_coerce_bool_handles_stringy_and_rejects_garbage():
+    """The schedule 'enabled' field arrives via an untyped JSON body; bool("false")
+    is True, so a stringified false silently ENABLED an entry meant to be off."""
+    from windex.api.service import _coerce_bool
+
+    assert _coerce_bool(False) is False and _coerce_bool(True) is True
+    assert _coerce_bool("false") is False and _coerce_bool("False") is False
+    assert _coerce_bool("true") is True and _coerce_bool("1") is True
+    assert _coerce_bool(0) is False and _coerce_bool(1) is True
+    with pytest.raises(ValueError):
+        _coerce_bool("maybe")
+
+
 def test_stats_embed_queue_counts_deduped_per_source(client, pg):
     """The embed queue is a re-projection of the source/status group-by already
     cached in _pg_heavy — only 'deduped' rows are waiting for a vector."""

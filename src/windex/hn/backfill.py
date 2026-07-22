@@ -44,6 +44,7 @@ from windex.hn.harvest import (
     mark_window,
     month_epochs,
     pending_windows,
+    reclaim_stale,
     stage_stories,
 )
 
@@ -151,6 +152,11 @@ def backfill(
     """Drain pending month-aligned hn_windows from the mirror, oldest-first.
     Same idempotence story as the Algolia harvester (it IS the same staging +
     ledger flow); the dashboard pause flag is honored between months."""
+    # Reclaim any window stranded 'processing' by a prior killed run (mirrors the
+    # Algolia harvester) so a crashed backfill's month is retried, not lost.
+    reclaimed = reclaim_stale(conn)
+    if reclaimed:
+        console.print(f"[yellow]reclaimed {reclaimed} stale window(s) from a killed run[/yellow]")
     totals = {"windows": 0, "hits": 0, "staged": 0, "skipped": 0, "refreshed": 0}
     consecutive_failures = 0
     own = client is None

@@ -58,7 +58,11 @@ _LINK_RE = re.compile(r"^\s*-\s*\[([^\]]*)\]\((\S+?)\)\s*$", re.M)
 # A version segment is `v` + digit + version-ish chars: v5.14.0, v0.35.2.
 # Anchored on `v\d` on purpose — a page legitimately named `main_classes` or
 # `visualization` must NOT be mistaken for a version and swallowed.
-_VER_RE = re.compile(r"v\d[\w.]*")
+# A version pin is v + digits + at least one dotted group (v5.14.0, v2.0). A bare
+# 'v1'/'v2' with no dot is NOT treated as a version: it can be a real content
+# folder, and stripping it would collide '/v1/overview' with '/overview' onto one
+# doc id, silently losing a page.
+_VER_RE = re.compile(r"v\d+(?:\.\w+)+")
 
 
 def sha1(text: str) -> str:

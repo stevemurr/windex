@@ -57,7 +57,10 @@ class Reconnecting:
         """Call fn(conn), returning its result; on a lost connection, reconnect
         and retry (idempotent fn required). Raises the last OperationalError if
         every attempt fails — postgres genuinely down, not a blip."""
-        n = max(attempts or self.attempts, 1)
+        # `attempts is None` means "unset → use the instance default"; an explicit
+        # 0 must be honored (try once), not treated as falsy and replaced by the
+        # default — `0 or self.attempts` silently ran 6 attempts with backoff.
+        n = max(self.attempts if attempts is None else attempts, 1)
         last: psycopg.OperationalError | None = None
         for i in range(n):
             if i:

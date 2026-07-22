@@ -197,14 +197,18 @@ def _carry_forward(text_ref_path, ids: list[str], columns: list[str]) -> list[di
     """
     if not ids or not text_ref_path.exists():
         return []
-    try:
-        table = ds.dataset(text_ref_path, format="parquet").to_table(
-            columns=columns, filter=ds.field("id").isin(ids)
-        )
-        return table.to_pylist()
-    except Exception as exc:  # unreadable old parquet: nothing to carry
-        console.print(f"[yellow]hf: carry-forward read failed ({exc})[/yellow]")
-        return []
+    # Do NOT swallow a read failure here. An existing file with no matching ids
+    # legitimately returns an empty table (no exception); the only thing an except
+    # would catch is a genuine read failure (corrupt/truncated file, staging drive
+    # detached). Swallowing it as "nothing to carry" drops the failed page from
+    # the full-replace rewrite while its ledger row still points at this text_ref,
+    # leaving it permanently unreadable. Let it propagate so stage_root aborts this
+    # root's rewrite (leaving the previous parquet+ledger consistent) and the
+    # caller retries — exactly what embed/pipeline._reader does for the same drive.
+    table = ds.dataset(text_ref_path, format="parquet").to_table(
+        columns=columns, filter=ds.field("id").isin(ids)
+    )
+    return table.to_pylist()
 
 
 # --- docs -------------------------------------------------------------------
@@ -265,7 +269,18 @@ def stage_root(conn: psycopg.Connection, settings: Settings, root: dict,
         })
         stats["fetched"] += 1
 
-    if not rows and not failed_ids:
+    if not pages:
+        # llms.txt fetched but lists no pages for this root. If the root already
+        # has ingested pages, this is almost certainly a truncated/glitched
+        # listing or an upstream format change — NOT a real "every page vanished".
+        # Mark it failed (non-zero) so the caller keeps the root pending and
+        # retries, rather than banking the empty hash as 'done' (falsely synced,
+        # never revisited) or tombstoning the whole root (mass-wipe on a glitch).
+        # A genuinely-empty root with nothing prior is fine to record as-is.
+        with conn.cursor() as cur:
+            had_pages = bool(_ledger_ids_for_root(cur, key))
+        if had_pages:
+            stats["failed"] = 1
         return stats
 
     listed_ids = {doc_id(key, p["path"]) for p in pages}

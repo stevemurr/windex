@@ -17,7 +17,7 @@ def ccnews_sync(days: int = typer.Option(None, help="Window in days (default: co
 
     settings = get_settings()
     with db.connect(settings.pg_dsn) as conn:
-        n = ccsync.sync(conn, days or settings.news_backfill_days)
+        n = ccsync.sync(conn, days if days is not None else settings.news_backfill_days)
     console.print(f"[green]{n} new WARC files pending[/green]")
 
 
@@ -248,11 +248,14 @@ def gh_hydrate(
 
 @gh_app.command("embed")
 def gh_embed(limit: int = 100_000) -> None:
-    """Compose, embed, and index hydrated repos."""
+    """Compose, embed, and index hydrated repos. Respects the dashboard pause flag."""
     from windex.github.embed_index import embed_pending
 
     settings = get_settings()
     with db.connect(settings.pg_dsn) as conn:
+        if db.get_control(conn, "indexing", "running") == "paused":
+            console.print("[yellow]paused — skipping embed[/yellow]")
+            raise typer.Exit(0)
         n = embed_pending(conn, settings, limit=limit)
     console.print(f"[green]embedded {n} repos[/green]")
 
@@ -345,7 +348,8 @@ def arxiv_harvest(
                                              earliest=aharvest.earliest_datestamp(settings))
             console.print(f"[green]{planned} new per-year windows planned[/green]")
         else:
-            frm, until = aharvest.plan_incremental(conn, days or settings.arxiv_incremental_days)
+            frm, until = aharvest.plan_incremental(
+                conn, days if days is not None else settings.arxiv_incremental_days)
             console.print(f"[green]incremental window {frm}..{until} armed[/green]")
         stats = aharvest.harvest(conn, settings, max_windows=max_windows)
     console.print(stats)
@@ -522,7 +526,8 @@ def hn_harvest(
 
     settings = get_settings()
     with db.connect(settings.pg_dsn) as conn:
-        frm, until = hharvest.plan_incremental(conn, days or settings.hn_incremental_days)
+        frm, until = hharvest.plan_incremental(
+            conn, days if days is not None else settings.hn_incremental_days)
         console.print(
             f"[green]trailing window {hharvest.window_label(frm)}..{hharvest.window_label(until)} armed[/green]"
         )
@@ -936,107 +941,38 @@ def reindex(
         )
     client = qidx.client_from_url(settings.qdrant_url)
     with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
-        if source in ("news", "all"):
-            if drop_collections:
-                name = qidx.collection_name("news", settings.embed_model)
-                if client.collection_exists(name):
-                    client.delete_collection(name)
-                qidx.ensure_collection(client, "news", settings.embed_model, settings.embed_dim)
-            cur.execute(
-                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
-                   WHERE source='news' AND status='embedded'"""
-            )
-            console.print(f"[green]news: {cur.rowcount} docs queued for re-embed[/green]")
+        def _recreate(base: str) -> None:
+            if not drop_collections:
+                return
+            name = qidx.collection_name(base, settings.embed_model)
+            if client.collection_exists(name):
+                client.delete_collection(name)
+            qidx.ensure_collection(client, base, settings.embed_model, settings.embed_dim)
+
+        # Commit after EACH source: the drop/recreate is irreversible, so a later
+        # source's Qdrant failure must not roll back an already-reset source's
+        # status flip — that would leave it 'embedded' but pointing at an emptied
+        # collection (unsearchable, and the embed loop only re-embeds 'deduped').
         if source in ("repos", "all"):
-            if drop_collections:
-                name = qidx.collection_name("repos", settings.embed_model)
-                if client.collection_exists(name):
-                    client.delete_collection(name)
-                qidx.ensure_collection(client, "repos", settings.embed_model, settings.embed_dim)
+            _recreate("repos")
             cur.execute("UPDATE repos SET status='hydrated' WHERE status='embedded'")
             console.print(f"[green]repos: {cur.rowcount} queued for re-embed[/green]")
-        if source in ("wiki", "all"):
-            if drop_collections:
-                name = qidx.collection_name("wiki", settings.embed_model)
-                if client.collection_exists(name):
-                    client.delete_collection(name)
-                qidx.ensure_collection(client, "wiki", settings.embed_model, settings.embed_dim)
+            conn.commit()
+
+        # For these the reindex arg == collection base == documents.source. memory
+        # is included (a reindex rebuilds every collection from its staged parquet,
+        # the source of truth) even though search-side `all` excludes it.
+        for src in ("news", "wiki", "arxiv", "smallweb", "docs", "hn", "hf", "memory"):
+            if source not in (src, "all"):
+                continue
+            _recreate(src)
             cur.execute(
                 """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
-                   WHERE source='wiki' AND status='embedded'"""
+                   WHERE source=%s AND status='embedded'""",
+                (src,),
             )
-            console.print(f"[green]wiki: {cur.rowcount} docs queued for re-embed[/green]")
-        if source in ("arxiv", "all"):
-            if drop_collections:
-                name = qidx.collection_name("arxiv", settings.embed_model)
-                if client.collection_exists(name):
-                    client.delete_collection(name)
-                qidx.ensure_collection(client, "arxiv", settings.embed_model, settings.embed_dim)
-            cur.execute(
-                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
-                   WHERE source='arxiv' AND status='embedded'"""
-            )
-            console.print(f"[green]arxiv: {cur.rowcount} docs queued for re-embed[/green]")
-        if source in ("smallweb", "all"):
-            if drop_collections:
-                name = qidx.collection_name("smallweb", settings.embed_model)
-                if client.collection_exists(name):
-                    client.delete_collection(name)
-                qidx.ensure_collection(client, "smallweb", settings.embed_model, settings.embed_dim)
-            cur.execute(
-                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
-                   WHERE source='smallweb' AND status='embedded'"""
-            )
-            console.print(f"[green]smallweb: {cur.rowcount} docs queued for re-embed[/green]")
-        if source in ("docs", "all"):
-            if drop_collections:
-                name = qidx.collection_name("docs", settings.embed_model)
-                if client.collection_exists(name):
-                    client.delete_collection(name)
-                qidx.ensure_collection(client, "docs", settings.embed_model, settings.embed_dim)
-            cur.execute(
-                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
-                   WHERE source='docs' AND status='embedded'"""
-            )
-            console.print(f"[green]docs: {cur.rowcount} docs queued for re-embed[/green]")
-        if source in ("hn", "all"):
-            if drop_collections:
-                name = qidx.collection_name("hn", settings.embed_model)
-                if client.collection_exists(name):
-                    client.delete_collection(name)
-                qidx.ensure_collection(client, "hn", settings.embed_model, settings.embed_dim)
-            cur.execute(
-                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
-                   WHERE source='hn' AND status='embedded'"""
-            )
-            console.print(f"[green]hn: {cur.rowcount} docs queued for re-embed[/green]")
-        if source in ("hf", "all"):
-            if drop_collections:
-                name = qidx.collection_name("hf", settings.embed_model)
-                if client.collection_exists(name):
-                    client.delete_collection(name)
-                qidx.ensure_collection(client, "hf", settings.embed_model, settings.embed_dim)
-            cur.execute(
-                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
-                   WHERE source='hf' AND status='embedded'"""
-            )
-            console.print(f"[green]hf: {cur.rowcount} docs queued for re-embed[/green]")
-        # memory is push-staged like every other source: its parquet is the
-        # source of truth, so a model swap re-embeds it from staging too. `all`
-        # deliberately includes memory here (a reindex rebuilds every collection);
-        # search-side `all` still excludes it.
-        if source in ("memory", "all"):
-            if drop_collections:
-                name = qidx.collection_name("memory", settings.embed_model)
-                if client.collection_exists(name):
-                    client.delete_collection(name)
-                qidx.ensure_collection(client, "memory", settings.embed_model, settings.embed_dim)
-            cur.execute(
-                """UPDATE documents SET status='deduped', embedded_model=NULL, indexed_at=NULL
-                   WHERE source='memory' AND status='embedded'"""
-            )
-            console.print(f"[green]memory: {cur.rowcount} docs queued for re-embed[/green]")
-        conn.commit()
+            console.print(f"[green]{src}: {cur.rowcount} docs queued for re-embed[/green]")
+            conn.commit()
     console.print(
         "run `windex ccnews embed-loop`, `windex gh embed`, `windex wiki embed`, "
         "`windex arxiv embed`, `windex smallweb embed`, `windex docs embed`, "
@@ -1094,6 +1030,11 @@ def daily(embed: bool = True) -> None:
                 tokens=settings.github_token_list(),
                 readme_dir=settings.repos_staging_dir / "readme",
                 star_threshold=settings.repo_star_threshold,
+                # 0, matching the gh-hydrate job / refresh chain: the default (1)
+                # silently skips every Search-API-sweep candidate (star_events=0),
+                # which is the only discovery source for repos created after
+                # 2025-10-07.
+                min_star_events=0,
                 limit=2000,
             )
             console.print(f"gh hydrate: {hstats}")
@@ -1154,8 +1095,9 @@ def gh_status() -> None:
         console.print({r[0]: r[1] for r in cur.fetchall()}, "gharchive_files")
         cur.execute("SELECT status, count(*) FROM repos GROUP BY status ORDER BY status")
         console.print({r[0]: r[1] for r in cur.fetchall()}, "repos")
-        cur.execute("SELECT count(*) FROM repos WHERE star_events >= 3")
-        console.print(f"repos with ≥3 star events in window: {cur.fetchone()[0]}")
+        thr = settings.repo_star_threshold
+        cur.execute("SELECT count(*) FROM repos WHERE star_events >= %s", (thr,))
+        console.print(f"repos with ≥{thr} star events in window: {cur.fetchone()[0]}")
 
 
 @app.command()
@@ -1430,7 +1372,10 @@ def up(
     _print_status(settings)
 
     # 7. Foreground serve blocks here; the loops are already detached above.
-    if foreground and not jobs.serve_running(port):
+    # Honor --no-serve here too: step 5 skips serve when --no-serve is set, but
+    # this branch only checked `foreground`, so `up --no-serve --foreground`
+    # started serve anyway.
+    if foreground and not no_serve and not jobs.serve_running(port):
         serve(host=host, port=port)
 
 

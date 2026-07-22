@@ -8,6 +8,14 @@ from windex.embed.base import Embedder, EmbedRejected
 
 Style = Literal["tei", "openai"]
 
+# HTTP codes that mean *this document* is unacceptable (over-long / malformed) and
+# retrying the identical payload cannot succeed — the only codes a caller should
+# isolate the input on. Deliberately narrow: 401/403 (bad/rotated key), 404/405
+# (wrong route), 409 etc. are problems with the *request*, not the document, and
+# must stay retryable — treating them as rejections let one auth blip bisect a
+# whole batch and mass-mark good documents 'failed' (silent, unrecoverable loss).
+_REJECT_CODES = frozenset({400, 413, 422})
+
 
 class HttpEmbedder(Embedder):
     """Client for a self-hosted embedding server.
@@ -43,18 +51,18 @@ class HttpEmbedder(Embedder):
                 return self._request(list(texts))
             except httpx.HTTPStatusError as exc:
                 code = exc.response.status_code
-                # A 4xx (except 429 rate-limit) means the request itself is
-                # unacceptable — an over-long or malformed document. Retrying the
-                # identical payload can only fail again and wedge the loop, so
-                # surface it as EmbedRejected for the caller to isolate the input.
-                if 400 <= code < 500 and code != 429:
+                # Only a document-validation 4xx (400/413/422) is unretryable and
+                # isolatable — retrying the identical payload can only fail again
+                # and wedge the loop, so surface it as EmbedRejected. Every other
+                # 4xx (auth/routing/429) is a request-level problem: retry it.
+                if code in _REJECT_CODES:
                     detail = exc.response.text[:200].replace("\n", " ")
                     raise EmbedRejected(code, detail) from exc
                 last_exc = exc
-                time.sleep(2**attempt)
+                self._backoff(attempt)
             except (httpx.HTTPError, KeyError, ValueError) as exc:
                 last_exc = exc
-                time.sleep(2**attempt)
+                self._backoff(attempt)
         # The cause goes INTO the message: consumers log str(exc) only, and
         # `from last_exc` alone left the real error invisible — during the
         # 2026-07-19 gateway flap every loop logged "failed after 3 attempts"
@@ -62,6 +70,16 @@ class HttpEmbedder(Embedder):
         raise RuntimeError(
             f"embedding request failed after {self.retries} attempts: {last_exc!r}"
         ) from last_exc
+
+    def _backoff(self, attempt: int) -> None:
+        # Only sleep when another attempt actually follows — the old code slept
+        # after the final attempt too, adding dead time (≥1s at retries=1, the
+        # live-query config) before raising even though no retry would happen.
+        if attempt < self.retries - 1:
+            time.sleep(2**attempt)
+
+    def close(self) -> None:
+        self._client.close()
 
     def _request(self, texts: list[str]) -> list[list[float]]:
         if self.style == "tei":

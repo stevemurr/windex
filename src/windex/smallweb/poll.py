@@ -267,15 +267,24 @@ class PageFetcher:
 
 # --- feed watermark --------------------------------------------------------
 
-def active_feeds(conn: psycopg.Connection, limit: int) -> list[tuple[str, str, str | None, str | None]]:
+def active_feeds(conn: psycopg.Connection, limit: int,
+                 polled_before=None) -> list[tuple[str, str, str | None, str | None]]:
     """(url, host, etag, last_modified) for the least-recently-polled active
     feeds (never-polled first). The watermark advances as we mark them polled,
-    so successive batches walk the whole list."""
+    so successive batches walk the whole list.
+
+    polled_before caps a run to feeds not yet polled *this* run (last_polled is
+    NULL or older than the cutoff). Without it, marking a feed polled just rotates
+    it to the back of the same never-empty queue, so a full 'all active' pass
+    (max_feeds=None) would re-poll forever and never terminate."""
     with conn.cursor() as cur:
+        cutoff = "" if polled_before is None else "AND (last_polled IS NULL OR last_polled < %s) "
+        params = (limit,) if polled_before is None else (polled_before, limit)
         cur.execute(
             "SELECT url, host, etag, last_modified FROM feeds WHERE status = 'active' "
+            + cutoff +
             "ORDER BY last_polled ASC NULLS FIRST, url LIMIT %s",
-            (limit,),
+            params,
         )
         return [(r[0], r[1], r[2], r[3]) for r in cur.fetchall()]
 
@@ -553,7 +562,8 @@ def poll(conn: psycopg.Connection, settings: Settings, max_feeds: int | None = N
     fetcher = PageFetcher(client, settings)
     if filters is None:
         filters = extract.build_quality_filters(min_chars=settings.smallweb_min_chars)
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_started = datetime.now(timezone.utc)
+    run_id = run_started.strftime("%Y%m%dT%H%M%SZ")
     batch_idx = 0
     try:
         while max_feeds is None or totals["feeds"] < max_feeds:
@@ -565,16 +575,27 @@ def poll(conn: psycopg.Connection, settings: Settings, max_feeds: int | None = N
             remaining = None if max_feeds is None else max_feeds - totals["feeds"]
             n = settings.smallweb_poll_batch if remaining is None \
                 else min(settings.smallweb_poll_batch, remaining)
-            feeds = active_feeds(conn, n)
+            # polled_before=run_started makes this one pass over each active feed:
+            # feeds marked polled this run drop out, so 'all active' terminates
+            # instead of re-polling the same rows forever.
+            feeds = active_feeds(conn, n, polled_before=run_started)
             if not feeds:
                 break
             db.set_control(conn, "smallweb_stage", f"polling {len(feeds)} feeds")
             results = _poll_feeds(feeds, client, fetcher, settings)
 
+            # not_modified/error carry no new content — mark them now. 'ok' results
+            # (which advance etag/last_modified PAST freshly-fetched posts) are held
+            # until their posts are durably staged: marking first would let a stage
+            # failure lose the posts (the next conditional GET 304s them away).
             items: list[dict] = []
+            ok_results: list[dict] = []
             for res in results:
-                _apply_feed_result(conn, settings, res, totals)
-                items.extend(extract_items(res.get("raw_items", []), filters))
+                if res["outcome"] in ("not_modified", "error"):
+                    _apply_feed_result(conn, settings, res, totals)
+                else:
+                    ok_results.append(res)
+                    items.extend(extract_items(res.get("raw_items", []), filters))
             totals["feeds"] += len(feeds)
             totals["items"] += len(items)
             if items:
@@ -583,6 +604,10 @@ def poll(conn: psycopg.Connection, settings: Settings, max_feeds: int | None = N
                 totals["staged"] += stats["staged"]
                 totals["dup_batch"] += stats["dup_batch"]
                 totals["dup_ledger"] += stats["dup_ledger"]
+            # Posts are staged (or there were none): now it is safe to advance each
+            # ok feed's conditional-GET watermark.
+            for res in ok_results:
+                _apply_feed_result(conn, settings, res, totals)
             batch_idx += 1
     finally:
         db.set_control(conn, "smallweb_stage", "idle")

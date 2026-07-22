@@ -59,6 +59,24 @@ def test_reconnecting_run_raises_after_exhausting_attempts(pg_dsn, monkeypatch):
     rc.close()
 
 
+def test_run_attempts_zero_means_try_exactly_once(pg_dsn, monkeypatch):
+    # `attempts=0` ("no retries, try once") must be honored, not silently replaced
+    # by the instance default via `0 or self.attempts` (which ran 6 attempts with
+    # ~31s of backoff). max(self.attempts if attempts is None else attempts, 1).
+    monkeypatch.setattr(db.time, "sleep", lambda s: None)
+    rc = db.Reconnecting(pg_dsn, attempts=6)
+    calls = []
+
+    def always_drop(_conn):
+        calls.append(1)
+        raise psycopg.OperationalError("persistent drop")
+
+    with pytest.raises(psycopg.OperationalError):
+        rc.run(always_drop, attempts=0)
+    assert len(calls) == 1  # exactly one attempt, not the instance default of 6
+    rc.close()
+
+
 def test_stage_resets_flag_to_idle_after_connection_lost(pg_dsn, monkeypatch):
     # The core regression: a drop mid-stage must still leave the flag idle.
     monkeypatch.setattr(db.time, "sleep", lambda s: None)

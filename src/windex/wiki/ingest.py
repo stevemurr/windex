@@ -63,7 +63,10 @@ def _chunked(it, n: int):
         yield chunk
 
 
-def _existing_hashes(cur: psycopg.Cursor, ids: list[str]) -> dict[str, str]:
+def _existing_meta(cur: psycopg.Cursor, ids: list[str]) -> dict[str, tuple]:
+    """id -> (text_hash, title, url, status) for existing wiki ledger rows. Title
+    and url ride along so a page move (metadata change with unchanged text) can be
+    detected and refreshed without a re-embed."""
     if not ids:
         return {}
     cur.execute(
@@ -71,10 +74,10 @@ def _existing_hashes(cur: psycopg.Cursor, ids: list[str]) -> dict[str, str]:
         # list can't match another source. Including it makes the planner pick
         # documents_source_published_idx (est. rows=1 — rare sources are absent
         # from the MCV list) and scan every row of the source: 244s vs 63ms.
-        "SELECT id, text_hash FROM documents WHERE id = ANY(%s)",
+        "SELECT id, text_hash, title, url, status FROM documents WHERE id = ANY(%s)",
         (ids,),
     )
-    return dict(cur.fetchall())
+    return {r[0]: (r[1], r[2], r[3], r[4]) for r in cur.fetchall()}
 
 
 def stage_shard(
@@ -97,9 +100,11 @@ def stage_shard(
     clean_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = clean_path.with_suffix(".parquet.tmp")
 
-    stats = {"articles": 0, "staged": 0, "skipped": 0}
+    stats = {"articles": 0, "staged": 0, "skipped": 0, "refreshed": 0}
     writer: pq.ParquetWriter | None = None
+    renamed = False
     doc_rows: list[tuple] = []
+    refresh_rows: list[dict] = []  # text unchanged, but title/url moved: refresh in place
     url = wsync.shard_url(date, name, wiki)
     try:
         with conn.cursor() as cur, client.stream("GET", url) as resp:
@@ -116,8 +121,21 @@ def stage_shard(
                 stats["articles"] += len(chunk)
                 for a in chunk:
                     a["thash"] = text_hash(a["text"])
-                existing = _existing_hashes(cur, [a["id"] for a in chunk])
-                delta = [a for a in chunk if existing.get(a["id"]) != a["thash"]]
+                existing = _existing_meta(cur, [a["id"] for a in chunk])
+                delta = [a for a in chunk if (existing.get(a["id"]) or (None,))[0] != a["thash"]]
+                # Text unchanged but the page was moved (title/url differ) and it
+                # is already embedded: refresh the ledger metadata + Qdrant payload
+                # in place, no re-embed. Search results come from the payload, so a
+                # rename would otherwise show a stale title/url forever. Bounded to
+                # genuinely-changed title/url so a 112k-article shard whose bodies
+                # are unchanged does NOT fire 112k refreshes. (incoming_links drift
+                # with no title/url change is not caught here — it is a payload-only
+                # signal not yet used in ranking; it refreshes on the next edit.)
+                for a in chunk:
+                    prior = existing.get(a["id"])
+                    if prior and prior[0] == a["thash"] and prior[3] == "embedded" \
+                            and (a["title"] != prior[1] or a["url"] != prior[2]):
+                        refresh_rows.append(a)
                 stats["skipped"] += len(chunk) - len(delta)
                 if not delta:
                     continue
@@ -148,6 +166,7 @@ def stage_shard(
                 writer.close()
                 writer = None
                 tmp_path.rename(clean_path)
+                renamed = True
 
             # Change-aware ledger upsert: unchanged articles never reach here
             # (pre-filtered), and the WHERE guards against a race re-embedding an
@@ -171,13 +190,39 @@ def stage_shard(
                 """,
                 doc_rows,
             )
+            # Metadata-only refresh for moved pages: update title/url/published_at
+            # WITHOUT touching status/embedded_model/indexed_at (no re-embed). Kept
+            # to the changed-metadata subset, and locked in id order like above.
+            if refresh_rows:
+                refresh_rows.sort(key=lambda a: a["id"])
+                cur.executemany(
+                    "UPDATE documents SET url = %s, title = %s, published_at = %s "
+                    "WHERE id = %s",
+                    [(a["url"], a["title"], _parse_ts(a["revision_ts"]), a["id"])
+                     for a in refresh_rows],
+                )
         conn.commit()
     except Exception:
         if writer is not None:
             writer.close()
-        tmp_path.unlink(missing_ok=True)
+        # After the rename, the fully-written parquet lives at clean_path, not
+        # tmp_path — unlink the one that actually exists, else a post-rename
+        # failure (e.g. the id-order deadlock) orphans clean_path with no ledger
+        # row pointing at it.
+        (clean_path if renamed else tmp_path).unlink(missing_ok=True)
         conn.rollback()
         raise
+
+    # Payload refresh is best-effort (mirrors hn's trailing re-pull and the
+    # tombstone path): a down index leaves moved pages showing a stale title/url
+    # until the next reindex, nothing worse.
+    if refresh_rows:
+        try:
+            from windex.wiki.embed_index import refresh_payloads
+
+            stats["refreshed"] = refresh_payloads(settings, refresh_rows)
+        except Exception as exc:
+            console.print(f"[yellow]wiki: payload refresh skipped ({exc})[/yellow]")
     return stats
 
 
@@ -194,7 +239,12 @@ def ingest(
     back-to-back failures still abort."""
     wiki = settings.wiki_dump
     chunk_rows = chunk_rows or settings.wiki_chunk_rows
-    totals = {"files": 0, "articles": 0, "staged": 0, "skipped": 0}
+    # A killed ingest strands its shard 'processing'; reclaim before planning so a
+    # crashed run's shard is retried rather than silently skipped.
+    reclaimed = wsync.reclaim_stale(conn)
+    if reclaimed:
+        console.print(f"[yellow]reclaimed {reclaimed} stale shard(s) from a killed run[/yellow]")
+    totals = {"files": 0, "articles": 0, "staged": 0, "skipped": 0, "refreshed": 0}
     consecutive_failures = 0
     try:
         with httpx.Client(
@@ -215,7 +265,7 @@ def ingest(
                         pause_poll_seconds,
                     )
                     wsync.mark(conn, [name], "done", stats)
-                    for k in ("articles", "staged", "skipped"):
+                    for k in ("articles", "staged", "skipped", "refreshed"):
                         totals[k] += stats[k]
                     totals["files"] += 1
                     console.print(f"  {stats}")

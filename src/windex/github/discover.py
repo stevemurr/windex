@@ -40,14 +40,32 @@ def _get(client: httpx.Client, token: str, params: dict, budget: float = RETRY_B
     sec_hits = 0
     attempt = 0
     while True:
-        resp = client.get(
-            SEARCH,
-            params=params,
-            headers={
-                "Authorization": f"bearer {token}",
-                "Accept": "application/vnd.github+json",
-            },
-        )
+        try:
+            resp = client.get(
+                SEARCH,
+                params=params,
+                headers={
+                    "Authorization": f"bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+        except httpx.HTTPError as exc:
+            # Connection-level failure (dropped/half-closed socket, DNS blip, read
+            # timeout): retry with backoff instead of crashing the whole sweep —
+            # hydrate._post guards this same class; _get did not. Budget-bounded
+            # like the 5xx branch so a persistent outage still gives up.
+            wait = min(2**attempt * 5, 300)
+            log.warning("github search transport error (attempt %d): %r -> waiting %.0fs",
+                        attempt, exc, wait)
+            if waited + wait > budget:
+                raise RuntimeError(
+                    f"search request failed after {waited:.0f}s of retry waiting "
+                    f"(transport error: {exc!r})"
+                ) from exc
+            time.sleep(wait)
+            waited += wait
+            attempt += 1
+            continue
         if resp.status_code in (403, 429):
             retry_after = int(resp.headers.get("retry-after", 0) or 0)
             remaining = resp.headers.get("x-ratelimit-remaining")

@@ -349,3 +349,43 @@ def test_poll_stages_then_repoll_adds_no_new_rows(pg, sw_settings):
     with pg.cursor() as cur:
         cur.execute("SELECT count(*) FROM documents WHERE source='smallweb'")
         assert cur.fetchone()[0] == n_after_first
+
+
+def test_poll_all_active_terminates_after_one_pass(pg, sw_settings):
+    """max_feeds=None ('all active', the documented default) must poll every
+    active feed once and STOP. active_feeds() re-serves feeds oldest-last_polled
+    first, and marking a feed polled just rotates it to the back — so without a
+    per-run cutoff the loop re-polls the same feeds forever and never returns."""
+    with pg.cursor() as cur:
+        cur.executemany("INSERT INTO feeds (url, host) VALUES (%s, %s)",
+                        [(f"https://f{i}.example/feed", f"f{i}.example") for i in range(3)])
+    pg.commit()
+    client = _mock_client(lambda req: httpx.Response(304))  # fast, no items
+
+    totals = swpoll.poll(pg, sw_settings, max_feeds=None, filters=LIGHT, client=client)
+    assert totals["feeds"] == 3  # each active feed polled exactly once, then STOP
+
+
+def test_stage_failure_does_not_advance_the_feed_watermark(pg, sw_settings, monkeypatch):
+    """The conditional-GET watermark must advance only AFTER the fetched posts are
+    durably staged: if staging fails, the etag must stay put so the next poll
+    re-fetches (200), rather than getting a 304 and losing the posts forever."""
+    _seed_feed(pg, "https://blog.example/feed", "blog.example")
+    raw = _rss(_rss_item("Post A", "https://blog.example/a", body=POST_A))
+
+    def handler(req):
+        return httpx.Response(200, content=raw,
+                              headers={"content-type": "application/rss+xml", "etag": '"v2"'})
+
+    client = _mock_client(handler)
+    monkeypatch.setattr(
+        swpoll, "stage_batch",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("staging drive detached")),
+    )
+    with pytest.raises(RuntimeError):
+        swpoll.poll(pg, sw_settings, max_feeds=1, filters=LIGHT, client=client)
+
+    with pg.cursor() as cur:
+        cur.execute("SELECT etag, last_polled FROM feeds WHERE url='https://blog.example/feed'")
+        etag, last_polled = cur.fetchone()
+    assert etag is None, "feed etag advanced despite the staging failure — posts would be lost"

@@ -6,6 +6,8 @@ Jobs are detached processes (they survive API restarts); running state is
 derived from the process table, logs live under ~/.windex/logs/<job>.log.
 """
 
+import contextlib
+import fcntl
 import os
 import signal
 import subprocess
@@ -259,14 +261,31 @@ def _spawn(log_name: str, argv: list[str]) -> int:
     return proc.pid
 
 
+@contextlib.contextmanager
+def _spawn_lock(name: str):
+    """Serialize check-and-spawn for `name` across processes. The API server AND
+    the scheduler can both try to start the same job (a human clicks 'run now'
+    while the scheduler fires it), so a threading.Lock is not enough — an flock on
+    a per-job lockfile makes the _pids() check and the spawn atomic, closing the
+    TOCTOU that let two concurrent starts both pass the check and double-spawn."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    fd = os.open(LOG_DIR / f".{name}.spawn.lock", os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)  # releases the flock (and on process death)
+
+
 def start(name: str, params: dict) -> dict:
     job = JOBS.get(name)
     if job is None:
         raise KeyError(name)
-    if _pids(job.pattern):
-        raise RuntimeError(f"{name} is already running")
-    argv = build_argv(job, params or {})
-    return {"started": name, "pid": _spawn(job.name, argv)}
+    with _spawn_lock(name):
+        if _pids(job.pattern):
+            raise RuntimeError(f"{name} is already running")
+        argv = build_argv(job, params or {})
+        return {"started": name, "pid": _spawn(job.name, argv)}
 
 
 def _stop_pattern(name: str, pattern: str) -> dict:
@@ -289,7 +308,10 @@ def _stop_pattern(name: str, pattern: str) -> dict:
         except (ProcessLookupError, PermissionError):
             try:
                 os.kill(pid, signal.SIGTERM)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
+                # The retry can hit the SAME PermissionError (ownership hasn't
+                # changed) — swallow it too, else a stop request 500s instead of
+                # returning cleanly. A pid we can't signal is left for the OS.
                 pass
     return {"stopped": name, "pids": pids}
 
@@ -317,13 +339,14 @@ def serve_running(port: int = 8100) -> bool:
 def start_serve(host: str = "127.0.0.1", port: int = 8100) -> dict:
     """Launch `windex serve` detached (reusing the job spawn machinery). Refuses
     if the port is already served."""
-    if serve_running(port):
-        raise RuntimeError("serve is already running")
-    argv = [str(VENV_BIN / "windex"), "serve", "--host", host, "--port", str(port)]
-    # Raw stdout/stderr → serve.out.log, NOT serve.log: `windex serve` installs
-    # its own RotatingFileHandler on serve.log (cli.py), and pointing the
-    # detached process's fds at the same file would fight that handler.
-    return {"started": "serve", "pid": _spawn("serve.out", argv)}
+    with _spawn_lock("serve"):
+        if serve_running(port):
+            raise RuntimeError("serve is already running")
+        argv = [str(VENV_BIN / "windex"), "serve", "--host", host, "--port", str(port)]
+        # Raw stdout/stderr → serve.out.log, NOT serve.log: `windex serve` installs
+        # its own RotatingFileHandler on serve.log (cli.py), and pointing the
+        # detached process's fds at the same file would fight that handler.
+        return {"started": "serve", "pid": _spawn("serve.out", argv)}
 
 
 def stop_serve() -> dict:
@@ -339,10 +362,11 @@ def scheduler_running() -> bool:
 def start_scheduler() -> dict:
     """Launch `windex scheduler` detached (reusing the job spawn machinery).
     Refuses if one is already running. Logs to ~/.windex/logs/scheduler.log."""
-    if scheduler_running():
-        raise RuntimeError("scheduler is already running")
-    argv = [str(VENV_BIN / "windex"), "scheduler"]
-    return {"started": "scheduler", "pid": _spawn("scheduler", argv)}
+    with _spawn_lock("scheduler"):
+        if scheduler_running():
+            raise RuntimeError("scheduler is already running")
+        argv = [str(VENV_BIN / "windex"), "scheduler"]
+        return {"started": "scheduler", "pid": _spawn("scheduler", argv)}
 
 
 def stop_scheduler() -> dict:

@@ -72,3 +72,18 @@ def test_http_retryable_status_is_not_rejected(status):
     # EmbedRejected (which would make a caller drop a good doc on a blip).
     with pytest.raises(RuntimeError):
         _embedder(status).embed_batch(["t"])
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 405, 409])
+def test_http_auth_and_routing_4xx_are_not_document_rejections(status, monkeypatch):
+    # 401/403 (bad/rotated key), 404/405 (wrong route), 409 etc. are problems
+    # with the *request*, not the *document*. Classifying them EmbedRejected made
+    # embed_isolating bisect the whole batch to individual docs and mass-mark
+    # them failed on a transient auth blip — silent, unrecoverable data loss.
+    # They must surface as a retryable RuntimeError (tripping the loop's breaker),
+    # never EmbedRejected.
+    import windex.embed.http as mod
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    with pytest.raises(RuntimeError):
+        _embedder(status).embed_batch(["t"])

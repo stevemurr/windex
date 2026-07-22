@@ -393,6 +393,11 @@ def _pg_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
     # (600s TTL) — it adds no query. Zero-backlog sources are kept here (the
     # contract stays complete); the dashboard is what drops them from the chart.
     embed_backlog = {src: st.get("deduped", 0) for src, st in docs.items()}
+    # github is the exception: its pending-embed work lives in repos.status=
+    # 'hydrated' (repos has no 'deduped' state), and it only writes a documents
+    # row once already 'embedded'. Pull its backlog from the repos group-by so a
+    # stalled gh-embed loop shows up instead of always reporting 0.
+    embed_backlog["github"] = repos.get("hydrated", 0)
     result = {
         "documents": docs,
         "repos": repos,
@@ -816,7 +821,8 @@ _SCHED_CMD = {"daily": ["daily"], "maintain": ["maintain"], "eval": ["eval"]}
 _SCHED_LOG = {"daily": "daily", "maintain": "maintain", "eval": "eval"}
 # pgrep pattern that means "this entry is running now": command targets match
 # their own process; every ingest entry shares the refresh sweep's marker.
-_SCHED_PATTERN = {"daily": "windex daily", "maintain": "windex maintain"}
+_SCHED_PATTERN = {"daily": "windex daily", "maintain": "windex maintain",
+                  "eval": "windex eval"}
 _WEEKDAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 
 
@@ -955,6 +961,25 @@ def _validate_schedule_entry(e: dict) -> None:
         raise ValueError(f"ingest target must be one of {sorted(_schedule_sources())}")
 
 
+def _coerce_bool(value) -> bool:
+    """Coerce a schedule 'enabled' value to a real bool. The route accepts an
+    untyped JSON body, so a client can send the string "false" — and bool("false")
+    is True (any non-empty string is truthy), silently ENABLING an entry meant to
+    be off. Accept real bools/ints and the literal string forms; reject the rest
+    with a ValueError (→ 422) rather than guessing."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in ("true", "1", "yes", "on"):
+            return True
+        if low in ("false", "0", "no", "off", ""):
+            return False
+    raise ValueError(f"enabled must be a boolean, got {value!r}")
+
+
 def upsert_schedule(settings: Settings, entry: dict) -> dict:
     """Create or update a schedule row. On an existing row, unspecified fields
     are preserved (partial edit); on a create, kind + target are required and
@@ -982,7 +1007,7 @@ def upsert_schedule(settings: Settings, entry: dict) -> dict:
         for k in ("kind", "target", "hour", "minute", "weekday", "enabled"):
             if k in entry:
                 merged[k] = entry[k]
-    merged["enabled"] = bool(merged["enabled"])
+    merged["enabled"] = _coerce_bool(merged["enabled"])
     _validate_schedule_entry(merged)
     with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
         cur.execute(

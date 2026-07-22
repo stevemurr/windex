@@ -123,6 +123,43 @@ def test_plan_incremental_rearms_completed_window(pg):
     assert hharvest.pending_windows(pg, 10) == []
 
 
+def test_reclaim_stale_frees_windows_from_a_killed_run(pg):
+    """A killed harvest/backfill leaves its window 'processing'; pending_windows()
+    only selects 'pending', so that month is silently absent from the index and
+    nothing ever retries it (the arxiv failure class, unported to hn until now).
+    Reclaim on age; never steal a window a live worker just claimed."""
+    with pg.cursor() as cur:
+        cur.execute("INSERT INTO hn_windows (from_ts, until_ts, status, processed_at) "
+                    "VALUES (100, 200, 'processing', now() - interval '3 hours')")  # stale
+        cur.execute("INSERT INTO hn_windows (from_ts, until_ts, status, processed_at) "
+                    "VALUES (300, 400, 'processing', now())")  # live worker
+        cur.execute("INSERT INTO hn_windows (from_ts, until_ts, status) "
+                    "VALUES (500, 600, 'done')")
+    pg.commit()
+
+    assert hharvest.reclaim_stale(pg, older_than_minutes=60) == 1
+    assert (100, 200) in hharvest.pending_windows(pg, 10)
+    with pg.cursor() as cur:
+        cur.execute("SELECT status FROM hn_windows WHERE from_ts=300")
+        assert cur.fetchone()[0] == "processing", "stole a window from a live worker"
+
+
+def test_reclaim_ignores_a_window_claimed_via_mark_window(pg):
+    """Regression: mark_window('processing') must stamp processed_at at claim time
+    so a freshly-claimed window (processed_at not NULL, not old) is never
+    reclaimed out from under a running harvest."""
+    hharvest.plan_backfill(pg, from_year=2020, from_month=1, to_year=2020, to_month=1)
+    frm, until = hharvest.pending_windows(pg, 1)[0]
+    hharvest.mark_window(pg, frm, until, "processing")
+    with pg.cursor() as cur:
+        cur.execute("SELECT processed_at FROM hn_windows WHERE from_ts=%s", (frm,))
+        assert cur.fetchone()[0] is not None, "claim did not stamp processed_at"
+    assert hharvest.reclaim_stale(pg, older_than_minutes=60) == 0
+    with pg.cursor() as cur:
+        cur.execute("SELECT status FROM hn_windows WHERE from_ts=%s", (frm,))
+        assert cur.fetchone()[0] == "processing"
+
+
 # --- recursive cap splitting ----------------------------------------------------
 
 

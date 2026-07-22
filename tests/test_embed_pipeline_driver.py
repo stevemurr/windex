@@ -79,6 +79,88 @@ def _embedded(pg) -> set[str]:
         return {r[0] for r in cur.fetchall()}
 
 
+def test_compose_text_bounds_the_whole_string_not_just_the_body():
+    """title + body must be bounded TOGETHER: slicing only the body and then
+    prepending an unbounded title lets a long title blow past the char≈token cap
+    (the exact 400-and-retry-forever failure sanitize.py exists to prevent)."""
+    row = {"title": "T" * 500, "text": "b" * 5000}
+    out = embed_pipeline.compose_text(row, "text", max_chars=2048)
+    assert len(out) <= 2048
+    # a short title is still fully preserved ahead of the (bounded) body
+    row2 = {"title": "Short", "text": "b" * 5000}
+    out2 = embed_pipeline.compose_text(row2, "text", max_chars=2048)
+    assert out2.startswith("Short\n\n") and len(out2) <= 2048
+
+
+def test_poison_doc_is_isolated_and_marked_failed(pg, settings, monkeypatch):
+    """A permanently-rejected (EmbedRejected) document must not wedge the shared
+    driver: it is isolated out and marked 'failed' so the pass advances, while
+    every good doc still embeds. Before the fix EmbedRejected propagated out and
+    the same batch was re-selected and re-crashed forever."""
+    from windex.embed.base import EmbedRejected
+
+    class RejectingEmbedder:
+        model_id = "pytest-model"
+        dim = 8
+
+        def embed_batch(self, texts):
+            if any("POISON" in t for t in texts):
+                raise EmbedRejected(400, "context length exceeded")
+            return [[0.1] * 8 for _ in texts]
+
+        def ping(self):
+            return True
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: RejectingEmbedder())
+    fake = FakeQdrant()
+    monkeypatch.setattr(embed_pipeline, "QdrantClient", lambda **kw: fake)
+    monkeypatch.setattr(embed_pipeline.qidx, "ensure_collection", lambda *a, **k: "c")
+
+    path = settings.staging_dir / "news/clean/poison.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ids = [f"news:p{i}" for i in range(5)]
+    bodies = [f"clean body {i} " * 5 for i in range(5)]
+    bodies[2] = "POISON " * 20  # the one document the server rejects outright
+    pq.write_table(
+        pa.table({
+            "id": ids,
+            "url": [f"https://x/{i}" for i in range(5)],
+            "canonical_url": [f"https://x/{i}" for i in range(5)],
+            "title": [f"Doc {i}" for i in range(5)],
+            "published_at": [None] * 5,
+            "lang": ["en"] * 5,
+            "text": bodies,
+        }),
+        path, row_group_size=8,
+    )
+    with pg.cursor() as cur:
+        cur.executemany(
+            """INSERT INTO documents (id, source, url, title, status, text_ref)
+               VALUES (%s, 'news', %s, %s, 'deduped', 'news/clean/poison.parquet')""",
+            [(i, f"https://x/{k}", f"Doc {k}") for k, i in enumerate(ids)],
+        )
+    pg.commit()
+
+    n = news_embed.embed_pending(pg, settings, limit=100)
+
+    assert n == 4  # the four good docs
+    assert _embedded(pg) == {i for j, i in enumerate(ids) if j != 2}
+    with pg.cursor() as cur:
+        cur.execute("SELECT id FROM documents WHERE status = 'failed'")
+        assert {r[0] for r in cur.fetchall()} == {"news:p2"}
+        cur.execute("SELECT count(*) FROM documents WHERE status = 'deduped'")
+        assert cur.fetchone()[0] == 0  # nothing left wedged for a re-crash
+        # the failed doc landed NO Qdrant point, so it must not be stamped as
+        # 'indexed' — that would surface it in the recent-ticker / throughput
+        # dashboards as if it had just been embedded (api/service.py reads
+        # indexed_at as "landed in Qdrant").
+        cur.execute("SELECT indexed_at FROM documents WHERE id = 'news:p2'")
+        assert cur.fetchone()[0] is None
+
+
 def test_overlap_embeds_every_doc_exactly_once(pg, settings, fake_embedder, monkeypatch):
     """Prefetch + no per-ref barrier must not drop or duplicate work, including
     across text_ref boundaries and a ragged final batch."""

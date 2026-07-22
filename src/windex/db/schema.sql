@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS documents (
     published_at   timestamptz,
     lang           text,
     text_hash      text,                      -- sha1 of normalized text (exact dedup)
-    status         text NOT NULL DEFAULT 'extracted',  -- extracted | deduped | embedded | duplicate | deleted
+    status         text NOT NULL DEFAULT 'extracted',  -- extracted | deduped | embedded | duplicate | deleted | failed (embed server permanently rejected the text)
     duplicate_of   text,                      -- id of canonical doc when near-dup
     embedded_model text,
     indexed_at     timestamptz,

@@ -92,6 +92,32 @@ def test_gh_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
     assert _qdrant_count("repos__pytest-model") >= 1
 
 
+def test_gh_embed_commits_text_ref_only_after_a_complete_parquet(pg, settings, qclient,
+                                                                 fake_embedder, monkeypatch):
+    """Every committed text_ref must resolve to a complete (footer-written)
+    parquet. The old code opened one writer at the final path and committed
+    per-batch text_refs while it was still open — a reader (GET /v1/docs) hitting
+    that file mid-run crashed on 'magic bytes not found in footer'. Now each batch
+    is written to a tmp path and renamed before its text_ref is committed."""
+    monkeypatch.setattr(gh_embed, "build_embedder", lambda s, **kw: fake_embedder)
+    settings = settings.model_copy(update={"embed_batch_size": 1})  # 2 repos → 2 batches
+    with pg.cursor() as cur:
+        cur.execute("INSERT INTO repos (repo_id, full_name, stars, status) VALUES "
+                    "(1, 'o/a', 50, 'hydrated'), (2, 'o/b', 40, 'hydrated')")
+    pg.commit()
+
+    n = gh_embed.embed_pending(pg, settings, limit=10)
+    assert n == 2
+    with pg.cursor() as cur:
+        cur.execute("SELECT id, text_ref FROM documents WHERE source='github' ORDER BY id")
+        refs = cur.fetchall()
+    # each doc's committed text_ref is a complete, readable parquet containing it
+    for doc_id, ref in refs:
+        table = pq.read_table(settings.staging_dir / ref)  # raises if footer missing
+        assert doc_id in set(table.column("id").to_pylist())
+    assert len({ref for _, ref in refs}) == 2  # one complete file per batch, none shared mid-open
+
+
 def test_wiki_embed_pending(pg, settings, qclient, fake_embedder, monkeypatch):
     monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
     text_ref = "wiki/clean/enwiki_content-20260712-00000.parquet"

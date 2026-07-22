@@ -105,6 +105,20 @@ def test_parse_llms_does_not_mistake_a_page_named_main_for_a_version():
     assert pipelines["version"] == "v5.14.0"
 
 
+def test_parse_llms_does_not_treat_a_bare_v1_folder_as_a_version():
+    """A real content path segment shaped like a bare version (e.g. a folder named
+    'v1') must NOT be stripped as a version pin — doing so collapses '/v1/overview'
+    and '/overview' onto the same doc id and silently loses one page. A genuine
+    version pin carries dots (v5.14.0); a bare vN does not."""
+    text = (
+        "- [Overview](https://huggingface.co/docs/root/overview.md)\n"
+        "- [V1 Overview](https://huggingface.co/docs/root/v1/overview.md)\n"
+    )
+    pages = hsync.parse_llms(text, "docs/root")
+    assert sorted(p["path"] for p in pages) == ["overview", "v1/overview"]  # distinct
+    assert all(p["version"] == "" for p in pages)  # neither is a version pin
+
+
 def test_parse_llms_handles_unversioned_links():
     text = "- [Index](https://huggingface.co/docs/hub/index.md)"
     pages = hsync.parse_llms(text, "docs/hub")

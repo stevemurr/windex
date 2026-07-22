@@ -12,6 +12,7 @@ watermark/etag). Everything list-format-specific (URL-per-line, comment lines)
 lives here so a different upstream list only touches this module.
 """
 
+import logging
 from urllib.parse import urlsplit
 
 import httpx
@@ -19,7 +20,16 @@ import psycopg
 
 from windex.smallweb import USER_AGENT
 
+log = logging.getLogger("windex.smallweb.sync")
+
 LIST_URL = "https://raw.githubusercontent.com/kagisearch/smallweb/main/smallweb.txt"
+
+# A fetched list smaller than this fraction of the feeds we already track is
+# treated as a truncated/glitched 200 (raw.githubusercontent.com edge-cache
+# hiccup, proxy short-read): inserts/reactivations still apply, but the removal
+# step is skipped so a partial fetch can't mark most of ~38k feeds 'removed' and
+# stall Small Web ingest until the next successful sync.
+_SHRINK_FLOOR = 0.5
 
 
 def parse_list(text: str) -> list[str]:
@@ -61,8 +71,19 @@ def sync(conn: psycopg.Connection, client: httpx.Client | None = None,
         resp = client.get(url)
         resp.raise_for_status()
         urls = parse_list(resp.text)
+        if not urls:
+            # An empty parse from a 200 is almost certainly a truncated/glitched
+            # fetch, never a real "every blog vanished". Reconciling would mark
+            # every feed 'removed' and halt ingest — refuse loudly so the caller
+            # retries instead of silently wiping the table.
+            raise RuntimeError(
+                "smallweb feed list fetched empty — refusing to reconcile "
+                "(a truncated 200 would mark every feed 'removed')"
+            )
         pairs = [(u, host_of(u)) for u in urls]
         with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM feeds WHERE status <> 'removed'")
+            existing = cur.fetchone()[0]
             # 1. insert unseen feeds
             cur.executemany(
                 "INSERT INTO feeds (url, host) VALUES (%s, %s) ON CONFLICT (url) DO NOTHING",
@@ -78,13 +99,24 @@ def sync(conn: psycopg.Connection, client: httpx.Client | None = None,
             )
             reactivated = cur.rowcount or 0
             # 3. mark feeds no longer on the list as removed (idempotent — the
-            #    row and its poll watermark survive so a reappearance is cheap)
-            cur.execute(
-                "UPDATE feeds SET status = 'removed' "
-                "WHERE status <> 'removed' AND NOT (url = ANY(%s))",
-                (urls,),
-            )
-            removed = cur.rowcount or 0
+            #    row and its poll watermark survive so a reappearance is cheap),
+            #    but skip this entirely on an implausibly-small fetch: a partial
+            #    200 must not wipe most of the table (inserts/reactivations above
+            #    are harmless either way).
+            if existing and len(urls) < existing * _SHRINK_FLOOR:
+                log.warning(
+                    "smallweb sync: fetched %d feeds vs %d tracked (<%.0f%%) — "
+                    "skipping removals, list looks truncated",
+                    len(urls), existing, _SHRINK_FLOOR * 100,
+                )
+                removed = 0
+            else:
+                cur.execute(
+                    "UPDATE feeds SET status = 'removed' "
+                    "WHERE status <> 'removed' AND NOT (url = ANY(%s))",
+                    (urls,),
+                )
+                removed = cur.rowcount or 0
         conn.commit()
         return {"total": len(urls), "added": added,
                 "reactivated": reactivated, "removed": removed}

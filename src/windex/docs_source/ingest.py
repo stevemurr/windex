@@ -283,6 +283,17 @@ def stage_docset(
     current_ids: set[str] = set()
     try:
         with conn.cursor() as cur:
+            # Guard a truncated/glitched db.json (a 200 with a {} or short body):
+            # `current_ids` would stay empty, so EVERY previously-ingested page
+            # falls into `missing` and gets tombstoned + its Qdrant point dropped,
+            # and the docset is then banked 'done' at the new mtime — never
+            # retried. Refuse when the fetch is empty but the ledger is not, so
+            # ingest() marks the docset failed and retries without wiping it.
+            if not pages and _ledger_ids_for_slug(cur, slug):
+                raise RuntimeError(
+                    f"docs {slug}: db.json fetched empty but the docset already has "
+                    "ingested pages — refusing to tombstone (likely a truncated fetch)"
+                )
             for chunk in _chunked(sorted(pages.items()), chunk_rows):
                 rows = []
                 for path, html in chunk:

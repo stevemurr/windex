@@ -48,3 +48,21 @@ def test_upsert_counts_accumulates_and_handles_rename(pg):
         assert cur.fetchone()[0] == 2
         cur.execute("SELECT full_name FROM repos WHERE repo_id = 1")
         assert "#stale:" in cur.fetchone()[0]
+
+
+def test_upsert_counts_conflict_preserves_earlier_rows(pg):
+    """A full_name UniqueViolation on one repo must roll back only THAT row, not
+    the whole hour's transaction — conn.rollback() discarded the star_events
+    already accumulated for every earlier repo in the same file (then scan marked
+    the hour done, losing them forever)."""
+    with pg.cursor() as cur:
+        cur.execute("INSERT INTO repos (repo_id, full_name, star_events) VALUES (999, 'o/x', 0)")
+    pg.commit()
+    # 100 and 200 upsert cleanly; 300 collides with 999 on full_name 'o/x'
+    tail.upsert_counts(pg, {100: ("o/a", 5), 200: ("o/b", 3), 300: ("o/x", 2)})
+    with pg.cursor() as cur:
+        cur.execute("SELECT repo_id, star_events FROM repos "
+                    "WHERE repo_id IN (100, 200, 300) ORDER BY repo_id")
+        assert dict(cur.fetchall()) == {100: 5, 200: 3, 300: 2}  # earlier rows survived
+        cur.execute("SELECT full_name FROM repos WHERE repo_id = 999")
+        assert "#stale:" in cur.fetchone()[0]  # incumbent suffixed, 300 won the name

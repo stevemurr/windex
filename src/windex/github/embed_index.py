@@ -3,6 +3,7 @@
 /v1/docs works identically for both sources."""
 
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -47,14 +48,6 @@ def _readmes(readme_dir: Path) -> dict[int, str]:
 
 
 def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 100_000) -> int:
-    embedder = build_embedder(settings, bulk=True)
-    from windex.index.sparse import bm25_model
-
-    bm25 = bm25_model()
-    client = QdrantClient(url=settings.qdrant_url, timeout=120)
-    collection = qidx.ensure_collection(client, "repos", settings.embed_model, settings.embed_dim)
-
-    readmes = _readmes(settings.repos_staging_dir / "readme")
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -65,12 +58,19 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 100
         )
         rows = cur.fetchall()
     if not rows:
-        return 0
+        return 0  # nothing to do — build no embedder/client (nothing to leak)
 
-    text_ref = f"repos/clean/{time.strftime('%Y%m%d-%H%M%S')}.parquet"
-    clean_path = settings.staging_dir / text_ref
-    clean_path.parent.mkdir(parents=True, exist_ok=True)
-    writer = pq.ParquetWriter(clean_path, CLEAN_SCHEMA)
+    embedder = build_embedder(settings, bulk=True)
+    from windex.index.sparse import bm25_model
+
+    bm25 = bm25_model()
+    client = QdrantClient(url=settings.qdrant_url, timeout=120)
+    collection = qidx.ensure_collection(client, "repos", settings.embed_model, settings.embed_dim)
+    readmes = _readmes(settings.repos_staging_dir / "readme")
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    clean_dir = settings.staging_dir / "repos" / "clean"
+    clean_dir.mkdir(parents=True, exist_ok=True)
 
     total = 0
     max_chars = min(settings.embed_max_tokens * 4, MAX_DOC_CHARS)
@@ -136,17 +136,30 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 100
                 for j, (i, d) in enumerate(good)
             ]
             gdocs = [d for _, d in good]
-            client.upsert(collection_name=collection, points=points)
-            writer.write_batch(
-                pa.record_batch(
-                    [
-                        pa.array([d["id"] for d in gdocs]),
-                        pa.array([d["full_name"] for d in gdocs]),
-                        pa.array([d["text"] for d in gdocs]),
-                    ],
-                    schema=CLEAN_SCHEMA,
+            # Write this batch to its OWN parquet via tmp + atomic rename, so the
+            # text_ref committed below never points at a still-open (footer-less)
+            # file — a reader (GET /v1/docs) hitting the old single, mid-write file
+            # crashed on "Parquet magic bytes not found in footer" (hydrate.py has
+            # the same discipline for the readme parquet).
+            text_ref = f"repos/clean/{stamp}-{start:06d}.parquet"
+            clean_path = settings.staging_dir / text_ref
+            tmp_path = clean_path.with_suffix(".parquet.tmp")
+            writer = pq.ParquetWriter(tmp_path, CLEAN_SCHEMA)
+            try:
+                writer.write_batch(
+                    pa.record_batch(
+                        [
+                            pa.array([d["id"] for d in gdocs]),
+                            pa.array([d["full_name"] for d in gdocs]),
+                            pa.array([d["text"] for d in gdocs]),
+                        ],
+                        schema=CLEAN_SCHEMA,
+                    )
                 )
-            )
+            finally:
+                writer.close()
+            os.replace(tmp_path, clean_path)  # footer is now written; publish atomically
+            client.upsert(collection_name=collection, points=points)
             with conn.cursor() as cur:
                 cur.executemany(
                     """
@@ -169,5 +182,9 @@ def embed_pending(conn: psycopg.Connection, settings: Settings, limit: int = 100
             conn.commit()
             total += len(gdocs)
     finally:
-        writer.close()
+        # Release the bulk embedder's + Qdrant client's HTTP pools (built once per
+        # pass; the gh embed-loop restarts this in a tight cycle). Mirrors the
+        # shared driver's finally in embed/pipeline.py.
+        client.close()
+        embedder.close()
     return total

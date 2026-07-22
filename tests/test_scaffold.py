@@ -58,6 +58,7 @@ def test_every_documents_batch_writer_locks_in_id_order():
         src = pathlib.Path(path).read_text()
         assert re.search(r"sort\(|sorted\(", src), f"{path}: no sort before a documents batch write"
 
-    # and the shared embed driver must sort the ids it locks
+    # and the shared embed driver must sort the ids it locks (embedded + rejected
+    # go into one sorted array used by the status UPDATE's WHERE id = ANY(...))
     driver = pathlib.Path("src/windex/embed/pipeline.py").read_text()
-    assert "ids = sorted(ids)" in driver, "embed driver UPDATEs documents without ordering its locks"
+    assert "all_ids = sorted(" in driver, "embed driver UPDATEs documents without ordering its locks"

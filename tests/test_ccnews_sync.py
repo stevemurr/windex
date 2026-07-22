@@ -35,3 +35,26 @@ def test_mark_updates_status_and_counts(pg, monkeypatch):
         cur.execute("SELECT status, doc_counts->>'clean_out' FROM warc_files WHERE path=%s", (path,))
         assert cur.fetchone() == ("done", "42")
     assert sync.pending_paths(pg, 10) == []
+
+
+def test_reclaim_stale_frees_processing_warcs_from_a_killed_run(pg):
+    """A hard-killed run leaves its batch at status='processing' (mark(...,
+    'processing') committed, done/failed never reached). pending_paths() only
+    selects 'pending' and retry-failed only touches 'failed', so those WARCs are
+    invisible forever — articles silently absent, no error. Reclaim on age, and
+    never steal a batch a live worker just claimed."""
+    base = "crawl-data/CC-NEWS/2026/07/CC-NEWS-20260710000000-{:05d}.warc.gz"
+    stale, live, done = base.format(1), base.format(2), base.format(3)
+    with pg.cursor() as cur:
+        cur.execute("INSERT INTO warc_files (path, status, processed_at) "
+                    "VALUES (%s, 'processing', now() - interval '3 hours')", (stale,))
+        cur.execute("INSERT INTO warc_files (path, status, processed_at) "
+                    "VALUES (%s, 'processing', now())", (live,))
+        cur.execute("INSERT INTO warc_files (path, status) VALUES (%s, 'done')", (done,))
+    pg.commit()
+
+    assert sync.reclaim_stale(pg, older_than_minutes=60) == 1
+    assert sync.pending_paths(pg, 10) == [stale]
+    with pg.cursor() as cur:
+        cur.execute("SELECT status FROM warc_files WHERE path=%s", (live,))
+        assert cur.fetchone()[0] == "processing", "stole a batch from a live worker"

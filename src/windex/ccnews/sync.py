@@ -58,6 +58,31 @@ def sync(conn: psycopg.Connection, days: int, today: date | None = None) -> int:
     return inserted
 
 
+def reclaim_stale(conn: psycopg.Connection, older_than_minutes: int = 60) -> int:
+    """Return long-'processing' WARCs to 'pending'. Returns the count reclaimed.
+
+    run_batches marks a batch 'processing' (committed) before its try block, then
+    only moves it to 'done'/'failed' inside that block. A hard kill (OOM, the
+    container runtime wedging, the staging drive detaching) skips that transition
+    and strands the rows at 'processing' forever: pending_paths() only selects
+    'pending' and `ccnews retry-failed` only resets 'failed', so those WARCs are
+    invisible to every future run — their news articles silently absent, no error.
+    This is the exact class of bug that stranded three years of arXiv (see
+    arxiv.harvest.reclaim_stale). mark() stamps processed_at at claim time and a
+    real batch finishes in minutes, so reclaim purely on age — a batch claimed
+    seconds ago is never stolen from a live worker.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE warc_files SET status = 'pending' WHERE status = 'processing' "
+            "AND (processed_at IS NULL OR processed_at < now() - make_interval(mins => %s))",
+            (older_than_minutes,),
+        )
+        n = cur.rowcount or 0
+    conn.commit()
+    return n
+
+
 def pending_paths(conn: psycopg.Connection, limit: int, oldest_first: bool = True) -> list[str]:
     order = "ASC" if oldest_first else "DESC"
     with conn.cursor() as cur:

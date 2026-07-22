@@ -146,6 +146,30 @@ def test_delete_conversation_tombstones_and_is_idempotent(pg, settings, monkeypa
     assert mingest.delete_conversation(pg, settings, CID)["deleted"] == 0
 
 
+def test_delete_conversation_removes_the_clean_parquet(pg, settings, monkeypatch):
+    """Deleting a conversation must remove its clean parquet, not only tombstone
+    the ledger — else the full chat text lingers on the staging volume forever
+    (an unbounded leak, and a 'delete' that doesn't delete the content)."""
+    monkeypatch.setattr("windex.index.qdrant.alias_name", lambda s: "memory__pytest-void")
+    mingest.replace_conversation(pg, settings, CID, "T", [_chunk(0, "secret"), _chunk(1, "more")])
+    clean = settings.staging_dir / f"memory/clean/{CID}.parquet"
+    assert clean.exists()
+    mingest.delete_conversation(pg, settings, CID)
+    assert not clean.exists(), "clean parquet left on disk after delete"
+
+
+def test_emptying_a_conversation_removes_the_clean_parquet(pg, settings, monkeypatch):
+    """An empty replace (the documented 'conversation emptied' signal) tombstones
+    the ledger but the empty-chunks branch skipped the parquet — leaving the old
+    content on disk."""
+    monkeypatch.setattr("windex.index.qdrant.alias_name", lambda s: "memory__pytest-void")
+    mingest.replace_conversation(pg, settings, CID, "T", [_chunk(0, "a")])
+    clean = settings.staging_dir / f"memory/clean/{CID}.parquet"
+    assert clean.exists()
+    mingest.replace_conversation(pg, settings, CID, "T", [])  # emptied
+    assert not clean.exists(), "clean parquet left after emptying the conversation"
+
+
 # --- 6. write-API validations → 422 -----------------------------------------
 
 def test_push_validation_422s(client):

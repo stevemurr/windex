@@ -38,6 +38,12 @@ def run_batches(
 
     A failed batch is marked and skipped so long unattended runs survive one bad
     file; repeated back-to-back failures (systemic problem) still abort."""
+    # A hard-killed prior run leaves its batch stranded at 'processing'; those
+    # WARCs are invisible to pending_paths() forever unless reclaimed. Do it once
+    # up front so a crashed run's work is picked back up rather than silently lost.
+    reclaimed = sync.reclaim_stale(conn)
+    if reclaimed:
+        console.print(f"[yellow]reclaimed {reclaimed} stale WARC(s) from a killed run[/yellow]")
     staged = 0
     batches_done = 0
     consecutive_failures = 0
@@ -54,6 +60,13 @@ def run_batches(
             paths = sync.pending_paths(conn, batch_size)
             if not paths:
                 break
+            # Keep a batch within one crawl day: run_dedup stamps every minhash
+            # band row with a single `day` (paths[0]'s), so a batch straddling
+            # midnight would mis-date the later day's bands and prune them early.
+            # pending_paths() is path-ordered, so same-day paths lead; the rest
+            # stay pending for the next batch. (WARC filenames carry the day.)
+            day0 = sync.path_date(paths[0])
+            paths = [p for p in paths if sync.path_date(p) == day0]
             bid = batch_id_for(paths)
             console.print(f"[bold]batch {bid}[/bold]: {len(paths)} WARCs")
             sync.mark(conn, paths, "processing")

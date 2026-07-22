@@ -93,7 +93,9 @@ class Settings(BaseSettings):
     # Bulk embed queue order: "oldest" (created_at ASC — drain the backlog) or
     # "newest" (created_at DESC — embed freshly-harvested docs ahead of the
     # backlog). Flip to "newest" + restart the loops for a freshness push.
-    embed_order: str = "oldest"
+    # Literal so a typo (WINDEX_EMBED_ORDER=Newest) is rejected at load time
+    # rather than silently keeping "oldest" (pipeline.py matches "newest" exactly).
+    embed_order: Literal["oldest", "newest"] = "oldest"
     # Circuit breaker on the *query* embed only (index/embed_breaker.py) — the
     # bulk embed path is never breakered. Once the GPU is saturated the timeout
     # above is paid on every search to rediscover a known answer; after this many

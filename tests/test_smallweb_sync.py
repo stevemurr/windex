@@ -2,6 +2,8 @@
 (idempotency + removed/reactivated handling). Uses the pg fixture and a fake
 list client so no network is touched."""
 
+import pytest
+
 from windex.smallweb import sync as swsync
 
 
@@ -84,6 +86,26 @@ def test_sync_is_idempotent_and_handles_removed_and_reactivated(pg):
     assert feeds["https://d.example/feed"][1] == "active"  # new
 
 
+def test_sync_refuses_an_empty_feed_list(pg):
+    """A truncated/glitched 200 that parses to zero feeds must NOT wipe the table
+    (marking every feed 'removed' silently halts Small Web ingest). Refuse loudly."""
+    swsync.sync(pg, client=_FakeListClient(
+        ["https://a.example/feed", "https://b.example/feed"]))
+    with pytest.raises(RuntimeError):
+        swsync.sync(pg, client=_FakeListClient([]))
+    assert all(s == "active" for _, s in _feeds(pg).values())  # nothing removed
+
+
+def test_sync_skips_removals_when_the_list_shrinks_implausibly(pg):
+    """A non-empty but drastically-truncated fetch (a partial 200) must not mark
+    most feeds removed — the removal step is skipped until a plausible list."""
+    urls = [f"https://f{i}.example/feed" for i in range(10)]
+    swsync.sync(pg, client=_FakeListClient(urls))
+    stats = swsync.sync(pg, client=_FakeListClient(urls[:2]))  # only 2 of 10 (<50%)
+    assert stats["removed"] == 0  # removals skipped, table left intact
+    assert sum(1 for _, s in _feeds(pg).values() if s == "active") == 10
+
+
 def test_sync_preserves_watermark_across_removal(pg):
     urls = ["https://a.example/feed"]
     swsync.sync(pg, client=_FakeListClient(urls))
@@ -93,8 +115,9 @@ def test_sync_preserves_watermark_across_removal(pg):
             "WHERE url = 'https://a.example/feed'"
         )
     pg.commit()
-    # remove then re-add: etag/items_seen must survive (a reappearance is cheap)
-    swsync.sync(pg, client=_FakeListClient([]))
+    # remove then re-add: etag/items_seen must survive (a reappearance is cheap).
+    # Use a non-empty omitting list — an empty fetch is now refused as a glitch.
+    swsync.sync(pg, client=_FakeListClient(["https://z.example/feed"]))
     swsync.sync(pg, client=_FakeListClient(urls))
     with pg.cursor() as cur:
         cur.execute(

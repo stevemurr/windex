@@ -26,6 +26,36 @@ def test_empty_docs_makes_no_call():
     assert not called
 
 
+def test_close_releases_the_http_client():
+    rr = _rr(lambda req: httpx.Response(200, json={"results": []}))
+    assert not rr._client.is_closed
+    rr.close()
+    assert rr._client.is_closed
+
+
+def test_reranker_rebuild_closes_the_previous_client(settings, monkeypatch):
+    """When the reranker config changes at runtime, _get_reranker rebuilds it; the
+    previous HttpReranker's httpx pool must be closed, not leaked."""
+    S._reranker = None
+    S._reranker_key = None
+    built = []
+
+    def fake_build(s):
+        rr = _rr(lambda req: httpx.Response(200, json={"results": []}))
+        built.append(rr)
+        return rr
+
+    monkeypatch.setattr(S, "build_reranker", fake_build)
+    monkeypatch.setattr(settings, "rerank_endpoint", "http://a", raising=False)
+    monkeypatch.setattr(settings, "rerank_model", "m1", raising=False)
+    S._get_reranker(settings)
+    monkeypatch.setattr(settings, "rerank_model", "m2", raising=False)  # config change
+    S._get_reranker(settings)
+    assert len(built) == 2 and built[0]._client.is_closed  # old one released
+    S._reranker = None
+    S._reranker_key = None
+
+
 def test_relevance_or_score_field():
     rr = _rr(lambda req: httpx.Response(200, json={"results": [{"index": 0, "score": 0.7}]}))
     assert rr.scores("q", ["a"]) == [0.7]
