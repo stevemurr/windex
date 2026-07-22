@@ -62,7 +62,7 @@ def test_up_orders_containers_then_serve_then_loops(wired):
     assert events[0] == ("run", "up")                      # containers first
     assert events.index(("run", "up")) < events.index("serve")
     assert events.index("serve") < events.index("embed-loop")  # loops after serve
-    assert sum(_is_loop_start(e) for e in events) == 9
+    assert sum(_is_loop_start(e) for e in events) == 10
 
 
 def test_up_skips_already_running_serve_and_loops(wired, monkeypatch):
@@ -126,7 +126,7 @@ def test_status_json_shape(wired, monkeypatch):
     st = json.loads(result.output)
     assert set(st) >= {"up", "containers", "serve", "loops", "down"}
     assert st["up"] is True
-    assert len(st["loops"]) == 9
+    assert len(st["loops"]) == 10
     assert st["down"] == []
 
 
@@ -140,7 +140,7 @@ def test_status_json_reports_down_members(wired):
     assert st["up"] is False
     assert "serve" in st["down"]
     assert "scheduler" in st["down"]
-    assert len(st["down"]) == 11  # serve + scheduler + 9 loops
+    assert len(st["down"]) == 12  # serve + scheduler + 10 loops
 
 
 def test_down_stops_loops_before_serve_and_keeps_containers(wired, monkeypatch):
@@ -151,7 +151,7 @@ def test_down_stops_loops_before_serve_and_keeps_containers(wired, monkeypatch):
     result = runner.invoke(cli.app, ["down"])
     assert result.exit_code == 0, result.output
     assert stopped[-1] == "serve"                       # serve after the loops
-    assert sum(1 for s in stopped if s != "serve") == 9
+    assert sum(1 for s in stopped if s != "serve") == 10
     assert not any(e == ("run", "down") for e in events)  # containers kept
 
 
@@ -247,7 +247,7 @@ def test_up_skips_disabled_sources(wired, monkeypatch):
     assert result.exit_code == 0, result.output
     started = [e for e in events if _is_loop_start(e)]
     assert "hf-embed" not in started          # disabled → not started by up (nor the watchdog)
-    assert len(started) == 8                   # the other 8 enabled loops
+    assert len(started) == 9                   # the other 9 enabled loops
 
 
 def test_status_disabled_loop_is_not_down(wired, monkeypatch):

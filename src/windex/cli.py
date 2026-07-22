@@ -732,6 +732,48 @@ def memory_embed(limit: int = 100_000) -> None:
     console.print(f"[green]embedded {n} chunks[/green]")
 
 
+custom_app = typer.Typer(no_args_is_help=True,
+                         help="Custom sources (push-based; no pull ingest)")
+app.add_typer(custom_app, name="custom")
+
+
+@custom_app.command("status")
+def custom_status(name: str = typer.Argument(..., help="custom source name")) -> None:
+    """Doc pipeline counts for one custom source."""
+    from windex.custom_source import ingest as cingest
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        console.print(cingest.status(conn, name))
+
+
+@custom_app.command("list")
+def custom_list() -> None:
+    """List registered custom sources with doc counts."""
+    from windex.custom_source import registry
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        for info in registry.list_all(conn):
+            console.print(f"{info['name']}: {info['doc_count']} docs "
+                          f"({info['pending']} pending)")
+
+
+@custom_app.command("embed")
+def custom_embed(limit: int = 100_000) -> None:
+    """One-shot embed of staged docs for ALL registered custom sources (the loop
+    is the unattended path). Respects the dashboard pause flag."""
+    from windex.custom_source.embed_index import embed_pending
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        if db.get_control(conn, "indexing", "running") == "paused":
+            console.print("[yellow]paused — skipping embed[/yellow]")
+            raise typer.Exit(0)
+        n = embed_pending(conn, settings, limit=limit)
+    console.print(f"[green]embedded {n} docs[/green]")
+
+
 EMBED_SOURCES = {
     "ccnews": "windex.ccnews.embed_index",
     "wiki": "windex.wiki.embed_index",
@@ -742,6 +784,9 @@ EMBED_SOURCES = {
     "gh": "windex.github.embed_index",
     "hf": "windex.hf.embed_index",
     "memory": "windex.memory_source.embed_index",
+    # Push-based custom sources: one generic loop (`embed-loop custom`) drains
+    # every registered source — embed_index.embed_pending iterates the registry.
+    "custom": "windex.custom_source.embed_index",
 }
 
 
@@ -1147,6 +1192,21 @@ def ensure_collections() -> None:
     settings = get_settings()
     client = qdrant.client_from_url(settings.qdrant_url)
     for source in qdrant.SOURCES:
+        name = qdrant.ensure_collection(client, source, settings.embed_model, settings.embed_dim)
+        console.print(f"[green]{qdrant.alias_name(source)}[/green] → {name}")
+    # Registered custom sources each get their own collection (generic payload
+    # indexes). Skip cleanly if Postgres is down — the static set above is what
+    # `up` truly needs; custom collections are also created lazily by the embed
+    # pass's ensure_collection.
+    try:
+        from windex.custom_source import registry
+
+        with db.connect(settings.pg_dsn) as conn:
+            custom = [i["name"] for i in registry.list_all(conn)]
+    except Exception as exc:  # noqa: BLE001 — Postgres down: static collections still ensured
+        console.print(f"[yellow]custom collections skipped ({exc})[/yellow]")
+        custom = []
+    for source in custom:
         name = qdrant.ensure_collection(client, source, settings.embed_model, settings.embed_dim)
         console.print(f"[green]{qdrant.alias_name(source)}[/green] → {name}")
 

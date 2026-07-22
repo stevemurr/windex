@@ -292,7 +292,7 @@ def test_embed_loop_covers_every_embeddable_source():
     from windex.cli import EMBED_SOURCES
 
     assert set(EMBED_SOURCES) == {"ccnews", "wiki", "hn", "arxiv", "docs", "smallweb",
-                                  "gh", "hf", "memory"}
+                                  "gh", "hf", "memory", "custom"}
     for src, mod in EMBED_SOURCES.items():
         assert hasattr(importlib.import_module(mod), "embed_pending"), src
 

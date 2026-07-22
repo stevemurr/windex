@@ -302,3 +302,73 @@ def test_docs_delete_api(client):
     r = client.post(f"/v1/sources/{NAME}/docs/delete", json={"ids": ["a"]})
     assert r.status_code == 200 and r.json() == {"deleted": 1}
     assert client.post("/v1/sources/absent/docs/delete", json={"ids": ["a"]}).status_code == 404
+
+
+# --- W3.1 [pure-unit] jobs / embed-source contract --------------------------
+
+def test_custom_is_a_push_embed_source():
+    from windex.api import jobs
+    from windex.cli import EMBED_SOURCES
+
+    assert "custom" in EMBED_SOURCES
+    assert EMBED_SOURCES["custom"] == "windex.custom_source.embed_index"
+    assert jobs.PUSH_SOURCES == {"memory", "custom"}
+    job = jobs.JOBS["custom-embed"]
+    assert job.argv == ("embed-loop", "custom")
+    assert job in jobs.embed_loop_jobs()
+
+
+def test_custom_never_a_scheduled_ingest_target():
+    # push sources have an embed loop but NO pull ingest, so the scheduler/seed
+    # guards must subtract them (else an undispatchable `ingest-custom` row).
+    from windex.api import service
+
+    excluded = service._schedule_sources()
+    assert "custom" not in excluded and "memory" not in excluded
+
+
+# --- W3.2 [live-service: Postgres + Qdrant] embed round trip -----------------
+
+def test_embed_round_trip_all_custom_sources(pg, settings, qclient, fake_embedder, monkeypatch):
+    import windex.embed.pipeline as embed_pipeline
+    from qdrant_client import QdrantClient
+
+    from conftest import QDRANT_URL, TEST_MODEL
+    from windex.custom_source import embed_index
+
+    monkeypatch.setattr(embed_pipeline, "build_embedder", lambda s, **kw: fake_embedder)
+    registry.create(pg, "notes")
+    registry.create(pg, "email")
+    cingest.upsert_docs(pg, settings, "notes",
+                        [_doc("a", "note body one", title="N", extra={"tag": "x"})])
+    cingest.upsert_docs(pg, settings, "email",
+                        [_doc("m1", "email body", title="E",
+                              published_at=datetime(2026, 5, 14, 10, 0, 0, tzinfo=timezone.utc))])
+
+    # one pass drains every registered custom source
+    assert embed_index.embed_pending(pg, settings, limit=10) == 2
+
+    client = QdrantClient(url=QDRANT_URL)
+    for src in ("notes", "email"):
+        pts = client.scroll(f"{src}__pytest-model", limit=10, with_payload=True)[0]
+        assert pts, f"no points in {src} collection"
+        p = pts[0].payload
+        assert {"doc_id", "source", "url", "title", "snippet",
+                "published_at", "extra"} <= set(p)
+        assert p["source"] == src
+        # the generic custom payload indexes were created (doc_id + published_at)
+        schema = set(client.get_collection(f"{src}__pytest-model").payload_schema or {})
+        assert {"doc_id", "published_at"} <= schema
+    # the opaque `extra` blob round-trips as structured JSON in the payload
+    notes_p = client.scroll("notes__pytest-model", limit=10, with_payload=True)[0][0].payload
+    assert notes_p["extra"] == {"tag": "x"}
+    email_p = client.scroll("email__pytest-model", limit=10, with_payload=True)[0][0].payload
+    assert email_p["published_at"].startswith("2026-05-14T10:00:00")
+
+    with pg.cursor() as cur:
+        cur.execute("SELECT count(*) FROM documents WHERE status='embedded' AND embedded_model=%s",
+                    (TEST_MODEL,))
+        assert cur.fetchone()[0] == 2
+
+    # idempotent: a second pass embeds nothing
+    assert embed_index.embed_pending(pg, settings, limit=10) == 0

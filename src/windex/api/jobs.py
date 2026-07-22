@@ -130,6 +130,9 @@ JOBS: dict[str, Job] = {j.name: j for j in [
         "hf"),
     Job("memory-embed", ("embed-loop", "memory"), "windex embed-loop memory",
         "Embed chat memory", "Embed pushed chat-history chunks", "memory"),
+    Job("custom-embed", ("embed-loop", "custom"), "windex embed-loop custom",
+        "Embed custom sources", "Embed pushed docs for every registered custom source",
+        "custom"),
     Job("daily", ("daily",), "windex daily",
         "Daily job", "The full freshness cycle (news + github), idempotent",
         "maintenance"),
@@ -149,7 +152,7 @@ JOBS: dict[str, Job] = {j.name: j for j in [
 # a write endpoint, not a fetch. This frozenset is what the seed/schedule guards
 # subtract so a push source never seeds a broken `ingest-<src>` schedule row or
 # becomes an editable ingest target (both would be undispatchable).
-PUSH_SOURCES = frozenset({"memory"})
+PUSH_SOURCES = frozenset({"memory", "custom"})
 
 
 # serve is a MANAGED process but deliberately NOT in JOBS: JOBS is the

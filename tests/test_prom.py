@@ -190,7 +190,11 @@ def test_dropped_searches_gauge_is_absent(client, pg):
 
 # The documents.source corpus vocabulary the dashboard joins per-source rows on.
 # windex_loop_up{source} MUST speak this, not the CLI's ccnews/gh names.
-DOCS_VOCAB = {"news", "github", "wiki", "hn", "arxiv", "docs", "smallweb", "hf", "memory"}
+# `custom` is the aggregate loop that drains EVERY registered custom source: its
+# per-source documents rows use the real source names, so this one loop series
+# deliberately has no windex_documents join (the documented custom-freshness gap).
+DOCS_VOCAB = {"news", "github", "wiki", "hn", "arxiv", "docs", "smallweb", "hf",
+              "memory", "custom"}
 
 
 def test_liveness_and_probe_series_present(client):

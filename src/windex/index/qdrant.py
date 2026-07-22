@@ -48,6 +48,16 @@ PAYLOAD_INDEXES = {
                "published_at": qm.PayloadSchemaType.DATETIME},
 }
 
+# Payload indexes for a custom source's collection — the fallback ensure_collection
+# uses for any source name not in PAYLOAD_INDEXES (i.e. every registered custom
+# source). doc_id (result-id lookups) + published_at (the date-range search filter)
+# are the only fields the custom search path filters on; the opaque `extra` blob is
+# carried in the payload but deliberately not indexed.
+CUSTOM_PAYLOAD_INDEXES = {
+    "doc_id": qm.PayloadSchemaType.KEYWORD,
+    "published_at": qm.PayloadSchemaType.DATETIME,
+}
+
 
 def slug(model_id: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", model_id.lower()).strip("-")
@@ -100,7 +110,9 @@ def ensure_collection(client: QdrantClient, source: str, model_id: str, dim: int
     # 7 concurrent embed processes, and each call takes a collection lock that
     # competes with search (measured 2246 calls, ~45ms avg, 637ms max).
     existing_fields = set(client.get_collection(name).payload_schema or {})
-    for field, schema in PAYLOAD_INDEXES.get(source, {}).items():
+    # Built-in sources are all listed in PAYLOAD_INDEXES; any other name is a
+    # registered custom source and gets the generic doc_id + published_at indexes.
+    for field, schema in PAYLOAD_INDEXES.get(source, CUSTOM_PAYLOAD_INDEXES).items():
         if field not in existing_fields:
             client.create_payload_index(name, field_name=field, field_schema=schema)
     if not _alias_target(client, alias_name(source)):
