@@ -38,9 +38,10 @@ import pyarrow.parquet as pq
 from rich.console import Console
 
 from windex import db
-from windex.ccnews.dedup import text_hash
+from windex.ccnews.dedup import resolve_exact_duplicates, text_hash
 from windex.config import Settings
 from windex.hn import USER_AGENT
+from windex.textguard import is_empty_text
 
 console = Console()
 
@@ -328,6 +329,42 @@ def _existing(cur: psycopg.Cursor, ids: list[str]) -> dict[str, tuple[str, str]]
     return {r[0]: (r[1], r[2]) for r in cur.fetchall()}
 
 
+def _existing_hashes(cur: psycopg.Cursor, hashes: list[str],
+                     exclude_ids: list[str]) -> dict[str, str]:
+    """text_hash -> canonical (earliest-created) id for LIVE hn ledger rows that
+    share a hash with this batch, excluding the batch's own ids and non-canonical
+    states ('deleted'/'duplicate'/'empty' cannot anchor a duplicate)."""
+    if not hashes:
+        return {}
+    cur.execute(
+        """
+        SELECT text_hash, id FROM documents
+        WHERE source = 'hn' AND status NOT IN ('deleted', 'duplicate', 'empty')
+          AND text_hash = ANY(%s) AND id != ALL(%s)
+        ORDER BY created_at, id
+        """,
+        (hashes, exclude_ids),
+    )
+    out: dict[str, str] = {}
+    for h, i in cur.fetchall():
+        out.setdefault(h, i)  # earliest wins as canonical
+    return out
+
+
+def _story_ledger_status(story: dict, dup_of: str | None,
+                         prior_status: str | None) -> tuple[str, str | None]:
+    """Ledger status for one staged story. Empty text -> 'empty' (never embedded:
+    the server accepts "" and returns a junk vector). An exact text_hash collision
+    -> 'duplicate' of the canonical — but the empty-check WINS (all empties share
+    one hash), and an already-'embedded' row is never downgraded to 'duplicate'
+    (its live vector would be orphaned), so it keeps the normal re-embed path."""
+    if is_empty_text(story["title"] + story["story_text"]):
+        return "empty", None
+    if dup_of and prior_status != "embedded":
+        return "duplicate", dup_of
+    return "deduped", None
+
+
 def _parse_date(value: str | None) -> datetime | None:
     from windex.dateparse import parse_and_clamp
 
@@ -398,17 +435,36 @@ def stage_stories(
                 tmp_path.rename(clean_path)
                 stats["staged"] = len(delta)
 
-            # Change-aware ledger upsert: unchanged stories never reach here
-            # (pre-filtered); the WHERE guards a race re-embedding an identical row.
+            # Per-row ledger status: empty text -> 'empty', an exact text_hash
+            # collision -> 'duplicate' of the canonical (empty wins; an
+            # already-embedded row is never downgraded — see _story_ledger_status).
+            # Unchanged stories never reach here (pre-filtered); the WHERE guards a
+            # race re-embedding an identical row.
+            existing_hashes = _existing_hashes(
+                cur, [s["thash"] for s in delta], [s["id"] for s in delta]
+            )
+            dup_of = resolve_exact_duplicates(
+                [(s["id"], s["thash"]) for s in delta], existing_hashes
+            )
+            ledger_rows = []
+            for s in delta:
+                prior_status = (existing.get(s["id"]) or (None, None))[1]
+                status, duplicate_of = _story_ledger_status(s, dup_of[s["id"]], prior_status)
+                ledger_rows.append(
+                    (s["id"], s["url"], s["title"], _parse_date(s["created_at"]),
+                     s["thash"], status, duplicate_of, text_ref)
+                )
             cur.executemany(
                 """
                 INSERT INTO documents
-                    (id, source, url, title, published_at, text_hash, status, text_ref)
-                VALUES (%s, 'hn', %s, %s, %s, %s, 'deduped', %s)
+                    (id, source, url, title, published_at, text_hash, status,
+                     duplicate_of, text_ref)
+                VALUES (%s, 'hn', %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     url = EXCLUDED.url, title = EXCLUDED.title,
                     published_at = EXCLUDED.published_at, text_hash = EXCLUDED.text_hash,
-                    text_ref = EXCLUDED.text_ref, status = 'deduped',
+                    text_ref = EXCLUDED.text_ref, status = EXCLUDED.status,
+                    duplicate_of = EXCLUDED.duplicate_of,
                     embedded_model = NULL, indexed_at = NULL
                 WHERE documents.text_hash IS DISTINCT FROM EXCLUDED.text_hash
                 """,
@@ -416,11 +472,7 @@ def stage_stories(
                 # locking them in a different order deadlocks (killed two wiki
                 # shards 2026-07-16). Every batch writer to `documents` locks
                 # in id order.
-                sorted(
-                    (s["id"], s["url"], s["title"], _parse_date(s["created_at"]),
-                     s["thash"], text_ref)
-                    for s in delta
-                ),
+                sorted(ledger_rows),
             )
         conn.commit()
     except Exception:

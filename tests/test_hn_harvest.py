@@ -421,3 +421,100 @@ def test_clean_title_and_text_strip_nul_bytes():
     # normalization must stay identical on both ingest paths or text_hash
     # diverges between harvest (Algolia) and backfill (parquet mirror)
     assert clean_title("  spaced   out  ") == "spaced out"
+
+
+# --- empty-doc + exact-hash dedup guards (stage_stories, shared by both engines) ---
+
+DAY0 = _epoch("2026-07-15")
+
+
+def _empty_story(item_id, ts):
+    """A story that composes to empty text (blank title AND body)."""
+    s = hharvest.story_from_hit(_hit(item_id, ts))
+    s["title"] = ""
+    s["story_text"] = ""
+    s["thash"] = hharvest.text_hash(s["title"] + "\n\n" + s["story_text"])
+    return s
+
+
+def _backlog_ids(pg):
+    """ids the embed loop would pick up (status='deduped')."""
+    from windex.embed.pipeline import pending_refs
+
+    return {i for v in pending_refs(pg, "hn", 1000).values() for i in v}
+
+
+def test_stage_stories_marks_empty_as_empty_but_keeps_title_only_deduped(pg, settings):
+    stories = [
+        _empty_story(500, DAY0 + 5),
+        hharvest.story_from_hit(_hit(501, DAY0 + 10, title="Latvia Startups", story_text=None)),
+    ]
+    hharvest.stage_stories(pg, settings, DAY0, DAY0 + 86400, stories)
+    with pg.cursor() as cur:
+        cur.execute("SELECT id, status FROM documents WHERE source='hn' ORDER BY id")
+        rows = dict(cur.fetchall())
+    assert rows["hn:500"] == "empty"      # blank title AND body
+    assert rows["hn:501"] == "deduped"    # a title-only link post is legitimate
+    backlog = _backlog_ids(pg)
+    assert "hn:500" not in backlog and "hn:501" in backlog
+
+
+def test_stage_stories_marks_in_batch_exact_duplicate(pg, settings):
+    stories = [
+        hharvest.story_from_hit(_hit(101, DAY0 + 10, title="Same", story_text="identical body")),
+        hharvest.story_from_hit(_hit(102, DAY0 + 20, title="Same", story_text="identical body")),
+    ]
+    hharvest.stage_stories(pg, settings, DAY0, DAY0 + 86400, stories)
+    with pg.cursor() as cur:
+        cur.execute("SELECT id, status, duplicate_of FROM documents WHERE source='hn' ORDER BY id")
+        rows = cur.fetchall()
+    # 101 (earlier created_at) is canonical; 102 points at it
+    assert rows == [("hn:101", "deduped", None), ("hn:102", "duplicate", "hn:101")]
+    assert _backlog_ids(pg) == {"hn:101"}  # only the canonical is embeddable
+
+
+def test_stage_stories_marks_duplicate_against_a_prior_run(pg, settings):
+    canon = hharvest.story_from_hit(_hit(800, DAY0 + 10, title="Dup", story_text="body"))
+    dup = hharvest.story_from_hit(_hit(810, DAY0 + 86400 + 10, title="Dup", story_text="body"))
+    assert dup["thash"] == canon["thash"]
+    hharvest.stage_stories(pg, settings, DAY0, DAY0 + 86400, [canon])
+    hharvest.stage_stories(pg, settings, DAY0 + 86400, DAY0 + 2 * 86400, [dup])
+    with pg.cursor() as cur:
+        cur.execute("SELECT status, duplicate_of FROM documents WHERE id='hn:810'")
+        assert cur.fetchone() == ("duplicate", "hn:800")
+
+
+def test_stage_stories_never_downgrades_an_already_embedded_row_to_duplicate(pg, settings):
+    canon = hharvest.story_from_hit(_hit(701, DAY0 + 20, title="Beta", story_text="beta body"))
+    with pg.cursor() as cur:
+        # hn:700 is already EMBEDDED with its original text; hn:701 is a live canonical
+        cur.execute(
+            "INSERT INTO documents (id, source, url, title, text_hash, status, text_ref) "
+            "VALUES ('hn:700','hn','u','Alpha',%s,'embedded','hn/clean/x.parquet')",
+            (hharvest.text_hash("Alpha\n\nalpha body"),),
+        )
+        cur.execute(
+            "INSERT INTO documents (id, source, url, title, text_hash, status, text_ref) "
+            "VALUES (%s,'hn',%s,%s,%s,'deduped','hn/clean/x.parquet')",
+            (canon["id"], canon["url"], canon["title"], canon["thash"]),
+        )
+    pg.commit()
+    # hn:700 re-harvested with hn:701's exact text: it now collides, but is
+    # 'embedded' — it must take the re-embed path, NOT flip to 'duplicate' (which
+    # would orphan its live vector).
+    a_edited = hharvest.story_from_hit(_hit(700, DAY0 + 10, title="Beta", story_text="beta body"))
+    assert a_edited["thash"] == canon["thash"]
+    hharvest.stage_stories(pg, settings, DAY0, DAY0 + 86400, [a_edited])
+    with pg.cursor() as cur:
+        cur.execute("SELECT status, duplicate_of FROM documents WHERE id='hn:700'")
+        assert cur.fetchone() == ("deduped", None)
+
+
+def test_stage_stories_empty_check_wins_over_duplicate_check(pg, settings):
+    # Two empty stories share the empty text_hash; empty must win over duplicate.
+    hharvest.stage_stories(pg, settings, DAY0, DAY0 + 86400,
+                           [_empty_story(600, DAY0 + 5), _empty_story(601, DAY0 + 6)])
+    with pg.cursor() as cur:
+        cur.execute("SELECT id, status, duplicate_of FROM documents WHERE source='hn' ORDER BY id")
+        rows = cur.fetchall()
+    assert rows == [("hn:600", "empty", None), ("hn:601", "empty", None)]

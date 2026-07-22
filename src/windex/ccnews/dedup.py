@@ -61,6 +61,28 @@ def text_hash(text: str) -> str:
     return hashlib.sha1(_WS.sub(" ", text.lower()).strip().encode()).hexdigest()
 
 
+def resolve_exact_duplicates(
+    candidates: list[tuple[str, str]],
+    existing_hashes: dict[str, str],
+) -> dict[str, str | None]:
+    """Map each candidate id -> the id of the canonical doc sharing its text_hash,
+    or None if it IS the canonical (first occurrence wins).
+
+    `candidates` are (id, text_hash) in the order that decides canonicality
+    (earliest first); `existing_hashes` maps a text_hash already in the ledger to
+    its canonical id. A pure helper so hn (and any source) can flag exact
+    duplicates without pulling in run_dedup's news-shaped canonical-url/minhash
+    machinery."""
+    seen: dict[str, str] = {}
+    out: dict[str, str | None] = {}
+    for doc_id, h in candidates:
+        canon = existing_hashes.get(h) or seen.get(h)
+        out[doc_id] = canon
+        if canon is None:
+            seen[h] = doc_id
+    return out
+
+
 def _parse_ts(value: str | None) -> datetime | None:
     from windex.dateparse import parse_and_clamp
 

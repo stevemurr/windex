@@ -1,4 +1,9 @@
-from windex.ccnews.dedup import canonical_url, doc_id, text_hash
+from windex.ccnews.dedup import (
+    canonical_url,
+    doc_id,
+    resolve_exact_duplicates,
+    text_hash,
+)
 from windex.ccnews.minhash import band_hashes, signature
 from windex.github.clean import clean_readme, compose_doc
 
@@ -57,3 +62,20 @@ def test_clean_readme_strips_noise():
 def test_compose_doc_caps_length():
     doc = compose_doc("o/r", "desc", ["a", "b"], "x" * 10_000, max_chars=500)
     assert len(doc) <= 500 and doc.startswith("o / r")
+
+
+def test_resolve_exact_duplicates_first_occurrence_is_canonical():
+    assert resolve_exact_duplicates([("a", "h1"), ("b", "h1")], {}) == {"a": None, "b": "a"}
+
+
+def test_resolve_exact_duplicates_chains_to_existing_ledger_row():
+    assert resolve_exact_duplicates([("b", "h1")], {"h1": "a"}) == {"b": "a"}
+
+
+def test_resolve_exact_duplicates_distinct_hashes_all_canonical():
+    assert resolve_exact_duplicates([("a", "h1"), ("b", "h2")], {}) == {"a": None, "b": None}
+
+
+def test_resolve_exact_duplicates_three_way_collision_points_at_first():
+    out = resolve_exact_duplicates([("a", "h"), ("b", "h"), ("c", "h")], {})
+    assert out == {"a": None, "b": "a", "c": "a"}
