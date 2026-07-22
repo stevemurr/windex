@@ -10,6 +10,7 @@ import { ControlPanel } from "./components/control.js";
 import { SearchTab } from "./components/search.js";
 import { FreshnessTable } from "./components/freshness.js";
 import { ScheduledJobs } from "./components/schedule.js";
+import { RecentFeed } from "./components/feed.js";
 import { ActivityDock } from "./components/dock.js";
 
 // [id, label] — id is the hash fragment + pane suffix, label is the pill text.
@@ -105,6 +106,12 @@ function App() {
 
           <h2 style="margin-top:1.6rem">Scheduled jobs</h2>
           <${ScheduledJobs} />
+
+          <h2 style="margin-top:1.6rem">Recently indexed</h2>
+          <${RecentFeed} endpoint="/v1/recent/indexed" empty="nothing indexed yet" />
+
+          <h2 style="margin-top:1.6rem">Recently embedded</h2>
+          <${RecentFeed} endpoint="/v1/recent/embedded" empty="nothing embedded yet" />
         </section>
       </section>
     </main>`;

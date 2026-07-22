@@ -7,7 +7,6 @@ import time
 from datetime import datetime
 
 import psycopg
-import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from windex import db
@@ -477,6 +476,39 @@ def get_recent(settings: Settings, limit: int = 30) -> list[dict]:
              "indexed_at": ts.isoformat()}
             for i, s, u, t, ts in cur.fetchall()
         ]
+
+
+_RECENT_COLUMNS = {"indexed_at", "created_at"}
+
+
+def recent_feed(settings: Settings, column: str, limit: int = 25) -> list[dict]:
+    """Recent documents by `column`, newest first — the console progress feeds.
+    `indexed_at` = recently EMBEDDED (landed in Qdrant); `created_at` = recently
+    INDEXED (harvested/staged). `ts` is unix epoch seconds so the console renders
+    it with agoTs() directly (same shape for both feeds)."""
+    if column not in _RECENT_COLUMNS:  # whitelist: the column is interpolated below
+        raise ValueError(f"unsupported recent column: {column}")
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, source, url, title, extract(epoch FROM {column})::bigint
+            FROM documents WHERE {column} IS NOT NULL
+            ORDER BY {column} DESC LIMIT %s
+            """,
+            (limit,),
+        )
+        return [
+            {"id": i, "source": s, "url": u, "title": t, "ts": ts}
+            for i, s, u, t, ts in cur.fetchall()
+        ]
+
+
+def clear_doc_stats_cache() -> None:
+    """Drop the cached document rollups so the next /metrics + /v1/stats scrape
+    recomputes from Postgres. Called after a bulk status mutation (cleanup /
+    backfill) so dashboards don't show pre-change counts for up to _PG_HEAVY_TTL."""
+    _pg_heavy_cache.clear()
+    _pg_stats_cache.clear()
 
 
 def get_worker_activity(settings: Settings) -> dict:

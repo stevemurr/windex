@@ -242,6 +242,35 @@ def test_recent_endpoint_orders_by_indexed_at(client, pg):
     assert client.get("/v1/recent", params={"limit": 0}).status_code == 422
 
 
+def test_recent_feeds_embedded_and_indexed(client, pg):
+    with pg.cursor() as cur:
+        cur.execute(
+            """INSERT INTO documents (id, source, url, title, status, created_at, indexed_at) VALUES
+               ('news:a', 'news', 'u1', 'A', 'embedded', now() - interval '3 hours', now() - interval '1 hour'),
+               ('news:b', 'news', 'u2', 'B', 'embedded', now() - interval '1 hour', now() - interval '3 hours'),
+               ('news:c', 'news', 'u3', 'C', 'deduped',  now(),                      NULL)"""
+        )
+    pg.commit()
+    # embedded feed: indexed_at DESC, only rows that landed in Qdrant (a's is newer)
+    emb = client.get("/v1/recent/embedded").json()
+    assert [r["id"] for r in emb] == ["news:a", "news:b"]
+    assert emb[0]["title"] == "A" and isinstance(emb[0]["ts"], int)
+    # indexed feed: created_at DESC, includes the not-yet-embedded row
+    idx = client.get("/v1/recent/indexed").json()
+    assert [r["id"] for r in idx] == ["news:c", "news:b", "news:a"]
+    assert all(isinstance(r["ts"], int) for r in idx)
+
+
+def test_refresh_stats_clears_doc_cache(client, pg):
+    from windex.api import service
+
+    client.get("/v1/stats")  # populates the doc-rollup cache
+    assert service._pg_heavy_cache
+    r = client.post("/v1/system/refresh-stats")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert not service._pg_heavy_cache  # bulk-cleanup dashboards refresh immediately
+
+
 def test_events_stream_emits_sse(client, pg):
     with client.stream("GET", "/v1/events", params={"ticks": 1}) as r:
         assert r.headers["content-type"].startswith("text/event-stream")

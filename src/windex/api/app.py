@@ -216,6 +216,26 @@ def recent(limit: int = Query(30, ge=1, le=100)) -> list[dict]:
     return service.get_recent(get_settings(), limit=limit)
 
 
+@app.get("/v1/recent/embedded")
+def recent_embedded(limit: int = Query(25, ge=1, le=100)) -> list[dict]:
+    """Recently embedded (landed in Qdrant), newest first — console progress feed."""
+    return service.recent_feed(get_settings(), "indexed_at", limit=limit)
+
+
+@app.get("/v1/recent/indexed")
+def recent_indexed(limit: int = Query(25, ge=1, le=100)) -> list[dict]:
+    """Recently indexed (harvested/staged), newest first — console progress feed."""
+    return service.recent_feed(get_settings(), "created_at", limit=limit)
+
+
+@app.post("/v1/system/refresh-stats")
+def refresh_stats() -> dict:
+    """Force-drop the cached doc rollups so /metrics + /v1/stats recompute now
+    (used after a bulk cleanup so dashboards reflect immediately)."""
+    service.clear_doc_stats_cache()
+    return {"ok": True}
+
+
 @app.get("/v1/timeseries")
 def timeseries(minutes: int = Query(60, ge=5, le=1440)) -> list[dict]:
     return service.get_timeseries(get_settings(), minutes=minutes)

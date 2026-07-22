@@ -1,10 +1,11 @@
 # windex scrape job — paste this into the scrape_configs: list of the Prometheus
-# on the services box (192.168.1.237) and reload it (`curl -X POST
+# on the Spark (192.168.1.237) and reload it (`curl -X POST
 # http://localhost:9090/-/reload`, or SIGHUP, if --web.enable-lifecycle is set).
 #
-# The exporter is GET /metrics on the windex API, which runs on THIS Mac
-# (`windex serve --host 0.0.0.0 --port 8100`) — not in a container and not on the
-# services box. So the target is this Mac's LAN address.
+# The exporter is GET /metrics on the windex API (`windex serve`), which now runs
+# on the Spark in a rootless podman container publishing :8100 — the SAME box as
+# this Prometheus, so localhost:8100 works too. (Historically this ran on a Mac at
+# 192.168.1.231; that target is dead — do not restore it.)
 - job_name: windex
   # 30s, deliberately slow: /metrics computes gauges by aggregating multi-million-
   # row Postgres tables (windex_documents, windex_repos). The exporter caches the
@@ -14,12 +15,5 @@
   scrape_timeout: 15s
   metrics_path: /metrics
   static_configs:
-    # This Mac's LAN IP, verified 2026-07-19 (`ipconfig getifaddr en0`).
-    # NOTE: DHCP-assigned — it can change across leases/reboots. For a stable
-    # target, add a DHCP reservation for this Mac on the LAN router, or give it a
-    # DNS A record, and swap the literal below for that name.
-    - targets: ["192.168.1.231:8100"]
-  # Alternative target: this Mac advertises mDNS as "MacBook-Pro-33.local", so
-  # "MacBook-Pro-33.local:8100" works from hosts that resolve mDNS. Caveat: a
-  # CONTAINERIZED Prometheus usually CANNOT resolve *.local (no mDNS/Bonjour in
-  # the container's resolver), so prefer the IP (or a real DNS name) there.
+    # The Spark, co-located with Prometheus (localhost:8100 also works).
+    - targets: ["192.168.1.237:8100"]

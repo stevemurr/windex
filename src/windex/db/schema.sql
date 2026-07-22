@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS documents (
     published_at   timestamptz,
     lang           text,
     text_hash      text,                      -- sha1 of normalized text (exact dedup)
-    status         text NOT NULL DEFAULT 'extracted',  -- extracted | deduped | embedded | duplicate | deleted | failed (embed server permanently rejected the text)
+    status         text NOT NULL DEFAULT 'extracted',  -- extracted | deduped | embedded | duplicate | deleted | empty (blank text, never embedded) | failed (embed server permanently rejected the text)
     duplicate_of   text,                      -- id of canonical doc when near-dup
     embedded_model text,
     indexed_at     timestamptz,
@@ -223,9 +223,13 @@ CREATE INDEX IF NOT EXISTS minhash_bands_day_idx ON minhash_bands (day);
 -- Idempotent column additions (schema.sql is our migration file).
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS text_ref text;  -- staging parquet holding this doc's text
 
--- Recently-indexed feed (/v1/recent, dashboard ticker)
+-- Recently-embedded feed (/v1/recent, /v1/recent/embedded): docs by when their
+-- vectors landed in Qdrant.
 CREATE INDEX IF NOT EXISTS documents_indexed_at_idx
     ON documents (indexed_at DESC) WHERE indexed_at IS NOT NULL;
+
+-- Recently-indexed feed (/v1/recent/indexed): newest-harvested docs by created_at.
+CREATE INDEX IF NOT EXISTS documents_created_at_idx ON documents (created_at DESC);
 
 -- Embed-backlog claim: every embed batch selects the oldest N 'deduped' rows
 -- per source — without this partial index that's a seq scan + sort over

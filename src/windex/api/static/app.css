@@ -409,8 +409,8 @@
              border:1px solid var(--line); border-radius:12px; padding:.7rem .9rem;
              max-height:360px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
   #logbody .errline { color:var(--accent); }
-  #feed { border:1px solid var(--line); border-radius:12px; background:var(--panel);
-          max-height:340px; overflow-y:auto; }
+  .feed { border:1px solid var(--line); border-radius:12px; background:var(--panel);
+          max-height:340px; overflow-y:auto; margin-bottom:.4rem; }
   .feedrow { display:flex; gap:.7rem; align-items:baseline; padding:.5rem .9rem;
              border-bottom:1px solid var(--line); font-size:.84rem; }
   .feedrow:last-child { border-bottom:none; }
