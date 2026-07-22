@@ -183,6 +183,76 @@ def memory_status() -> dict:
     return service.memory_status(get_settings())
 
 
+# --- custom sources: registry CRUD (push-based, generalized memory source) ---
+# POST/PATCH/DELETE are write-token gated like /v1/memory/*; GET reads stay open.
+# A custom source reuses the documents ledger and the shared embed driver; the
+# per-doc push + search endpoints are added alongside these.
+
+class SourceCreate(BaseModel):
+    name: str
+    title: str = ""
+    description: str = ""
+    recipe: dict | None = None
+
+
+class SourcePatch(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    recipe: dict | None = None
+
+
+@app.post("/v1/sources", dependencies=[Depends(require_write_token)], status_code=201)
+def source_create(body: SourceCreate) -> dict:
+    """Register a custom source. 201 with its IndexInfo; 409 if it already
+    exists; 422 for a malformed or reserved name."""
+    from windex.custom_source.registry import DuplicateSource
+
+    try:
+        return service.custom_create(get_settings(), body.name, body.title,
+                                     body.description, body.recipe)
+    except DuplicateSource as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@app.get("/v1/sources")
+def sources_list() -> dict:
+    """Every registered custom source with doc counts: {"sources": [IndexInfo…]}."""
+    return {"sources": service.custom_list(get_settings())}
+
+
+@app.get("/v1/sources/{name}")
+def source_get(name: str) -> dict:
+    """One custom source's IndexInfo (recipe + doc_count + pending). 404 unknown."""
+    info = service.custom_get(get_settings(), name)
+    if info is None:
+        raise HTTPException(404, f"unknown source: {name}")
+    return info
+
+
+@app.patch("/v1/sources/{name}", dependencies=[Depends(require_write_token)])
+def source_patch(name: str, body: SourcePatch) -> dict:
+    """Update a source's title/description/recipe (only the fields sent). 404
+    unknown."""
+    fields = {k: getattr(body, k) for k in ("title", "description", "recipe")
+              if k in body.model_fields_set}
+    info = service.custom_update(get_settings(), name, **fields)
+    if info is None:
+        raise HTTPException(404, f"unknown source: {name}")
+    return info
+
+
+@app.delete("/v1/sources/{name}", dependencies=[Depends(require_write_token)])
+def source_delete(name: str) -> dict:
+    """Delete a whole custom source: tombstone its docs, drop the registry row,
+    remove its staging. Returns {"deleted": N}; 404 if the source is unknown."""
+    res = service.custom_delete_source(get_settings(), name)
+    if res is None:
+        raise HTTPException(404, f"unknown source: {name}")
+    return res
+
+
 @app.get("/v1/stats")
 def stats() -> dict:
     return _stats_with_uptime(get_settings())

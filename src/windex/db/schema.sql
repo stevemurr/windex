@@ -296,6 +296,23 @@ CREATE INDEX IF NOT EXISTS search_metrics_ts_idx ON search_metrics (ts);
 CREATE INDEX IF NOT EXISTS search_metrics_degraded_ts_idx
     ON search_metrics (ts) WHERE degraded;
 
+-- Registry for user-defined "custom sources": push-based indexes that reuse the
+-- documents ledger (documents.source = <name>, ids <name>:<suffix>) and the
+-- shared embed driver, generalizing the single-purpose `memory` source into an
+-- API that creates any number of them. One row per source records its
+-- title/description and an optional stored refresh recipe (jsonb) — the recipe
+-- is what lets a scheduled refresh prompt be a stateless one-liner. `name` obeys
+-- ^[a-z][a-z0-9_]{1,31}$ and is never a reserved/built-in source (enforced in
+-- custom_source.registry, not the DB). Additive, idempotent like every table here.
+CREATE TABLE IF NOT EXISTS custom_sources (
+    name        text PRIMARY KEY,           -- ^[a-z][a-z0-9_]{1,31}$, not reserved
+    title       text NOT NULL DEFAULT '',
+    description text NOT NULL DEFAULT '',
+    recipe      jsonb,                       -- optional stored refresh recipe
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
 -- Search QUALITY (relevance), distinct from search_metrics (performance). One
 -- row per `windex eval` run; the Prometheus collector reads the latest row and
 -- the Grafana panel trends them. git_sha makes runs comparable across changes.

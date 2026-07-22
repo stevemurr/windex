@@ -21,7 +21,13 @@ RESULT_FIELDS = ("url", "title", "snippet", "source", "published_at", "outlet",
                  "framework", "version", "attribution",
                  "points", "num_comments", "author", "target_url",
                  "root", "kind",  # hf: doc root (transformers) and docs|learn|blog
-                 "conversation_id", "chunk_index")  # memory: source chat + chunk position
+                 "conversation_id", "chunk_index",  # memory: source chat + chunk position
+                 "extra")  # custom sources: opaque per-doc blob the pusher attached
+
+# Registered-custom-source names, cached briefly so /v1/search's per-request
+# source validation doesn't hit Postgres every query (populated by validate_source).
+_source_cache: dict = {}
+_SOURCE_TTL = 15.0
 
 
 def run_search(
@@ -192,6 +198,53 @@ def memory_status(settings: Settings) -> dict:
 
     with db.pooled(settings.pg_dsn) as conn:
         return mingest.status(conn)
+
+
+# --- custom sources (push-based; generalized memory) -------------------------
+# Thin wrappers over custom_source.registry / .ingest, opening a pooled
+# connection like every other write path. Validation and error→status mapping
+# live at the route; these delegate straight through.
+
+def custom_create(settings: Settings, name: str, title: str = "",
+                  description: str = "", recipe: dict | None = None) -> dict:
+    from windex.custom_source import registry
+
+    with db.pooled(settings.pg_dsn) as conn:
+        return registry.create(conn, name, title, description, recipe)
+
+
+def custom_get(settings: Settings, name: str) -> dict | None:
+    from windex.custom_source import registry
+
+    with db.pooled(settings.pg_dsn) as conn:
+        return registry.get(conn, name)
+
+
+def custom_list(settings: Settings) -> list[dict]:
+    from windex.custom_source import registry
+
+    with db.pooled(settings.pg_dsn) as conn:
+        return registry.list_all(conn)
+
+
+def custom_update(settings: Settings, name: str, **fields) -> dict | None:
+    from windex.custom_source import registry
+
+    with db.pooled(settings.pg_dsn) as conn:
+        return registry.update(conn, name, **fields)
+
+
+def custom_delete_source(settings: Settings, name: str) -> dict | None:
+    """Delete a whole custom source. W2 fills in the full teardown (tombstone the
+    docs + drop the Qdrant points + remove staging) via ingest.delete_source; for
+    now this drops the registry row. Returns None if the source is unknown."""
+    from windex.custom_source import registry
+
+    with db.pooled(settings.pg_dsn) as conn:
+        if registry.get(conn, name) is None:
+            return None
+        registry.delete_row(conn, name)
+        return {"deleted": 0}
 
 
 def get_document(settings: Settings, doc_id: str) -> dict | None:
