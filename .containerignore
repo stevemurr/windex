@@ -1,0 +1,27 @@
+# Build-context hygiene. The image only COPYs pyproject.toml, README.md, and src/
+# (see Containerfile); everything else just bloats the context tar. Without this,
+# the 5.4G .venv alone makes every `podman build` copy gigabytes for nothing.
+.venv/
+.git/
+.github/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+node_modules/
+
+# Local-only files that must never enter an image (secrets) or are irrelevant to it.
+.env
+.env.*
+compose.yaml
+compose.yaml.bak-*
+*.bak-*
+Containerfile
+tests/
+ops/
+scripts/
+docs/
+*.parquet
+scratchpad/
