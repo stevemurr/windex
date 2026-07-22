@@ -234,17 +234,27 @@ def custom_update(settings: Settings, name: str, **fields) -> dict | None:
         return registry.update(conn, name, **fields)
 
 
-def custom_delete_source(settings: Settings, name: str) -> dict | None:
-    """Delete a whole custom source. W2 fills in the full teardown (tombstone the
-    docs + drop the Qdrant points + remove staging) via ingest.delete_source; for
-    now this drops the registry row. Returns None if the source is unknown."""
-    from windex.custom_source import registry
+def custom_push(settings: Settings, name: str, docs: list[dict]) -> dict:
+    from windex.custom_source import ingest as cingest
 
     with db.pooled(settings.pg_dsn) as conn:
-        if registry.get(conn, name) is None:
-            return None
-        registry.delete_row(conn, name)
-        return {"deleted": 0}
+        return cingest.upsert_docs(conn, settings, name, docs)
+
+
+def custom_delete_docs(settings: Settings, name: str, ids: list[str]) -> dict:
+    from windex.custom_source import ingest as cingest
+
+    with db.pooled(settings.pg_dsn) as conn:
+        return cingest.delete_docs(conn, settings, name, ids)
+
+
+def custom_delete_source(settings: Settings, name: str) -> dict | None:
+    """Full teardown of a custom source (tombstone its docs + drop the Qdrant
+    points + drop the registry row + remove staging). Returns None if unknown."""
+    from windex.custom_source import ingest as cingest
+
+    with db.pooled(settings.pg_dsn) as conn:
+        return cingest.delete_source(conn, settings, name)
 
 
 def get_document(settings: Settings, doc_id: str) -> dict | None:

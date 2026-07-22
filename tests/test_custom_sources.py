@@ -159,3 +159,146 @@ def test_write_token_guards_source_writes_not_reads(settings, monkeypatch):
     # reads (list/get) are NOT gated even with a token set
     assert c.get("/v1/sources").status_code == 200
     assert c.get("/v1/sources/email").status_code == 200
+
+
+# --- W2 [live-service] upsert / dedup / delete ingest ------------------------
+
+from datetime import datetime, timezone  # noqa: E402
+
+import pyarrow.parquet as pq  # noqa: E402
+
+from windex.custom_source import ingest as cingest  # noqa: E402
+
+NAME = "notes"
+
+
+def _doc(suffix, text, title="", url=None, published_at=None, extra=None):
+    return {"id": suffix, "title": title, "text": text, "url": url,
+            "published_at": published_at, "extra": extra}
+
+
+def test_push_stages_delta_and_dedups(pg, settings):
+    ended = datetime(2026, 7, 12, 9, 21, 40, tzinfo=timezone.utc)
+    docs = [_doc("a", "alpha body", title="A", published_at=ended, extra={"k": "v"}),
+            _doc("b", "beta body", title="B")]
+    res = cingest.upsert_docs(pg, settings, NAME, docs)
+    assert res == {"source": NAME, "docs": 2, "staged": 2, "skipped": 0}
+
+    with pg.cursor() as cur:
+        cur.execute("SELECT id, source, url, canonical_url, published_at, status, text_ref "
+                    "FROM documents WHERE source=%s ORDER BY id", (NAME,))
+        rows = cur.fetchall()
+    assert [r[0] for r in rows] == [f"{NAME}:a", f"{NAME}:b"]
+    for r in rows:
+        assert r[1] == NAME and r[3] == r[2] and r[5] == "deduped"
+    assert rows[0][2] == f"custom://{NAME}/a"          # default url
+    assert rows[0][4] == ended                          # published_at
+
+    # a single batch parquet under custom/<name>/, carrying the extra blob
+    batch_dir = settings.staging_dir / "custom" / NAME
+    files = list(batch_dir.glob("*.parquet"))
+    assert len(files) == 1
+    table = pq.read_table(files[0])
+    assert set(table.column_names) == {"id", "url", "title", "published_at", "text", "extra"}
+    row_a = {r["id"]: r for r in table.to_pylist()}[f"{NAME}:a"]
+    assert row_a["extra"] == '{"k":"v"}'                # orjson-serialized blob
+
+    # identical re-push: nothing staged, no new batch written
+    res2 = cingest.upsert_docs(pg, settings, NAME, docs)
+    assert res2 == {"source": NAME, "docs": 2, "staged": 0, "skipped": 2}
+    assert len(list(batch_dir.glob("*.parquet"))) == 1
+
+
+def test_changed_doc_restages_exactly_it(pg, settings):
+    cingest.upsert_docs(pg, settings, NAME, [_doc("a", "aaa"), _doc("b", "bbb")])
+    with pg.cursor() as cur:
+        cur.execute("SELECT id, text_ref FROM documents WHERE source=%s ORDER BY id", (NAME,))
+        orig = dict(cur.fetchall())
+        cur.execute("UPDATE documents SET status='embedded' WHERE source=%s", (NAME,))
+    pg.commit()
+
+    res = cingest.upsert_docs(pg, settings, NAME, [_doc("a", "aaa"), _doc("b", "bbb CHANGED")])
+    assert res == {"source": NAME, "docs": 2, "staged": 1, "skipped": 1}
+    with pg.cursor() as cur:
+        cur.execute("SELECT id, status, text_ref FROM documents WHERE source=%s ORDER BY id", (NAME,))
+        rows = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+    assert rows[f"{NAME}:a"][0] == "embedded"                 # untouched
+    assert rows[f"{NAME}:a"][1] == orig[f"{NAME}:a"]          # unchanged doc keeps its batch
+    assert rows[f"{NAME}:b"][0] == "deduped"                  # re-queued
+    assert rows[f"{NAME}:b"][1] != orig[f"{NAME}:b"]          # points at the new batch
+    # the new batch holds exactly the changed doc; the old one still resolves
+    new_ids = pq.read_table(settings.staging_dir / rows[f"{NAME}:b"][1]).column("id").to_pylist()
+    assert new_ids == [f"{NAME}:b"]
+    a_ids = pq.read_table(settings.staging_dir / rows[f"{NAME}:a"][1]).column("id").to_pylist()
+    assert f"{NAME}:a" in a_ids
+
+
+def test_delete_docs_tombstones_and_resurrects(pg, settings, monkeypatch):
+    monkeypatch.setattr("windex.index.qdrant.alias_name", lambda s: f"{s}__pytest-void")
+    cingest.upsert_docs(pg, settings, NAME, [_doc("a", "aaa"), _doc("b", "bbb")])
+    assert cingest.delete_docs(pg, settings, NAME, ["a"]) == {"deleted": 1}
+    with pg.cursor() as cur:
+        cur.execute("SELECT status FROM documents WHERE id=%s", (f"{NAME}:a",))
+        assert cur.fetchone()[0] == "deleted"
+    # idempotent: re-deleting an already-tombstoned id counts 0
+    assert cingest.delete_docs(pg, settings, NAME, ["a"]) == {"deleted": 0}
+    # byte-identical re-push resurrects it
+    assert cingest.upsert_docs(pg, settings, NAME, [_doc("a", "aaa")])["staged"] == 1
+    with pg.cursor() as cur:
+        cur.execute("SELECT status FROM documents WHERE id=%s", (f"{NAME}:a",))
+        assert cur.fetchone()[0] == "deduped"
+
+
+def test_delete_source_full_teardown_is_idempotent(pg, settings, monkeypatch):
+    monkeypatch.setattr("windex.index.qdrant.alias_name", lambda s: f"{s}__pytest-void")
+    registry.create(pg, NAME)
+    cingest.upsert_docs(pg, settings, NAME, [_doc("a", "aaa"), _doc("b", "bbb")])
+    batch_dir = settings.staging_dir / "custom" / NAME
+    assert batch_dir.exists()
+
+    assert cingest.delete_source(pg, settings, NAME) == {"deleted": 2}
+    with pg.cursor() as cur:
+        cur.execute("SELECT count(*) FROM documents WHERE source=%s AND status<>'deleted'", (NAME,))
+        assert cur.fetchone()[0] == 0
+    assert registry.get(pg, NAME) is None
+    assert not batch_dir.exists()
+    # a re-delete of the now-unknown source is the None (→404) path, not an error
+    assert cingest.delete_source(pg, settings, NAME) is None
+
+
+def test_push_api_limit_shapes(client):
+    client.post("/v1/sources", json={"name": NAME})
+    too_many = {"docs": [{"id": str(i), "text": "x"} for i in range(501)]}
+    assert client.post(f"/v1/sources/{NAME}/docs", json=too_many).status_code == 422
+    oversized = {"docs": [{"id": "a", "text": "x" * 16_001}]}
+    assert client.post(f"/v1/sources/{NAME}/docs", json=oversized).status_code == 422
+    bad_suffix = {"docs": [{"id": "has space", "text": "ok"}]}
+    assert client.post(f"/v1/sources/{NAME}/docs", json=bad_suffix).status_code == 422
+    big_extra = {"docs": [{"id": "a", "text": "ok", "extra": {"blob": "x" * 3000}}]}
+    assert client.post(f"/v1/sources/{NAME}/docs", json=big_extra).status_code == 422
+    # unknown source → 404
+    assert client.post("/v1/sources/absent/docs",
+                       json={"docs": [{"id": "a", "text": "ok"}]}).status_code == 404
+    # a valid push lands
+    r = client.post(f"/v1/sources/{NAME}/docs", json={"docs": [{"id": "a", "text": "ok"}]})
+    assert r.status_code == 200 and r.json()["staged"] == 1
+
+
+def test_push_staging_oserror_maps_to_503(client, monkeypatch):
+    client.post("/v1/sources", json={"name": NAME})
+
+    def boom(*a, **k):
+        raise OSError("read-only staging")
+
+    monkeypatch.setattr(service_mod, "custom_push", boom)
+    r = client.post(f"/v1/sources/{NAME}/docs", json={"docs": [{"id": "a", "text": "ok"}]})
+    assert r.status_code == 503
+
+
+def test_docs_delete_api(client):
+    client.post("/v1/sources", json={"name": NAME})
+    client.post(f"/v1/sources/{NAME}/docs",
+                json={"docs": [{"id": "a", "text": "aaa"}, {"id": "b", "text": "bbb"}]})
+    r = client.post(f"/v1/sources/{NAME}/docs/delete", json={"ids": ["a"]})
+    assert r.status_code == 200 and r.json() == {"deleted": 1}
+    assert client.post("/v1/sources/absent/docs/delete", json={"ids": ["a"]}).status_code == 404

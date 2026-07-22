@@ -253,6 +253,70 @@ def source_delete(name: str) -> dict:
     return res
 
 
+class CustomDoc(BaseModel):
+    id: str                              # suffix; the stored id is <name>:<id>
+    title: str = ""
+    text: str
+    url: str | None = None               # default custom://<name>/<id>
+    published_at: datetime | None = None
+    extra: dict | None = None            # opaque per-doc metadata, surfaced in search
+
+
+class DocsPush(BaseModel):
+    docs: list[CustomDoc] = Field(default_factory=list)
+
+
+class DocsDelete(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+
+
+def _validate_custom_docs(docs: list[CustomDoc]) -> None:
+    """422 the malformed pushes the upsert contract can't accept: too many docs,
+    an oversized text/extra, a bad id suffix, or an over-budget body."""
+    from windex.custom_source.ingest import (
+        MAX_BODY_CHARS, MAX_DOCS_PER_BATCH, MAX_EXTRA_BYTES, MAX_TEXT_CHARS, SUFFIX_RE,
+    )
+
+    if len(docs) > MAX_DOCS_PER_BATCH:
+        raise HTTPException(422, f"too many docs (max {MAX_DOCS_PER_BATCH})")
+    total = 0
+    for d in docs:
+        if not SUFFIX_RE.match(d.id):
+            raise HTTPException(422, f"invalid doc id: {d.id!r}")
+        if len(d.text) > MAX_TEXT_CHARS:
+            raise HTTPException(422, f"doc text too large (max {MAX_TEXT_CHARS} chars)")
+        if d.extra is not None and len(orjson.dumps(d.extra)) > MAX_EXTRA_BYTES:
+            raise HTTPException(422, f"doc extra too large (max {MAX_EXTRA_BYTES} bytes)")
+        total += len(d.text)
+    if total > MAX_BODY_CHARS:
+        raise HTTPException(422, "push body too large (max ~4 MB of doc text)")
+
+
+@app.post("/v1/sources/{name}/docs", dependencies=[Depends(require_write_token)])
+def source_push(name: str, body: DocsPush) -> dict:
+    """Upsert docs into a custom source (changed-text delta staged + embedded;
+    unchanged docs skipped). Returns {source, docs, staged, skipped}. 404 unknown
+    source, 422 on a malformed push, 503 when staging isn't writable."""
+    settings = get_settings()
+    if service.custom_get(settings, name) is None:
+        raise HTTPException(404, f"unknown source: {name}")
+    _validate_custom_docs(body.docs)
+    try:
+        return service.custom_push(settings, name, [d.model_dump() for d in body.docs])
+    except OSError as exc:  # staging drive read-only / unmounted
+        raise HTTPException(503, f"staging unavailable: {exc}")
+
+
+@app.post("/v1/sources/{name}/docs/delete", dependencies=[Depends(require_write_token)])
+def source_delete_docs(name: str, body: DocsDelete) -> dict:
+    """Tombstone specific docs by id suffix. Returns {"deleted": N}. 404 unknown
+    source; idempotent (already-deleted / unknown ids don't count)."""
+    settings = get_settings()
+    if service.custom_get(settings, name) is None:
+        raise HTTPException(404, f"unknown source: {name}")
+    return service.custom_delete_docs(settings, name, body.ids)
+
+
 @app.get("/v1/stats")
 def stats() -> dict:
     return _stats_with_uptime(get_settings())

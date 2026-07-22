@@ -268,6 +268,12 @@ class Settings(BaseSettings):
         # conversation under memory/clean/<conversation_id>.parquet.
         return self.staging_dir / "memory"
 
+    @property
+    def custom_staging_dir(self) -> Path:
+        # Push-based custom sources: per-batch parquet under
+        # custom/<name>/<batch-uuid>.parquet (upsert, not full-replace).
+        return self.staging_dir / "custom"
+
     def all_dirs(self) -> list[Path]:
         return [
             self.ccnews_downloads_dir,
@@ -283,6 +289,7 @@ class Settings(BaseSettings):
             self.hn_staging_dir,
             self.hf_staging_dir,
             self.memory_staging_dir,
+            self.custom_staging_dir,
         ]
 
     def github_token_list(self) -> list[str]:
