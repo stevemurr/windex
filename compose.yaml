@@ -107,7 +107,7 @@ services:
         volumes:
             - /mnt/windex-external-rw:/mnt/windex-external:rw
 
-    # --- App: the 9 supervised embed-loops (podman is the per-loop supervisor) ---
+    # --- App: the 10 supervised embed-loops (podman is the per-loop supervisor) ---
     windex-loop-ccnews:   { <<: *windex-loop, command: ["embed-loop", "ccnews"] }
     windex-loop-gh:       { <<: *windex-loop, command: ["embed-loop", "gh"] }
     windex-loop-wiki:     { <<: *windex-loop, command: ["embed-loop", "wiki"] }
@@ -119,6 +119,10 @@ services:
     # memory is push-based: the serve container's rw mount stages the pushed
     # parquet, and this loop drains it exactly like every other embed-loop.
     windex-loop-memory:   { <<: *windex-loop, command: ["embed-loop", "memory"] }
+    # custom is push-based too: ONE aggregate loop drains every registered custom
+    # source (EMBED_SOURCES["custom"], PUSH_SOURCES = {memory, custom}). Without
+    # this service, custom sources only embed via the `windex custom embed` one-shot.
+    windex-loop-custom:   { <<: *windex-loop, command: ["embed-loop", "custom"] }
 
     # --- App: editable job scheduler (fires due schedule-table entries: ingest/daily/maintain) ---
     windex-scheduler:     { <<: *windex-loop, command: ["scheduler"] }
