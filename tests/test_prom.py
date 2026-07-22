@@ -214,6 +214,24 @@ def test_loop_up_source_label_matches_documents_vocabulary(client):
     assert "ccnews" not in loop_sources and "gh" not in loop_sources
 
 
+def test_loop_up_reflects_heartbeat_not_pgrep(client, pg):
+    """The loops run in separate containers, so host pgrep is always 0 here (the
+    old LoopDown false-alarm). windex_loop_up must instead read the per-loop
+    Postgres heartbeat: fresh -> 1, stale -> 0."""
+    import time
+
+    from windex import db as wdb
+
+    now = int(time.time())
+    wdb.set_control(pg, "loop_heartbeat_wiki", str(now))            # fresh -> up
+    wdb.set_control(pg, "loop_heartbeat_arxiv", str(now - 10_000))  # stale -> down
+    pg.commit()
+
+    text = client.get("/metrics").text
+    assert _value(text, "windex_loop_up", source="wiki") == 1.0
+    assert _value(text, "windex_loop_up", source="arxiv") == 0.0
+
+
 def test_log_source_mapping():
     """Both historical embed-loop log naming conventions map to the canonical
     corpus source; non-loop logs get no source."""
@@ -259,10 +277,12 @@ def test_db_down_still_returns_200_with_db_up_zero(client, pg, monkeypatch):
     assert r.headers["content-type"] == prom.CONTENT_TYPE_LATEST
     text = r.text
     assert _value(text, "windex_db_up") == 0.0
-    # DB-independent metrics still present, DB-backed ones absent (no half page)
-    assert any(k[0] == "windex_loop_up" for k in _samples(text))
+    # The DB-independent gateway probe still answers; DB-backed families are
+    # absent (no half page) — including windex_loop_up, now heartbeat-based, so a
+    # DB outage leaves it ABSENT rather than a false 0 that would fire LoopDown.
     assert ("windex_gateway_up", frozenset()) in _samples(text)
     assert not any(k[0] == "windex_documents" for k in _samples(text))
+    assert not any(k[0] == "windex_loop_up" for k in _samples(text))
 
 
 # --- Qdrant -----------------------------------------------------------------

@@ -162,23 +162,35 @@ class WindexCollector:
     def collect(self):
         s = self.settings
 
-        # --- liveness that reads only the process table (survives a DB outage) ---
-        # embed loops, one series per source. A loop being down is the 2026-07-17
-        # failure mode, so this must not depend on anything that can also be down.
+        # --- per-source embed-loop liveness (from the Postgres heartbeat) ---
+        # The loops run in separate containers (own PID namespaces, and the slim
+        # image has no pgrep), so host pgrep is structurally 0 here and the old
+        # windex_loop_up false-fired LoopDown forever. Liveness is the per-loop
+        # heartbeat embed_loop writes every cycle (loop_heartbeat_<source>), the
+        # same signal service.loop_states uses. If Postgres is unreachable the
+        # series is simply omitted (no false 0) — windex_db_up already flags that.
         loop = GaugeMetricFamily(
             "windex_loop_up",
-            "1 if an embed-loop process for this source is alive, else 0 (from the "
-            "host process table). `source` uses the corpus vocabulary of "
-            "windex_documents — the ccnews/gh CLI loops are labeled news/github so "
-            "per-source dashboard joins line up.",
+            "1 if this source's embed-loop is alive (Postgres heartbeat within "
+            "360s), else 0. `source` uses the corpus vocabulary of windex_documents "
+            "— the ccnews/gh CLI loops are labeled news/github so per-source "
+            "dashboard joins line up.",
             labels=["source"])
-        for job in jobs.embed_loop_jobs():
-            # One registry: the loop set and their pgrep patterns come from
-            # jobs.py — the same source `windex up`/`status` and the watchdog
-            # use. Only the label is canonicalised (ccnews→news, gh→github).
-            cli_source = job.argv[1]
-            alive = 1.0 if jobs._pids(job.pattern) else 0.0
-            loop.add_metric([_canonical_source(cli_source)], alive)
+        # 360s mirrors service.loop_states.HEARTBEAT_STALE_SECS: it exceeds the
+        # loop's 300s max backoff so a probing-but-alive loop isn't misreported.
+        try:
+            now = int(time.time())
+            with db.pooled(s.pg_dsn) as conn:
+                for job in jobs.embed_loop_jobs():
+                    cli_source = job.argv[1]
+                    try:
+                        last = int(db.get_control(conn, f"loop_heartbeat_{cli_source}", "0"))
+                    except ValueError:
+                        last = 0
+                    alive = 1.0 if (now - last) < 360 else 0.0
+                    loop.add_metric([_canonical_source(cli_source)], alive)
+        except Exception:  # noqa: BLE001 — DB down: omit the series, don't false-alert
+            pass
         yield loop
 
         # The long-running non-loop jobs from the same registry the console drives
