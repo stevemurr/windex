@@ -87,6 +87,25 @@ def test_windex_documents_matches_seeded_rows(client, pg):
     assert "windex_docs{" not in text and "\nwindex_docs " not in text
 
 
+def test_embeds_per_minute_reflects_recent_indexed_at(client, pg):
+    with pg.cursor() as cur:
+        cur.execute(
+            """INSERT INTO documents (id, source, url, status, indexed_at) VALUES
+               ('news:e1', 'news', 'u1', 'embedded', now()),
+               ('news:e2', 'news', 'u2', 'embedded', now()),
+               ('news:e3', 'news', 'u3', 'embedded', now() - interval '90 seconds'),
+               ('news:old', 'news', 'u4', 'embedded', now() - interval '30 minutes')"""
+        )
+    pg.commit()
+    # the 2-min count rides service._pg_stats' 10s cache; clear it so the scrape
+    # reflects the rows just seeded (mirrors test_metrics_contract).
+    service_mod._pg_stats_cache.clear()
+    prom._scrape_cache.clear()
+    text = client.get("/metrics").text
+    # 3 rows landed in the trailing 2 min (the 30-min-old one excluded); /2 = 1.5/min
+    assert _value(text, "windex_embeds_per_minute", window="2m") == 1.5
+
+
 def test_windex_watermark_rows_matches_seeded_rows(client, pg):
     """Per-source ingest-ledger counts by (source, table, status). warc_files
     carries a fixed schema (path, status) so it seeds cleanly; the assertions pin
@@ -367,6 +386,7 @@ def test_metrics_endpoint_excluded_from_http_metrics(client):
 # an existing one (see module docstring: additive-only, like /v1).
 CONTRACT = {
     "windex_documents": ("gauge", frozenset({"source", "status"})),
+    "windex_embeds_per_minute": ("gauge", frozenset({"window"})),
     "windex_repos": ("gauge", frozenset({"status"})),
     "windex_watermark_rows": ("gauge", frozenset({"source", "table", "status"})),
     "windex_loop_up": ("gauge", frozenset({"source"})),

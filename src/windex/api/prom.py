@@ -344,6 +344,24 @@ class WindexCollector:
                 docs.add_metric([source, status], float(n))
         families.append(docs)
 
+        # Live embed throughput for the dashboard "speed" panel. windex_documents
+        # above is 600s-cached, so deriv()/rate() over it reads ~0 between refreshes
+        # and can't show live speed. This reads the service layer's 10s-cached
+        # trailing-window embed counts (from documents.indexed_at, backed by
+        # documents_indexed_at_idx) and divides to a per-minute rate — no PromQL
+        # deriv needed, updates every scrape. window="2m" is responsive (a throughput
+        # change lands within ~1-2 min); window="10m" is the smooth reference line.
+        activity = service._pg_stats(s).get("activity", {})
+        epm = GaugeMetricFamily(
+            "windex_embeds_per_minute",
+            "Documents embedded per minute (from indexed_at). Live throughput that "
+            "updates every scrape — unlike the 600s-cached windex_documents totals. "
+            "window=2m responsive (trailing 2 min / 2), window=10m smooth.",
+            labels=["window"])
+        epm.add_metric(["2m"], float(activity.get("indexed_last_2m", 0)) / 2.0)
+        epm.add_metric(["10m"], float(activity.get("docs_per_min", 0)))
+        families.append(epm)
+
         # search QUALITY (relevance) — the latest `windex eval` run, by leg;
         # distinct from the search_metrics latency series. Absent until the first
         # eval writes a row (the Grafana search-quality panel trends these).
