@@ -32,7 +32,16 @@ class HttpEmbedder(Embedder):
         dim: int,
         style: Style = "tei",
         api_key: str = "",
-        timeout: float = 120.0,
+        # Bulk default. MUST stay BELOW the gateway's own request_timeout
+        # (litellm: 180s) so the client gives up first with a clean, retryable
+        # httpx.TimeoutException. When the gateway deadline fires first it
+        # cancels the upstream task and drops the socket WITHOUT a response, so
+        # the loop sees a bare "Server disconnected" instead of a timeout —
+        # that mismatch (client 120s vs gateway 45s) was the disconnect source
+        # measured 2026-07-23. Queue wait, not payload size, drives latency
+        # here: under backlog load a 2-token embed measured 13.2s and a full
+        # 16K-token batch 16.6s.
+        timeout: float = 150.0,
         retries: int = 3,
         transport: httpx.BaseTransport | None = None,
     ):
