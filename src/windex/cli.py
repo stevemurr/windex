@@ -800,110 +800,105 @@ custom_app = typer.Typer(no_args_is_help=True,
                          help="Custom sources (push-based; no pull ingest)")
 app.add_typer(custom_app, name="custom")
 
-migrate_app = typer.Typer(no_args_is_help=True,
-                          help="Legacy → source-recipes migrations (copy-only, re-runnable)")
-app.add_typer(migrate_app, name="migrate")
+
+# Everything a clean ingest must forget. Grouped by what it costs to lose, because
+# that is the distinction that matters when deciding what `reset` may touch.
+#
+#   corpus      — documents + their derived vectors and parquet. Re-fetchable, but
+#                 only by re-crawling, which is the expensive part.
+#   watermarks  — "what have we already fetched". Clearing these is what makes the
+#                 next ingest start from nothing rather than resume.
+#   runs        — execution history. Pure observability; losing it costs nothing.
+#
+# Settings (source_config / recipe_config), the schedule, and registered custom
+# sources are NOT here: they are configuration, not data, and a reset that also
+# wiped how the box is tuned would be a footgun rather than a clean slate. The
+# flags below opt into those explicitly.
+_RESET_CORPUS = ("documents", "repos", "minhash_bands")
+_RESET_WATERMARKS = ("warc_files", "gharchive_files", "gh_shards", "wiki_dumps",
+                     "arxiv_windows", "feeds", "docsets", "hn_windows",
+                     "hf_roots", "hf_posts", "source_units")
+_RESET_RUNS = ("crawl_urls", "crawl_runs", "task_units", "run_events",
+               "run_tasks", "runs", "source_sched")
 
 
-@migrate_app.command("watermarks")
-def migrate_watermarks() -> None:
-    """Project the legacy watermark tables into `source_units`.
-
-    A copy, not a move: the legacy tables stay authoritative and unmodified, so
-    this is safe to run against production at any time and undoable with
-    `TRUNCATE source_units`. Re-running refreshes the projection.
-    """
-    from windex.migrate import watermarks
-
-    settings = get_settings()
-    with db.connect(settings.pg_dsn) as conn:
-        for row in watermarks.migrate(conn):
-            if row.get("skipped"):
-                console.print(f"[dim]{row['table']}: {row['skipped']}[/dim]")
-            else:
-                console.print(f"{row['table']} → {row['recipe']}/{row['store']}: "
-                              f"{row['rows']} rows")
-    console.print("\n[dim]Now run: windex migrate verify[/dim]")
-
-
-@migrate_app.command("dual-write")
-def migrate_dual_write(
-    action: str = typer.Argument(..., help="on | off | status"),
+@app.command()
+def reset(
+    yes: bool = typer.Option(False, "--yes", help="Skip confirmation"),
+    keep_staging: bool = typer.Option(
+        False, help="Keep the extracted-text parquet (vectors are still dropped)"),
+    drop_sources: bool = typer.Option(
+        False, help="Also unregister custom sources and their recipes"),
+    drop_settings: bool = typer.Option(
+        False, help="Also clear runtime settings overrides and the schedule"),
 ) -> None:
-    """Mirror legacy watermark writes into `source_units` as they happen.
+    """Wipe the index for a clean ingest: corpus, vectors, parquet, watermarks.
 
-    Implemented as database triggers, not a Python helper, because there are a
-    dozen write sites across ten sources and missing one produces exactly the
-    failure the whole migration guards against — a unit that quietly looks done.
-    A trigger cannot be bypassed by application code and commits with the write
-    that caused it.
+    This is the reproducibility path taken to its conclusion. `reindex` rebuilds
+    vectors from staged text; this drops the staged text too, so the next run
+    re-derives everything from upstream. It is what makes "the index is a pure
+    function of the recipes" a claim you can actually test.
 
-    Turn this on, leave it for a week, and re-run `windex migrate verify` daily.
-    Reads still come from the legacy tables throughout; `off` removes every
-    trigger and changes nothing else.
+    Deliberately NOT reversible and deliberately narrow: settings, the schedule and
+    registered sources survive unless you ask otherwise, because a clean slate
+    should not also mean reconfiguring the box.
     """
-    from windex.migrate import dualwrite
+    from windex.index import qdrant as qidx
 
     settings = get_settings()
-    with db.connect(settings.pg_dsn) as conn:
-        if action == "on":
-            tables = dualwrite.enable(conn)
-            console.print(f"mirroring {len(tables)} tables: {', '.join(tables)}")
-            console.print("[dim]reads unchanged; run `windex migrate verify` daily[/dim]")
-        elif action == "off":
-            tables = dualwrite.disable(conn)
-            console.print(f"stopped mirroring {len(tables)} tables")
-        elif action == "status":
-            rows = dualwrite.status(conn)
-            for r in rows:
-                mark = "[green]on [/green]" if r["mirroring"] else "[dim]off[/dim]"
-                console.print(f"{mark} {r['table']:<16} → {r['recipe']}/{r['store']}")
-            live = sum(1 for r in rows if r["mirroring"])
-            if live and live != len(rows):
-                console.print(f"\n[yellow]partially installed ({live}/{len(rows)}) — "
-                              f"re-run `windex migrate dual-write on`[/yellow]")
-        else:
-            raise typer.BadParameter("action must be on, off or status")
+    tables = list(_RESET_CORPUS + _RESET_WATERMARKS + _RESET_RUNS)
+    if drop_sources:
+        tables += ["custom_sources", "recipes", "recipe_revisions"]
+    if drop_settings:
+        tables += ["source_config", "recipe_config", "schedule", "triggers"]
 
+    client = qidx.client_from_url(settings.qdrant_url)
+    collections = [c.name for c in client.get_collections().collections]
 
-@migrate_app.command("verify")
-def migrate_verify() -> None:
-    """Assert the two models agree, and exit non-zero if they don't.
+    # Say what will be destroyed BEFORE asking. A confirmation prompt that does not
+    # show the blast radius is theatre.
+    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM documents")
+        docs = cur.fetchone()[0]
+    console.print(f"[bold red]This will permanently delete:[/bold red]")
+    console.print(f"  {docs:,} documents and {len(tables)} tables")
+    console.print(f"  {len(collections)} Qdrant collections: "
+                  f"{', '.join(collections[:4])}{' …' if len(collections) > 4 else ''}")
+    if not keep_staging:
+        console.print(f"  all parquet under {settings.staging_dir}")
+    console.print(f"  all downloads under {settings.downloads_dir}")
+    if not yes:
+        typer.confirm("Proceed?", abort=True)
 
-    The check that matters is `would_skip`: units the LIVE code considers pending
-    that the new model would not. That is the silent-data-loss direction, and it
-    must be zero. `would_redo` (pending in the new model only) is the safe
-    direction — a re-ingest is a text_hash no-op — and is allowed only where the
-    mapping declares a reason.
-    """
-    from windex.migrate import watermarks
+    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+        # One statement so FKs inside the set resolve without CASCADE — naming every
+        # table keeps a truncate from silently reaching one nobody meant to clear.
+        present = []
+        for t in tables:
+            cur.execute("SELECT to_regclass(%s)", (t,))
+            if cur.fetchone()[0] is not None:
+                present.append(t)
+        cur.execute(f"TRUNCATE {', '.join(present)}")
+        # Ingest bookkeeping lives in `control`; leaving stale watermark timestamps
+        # would make a fresh index claim it was already up to date.
+        cur.execute("DELETE FROM control WHERE key LIKE 'ingest_ts_%%' "
+                    "OR key LIKE 'loop_heartbeat_%%' OR key IN ('news_stage', 'gh_stage')")
+        conn.commit()
+    console.print(f"[green]truncated[/green] {len(present)} tables")
 
-    settings = get_settings()
-    failed = False
-    with db.connect(settings.pg_dsn) as conn:
-        for r in watermarks.verify(conn):
-            if r.get("note"):
-                console.print(f"[dim]{r['table']}: {r['note']}[/dim]")
-                continue
-            mark = "[green]ok[/green]" if r["ok"] else "[red]FAIL[/red]"
-            failed = failed or not r["ok"]
-            console.print(
-                f"{mark} {r['table']:<16} rows {r['rows']}→{r['rows_new']}  "
-                f"pending {r['pending']}→{r['pending_new']}  "
-                f"would_skip={r['would_skip']} would_redo={r['would_redo']}"
-                + (f" unexplained={r['unexplained']}" if r["unexplained"] else ""))
-            if r["would_skip"]:
-                console.print("     [red]^ units the live code would process and "
-                              "the new model would not — do NOT flip reads[/red]")
-            if r["unexplained"]:
-                console.print("     [red]^ divergence the mapping does not "
-                              "account for — investigate before flipping[/red]")
-            elif r["tolerated"]:
-                console.print(f"     [dim]expected: {r['tolerated']}[/dim]")
-    if failed:
-        raise typer.Exit(1)
-    console.print("\n[green]parity holds[/green]")
+    for name in collections:
+        client.delete_collection(name)      # aliases go with their collection
+    console.print(f"[green]dropped[/green] {len(collections)} collections")
 
+    import shutil
+    targets = [settings.downloads_dir] + ([] if keep_staging else [settings.staging_dir])
+    for d in targets:
+        shutil.rmtree(d, ignore_errors=True)
+    for d in settings.all_dirs():
+        d.mkdir(parents=True, exist_ok=True)
+    console.print(f"[green]cleared[/green] {', '.join(str(t) for t in targets)}")
+    console.print("\n[dim]Clean slate. Collections are recreated on the next embed "
+                  "pass; run `windex ensure-collections` to do it now.[/dim]")
 
 @custom_app.command("status")
 def custom_status(name: str = typer.Argument(..., help="custom source name")) -> None:
