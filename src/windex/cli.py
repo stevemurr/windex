@@ -800,6 +800,70 @@ custom_app = typer.Typer(no_args_is_help=True,
                          help="Custom sources (push-based; no pull ingest)")
 app.add_typer(custom_app, name="custom")
 
+migrate_app = typer.Typer(no_args_is_help=True,
+                          help="Legacy → source-recipes migrations (copy-only, re-runnable)")
+app.add_typer(migrate_app, name="migrate")
+
+
+@migrate_app.command("watermarks")
+def migrate_watermarks() -> None:
+    """Project the legacy watermark tables into `source_units`.
+
+    A copy, not a move: the legacy tables stay authoritative and unmodified, so
+    this is safe to run against production at any time and undoable with
+    `TRUNCATE source_units`. Re-running refreshes the projection.
+    """
+    from windex.migrate import watermarks
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        for row in watermarks.migrate(conn):
+            if row.get("skipped"):
+                console.print(f"[dim]{row['table']}: {row['skipped']}[/dim]")
+            else:
+                console.print(f"{row['table']} → {row['recipe']}/{row['store']}: "
+                              f"{row['rows']} rows")
+    console.print("\n[dim]Now run: windex migrate verify[/dim]")
+
+
+@migrate_app.command("verify")
+def migrate_verify() -> None:
+    """Assert the two models agree, and exit non-zero if they don't.
+
+    The check that matters is `would_skip`: units the LIVE code considers pending
+    that the new model would not. That is the silent-data-loss direction, and it
+    must be zero. `would_redo` (pending in the new model only) is the safe
+    direction — a re-ingest is a text_hash no-op — and is allowed only where the
+    mapping declares a reason.
+    """
+    from windex.migrate import watermarks
+
+    settings = get_settings()
+    failed = False
+    with db.connect(settings.pg_dsn) as conn:
+        for r in watermarks.verify(conn):
+            if r.get("note"):
+                console.print(f"[dim]{r['table']}: {r['note']}[/dim]")
+                continue
+            mark = "[green]ok[/green]" if r["ok"] else "[red]FAIL[/red]"
+            failed = failed or not r["ok"]
+            console.print(
+                f"{mark} {r['table']:<16} rows {r['rows']}→{r['rows_new']}  "
+                f"pending {r['pending']}→{r['pending_new']}  "
+                f"would_skip={r['would_skip']} would_redo={r['would_redo']}"
+                + (f" unexplained={r['unexplained']}" if r["unexplained"] else ""))
+            if r["would_skip"]:
+                console.print("     [red]^ units the live code would process and "
+                              "the new model would not — do NOT flip reads[/red]")
+            if r["unexplained"]:
+                console.print("     [red]^ divergence the mapping does not "
+                              "account for — investigate before flipping[/red]")
+            elif r["tolerated"]:
+                console.print(f"     [dim]expected: {r['tolerated']}[/dim]")
+    if failed:
+        raise typer.Exit(1)
+    console.print("\n[green]parity holds[/green]")
+
 
 @custom_app.command("status")
 def custom_status(name: str = typer.Argument(..., help="custom source name")) -> None:
