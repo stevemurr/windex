@@ -1911,5 +1911,79 @@ def _mark_ingest(source: str) -> None:
         db.set_control(conn, f"ingest_ts_{source}", str(int(time_mod.time())))
 
 
+@app.command("scheduler2")
+def scheduler2(
+    interval: float = typer.Option(10.0, help="Seconds between ticks"),
+    once: bool = typer.Option(False, "--once", help="Run one tick and exit (cron/debug)"),
+    migrate: bool = typer.Option(
+        False, "--migrate",
+        help="Copy `schedule` rows into `triggers` (UTC-preserving) before ticking"),
+    compiler: str = typer.Option(
+        "windex.recipe:compile_tasks", "--compiler",
+        help="module:attr that compiles a recipe spec into its node list"),
+    grace: float = typer.Option(
+        90.0, help="Seconds late a fire may be before it counts as a MISSED window"),
+) -> None:
+    """The trigger scheduler (Phase 9) — successor to `windex scheduler`.
+
+    Named `scheduler2` on purpose: the old command stays until every `schedule`
+    row has a `triggers` row and the console reads the new table. Running both is
+    safe but redundant — the old one spawns processes, this one writes `runs`
+    rows — so the cutover is "start this, stop that", with `--migrate` in between.
+
+    What it does every tick: arm any trigger with no planned instant, then fire
+    everything due, each in ONE transaction (run + tasks + watermark). Exactly one
+    instance is authoritative, via `pg_try_advisory_lock`; a second instance
+    stands by and takes over within one interval if the holder dies. Neither the
+    tick nor the loop exits on error — the 2026-07-17 stall (a 25-minute gateway
+    blip that a self-healing loop would have ridden out) is the standing argument
+    against components that exit when something goes wrong.
+
+    `--compiler` is the seam to the recipe engine. Nothing in `windex.scheduler`
+    imports it; the node list arrives as a callable, which is what lets the
+    scheduler be built and tested before the compiler exists.
+    """
+    import importlib
+    import logging
+    from datetime import datetime
+
+    from windex.scheduler import loop as sched_loop
+    from windex.scheduler import migrate_schedule
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    settings = get_settings()
+
+    mod_name, _, attr = compiler.partition(":")
+    try:
+        compile_tasks = getattr(importlib.import_module(mod_name), attr)
+    except (ImportError, AttributeError) as exc:
+        # Fail here, loudly, rather than at 03:00 as a `trigger.failed` row per
+        # trigger per night. A scheduler that cannot fan out tasks is not a
+        # degraded scheduler, it is a scheduler that queues unstartable runs.
+        console.print(f"[red]cannot load the task compiler {compiler!r}: {exc}[/red]")
+        console.print("the recipe engine may not be merged yet — pass --compiler "
+                      "module:attr to point at one")
+        raise typer.Exit(1) from exc
+
+    if migrate:
+        with db.connect(settings.pg_dsn) as conn:
+            rows = migrate_schedule(conn)
+        made = sum(1 for r in rows if r["created"])
+        console.print(f"[green]migrated {made}/{len(rows)} schedule rows[/green] "
+                      f"→ triggers (timezone=UTC, behaviour preserved)")
+        for r in rows:
+            console.print(f"  {r['name']:<16} {r['cron']:<14} UTC  "
+                          f"{'new' if r['created'] else 'exists'}")
+
+    def report(result) -> None:
+        console.print(f"{datetime.now().isoformat(timespec='seconds')} {result.summary()}")
+
+    console.print(f"scheduler2 tick every {interval:g}s "
+                  f"(compiler {compiler}, misfire grace {grace:g}s)")
+    sched_loop.run_loop(settings.pg_dsn, compile_tasks=compile_tasks,
+                        interval=interval, grace_seconds=grace, once=once,
+                        on_result=report)
+
+
 if __name__ == "__main__":
     app()
