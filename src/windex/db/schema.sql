@@ -388,3 +388,353 @@ CREATE TABLE IF NOT EXISTS source_config (
     settings   jsonb NOT NULL DEFAULT '{}',
     updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+
+-- ============================================================================
+-- SOURCE RECIPES — additive groundwork. NOTHING READS THESE YET.
+--
+-- The plan (~/.claude/plans/i-want-to-look-cheeky-muffin.md) unifies "source"
+-- and "crawl" into one concept: a recipe is a typed-port DAG of nodes drawn from
+-- a fixed vocabulary, referencing modules that ship with windex. Every one of the
+-- eleven sources is already the same program — enumerate work into a state table,
+-- fetch it, turn bytes into documents, write a text_hash-guarded delta to parquet
+-- and the documents ledger, advance a watermark only once the text is durably
+-- staged — written eleven times, which is how we ended up with twelve watermark
+-- tables and six copies of the same ledger upsert.
+--
+-- This block is Phase 1: create the tables, read none of them. The legacy tables
+-- stay authoritative until a per-source cutover flips reads, so rollback at this
+-- stage is DROP TABLE and nothing else.
+-- ============================================================================
+
+-- One row per installed recipe. Supersedes custom_sources (which becomes a view)
+-- and the eight hardcoded pull-source pipelines.
+CREATE TABLE IF NOT EXISTS recipes (
+    name        text PRIMARY KEY,       -- ^[a-z][a-z0-9_]{1,31}$, custom_source.registry rules
+    source      text NOT NULL,          -- documents.source this recipe feeds
+    kind        text NOT NULL DEFAULT 'ingest',   -- ingest | maintenance | system
+    spec        jsonb NOT NULL,         -- the compiled DAG
+    spec_hash   text NOT NULL,          -- sha1 over canonical JSON; cheap change detection
+    -- The marketplace's three-way diff needs the as-installed copy: without it,
+    -- "did upstream change or did I edit it" is unanswerable and an update either
+    -- clobbers local edits or refuses them all.
+    base_spec   jsonb,
+    origin      jsonb,                  -- {catalog,url,ref,commit_sha,path,blob_sha256,installed_at}
+    version     integer NOT NULL DEFAULT 1,
+    enabled     boolean NOT NULL DEFAULT true,
+    builtin     boolean NOT NULL DEFAULT false,   -- shipped; editable but restorable
+    title       text NOT NULL DEFAULT '',
+    description text NOT NULL DEFAULT '',
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Edit history. The frozen-copy-per-run discipline (runs.spec) records what a run
+-- DID; this records what the recipe WAS, so "why did last week behave differently"
+-- is answerable without reading every run's spec blob.
+CREATE TABLE IF NOT EXISTS recipe_revisions (
+    name       text    NOT NULL REFERENCES recipes(name) ON DELETE CASCADE,
+    version    integer NOT NULL,
+    spec       jsonb   NOT NULL,
+    spec_hash  text    NOT NULL,
+    note       text    NOT NULL DEFAULT '',
+    author     text    NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (name, version)
+);
+
+-- Per-recipe runtime settings. The successor to source_config: same sparse-row
+-- discipline and the same DB > env > default precedence, but keyed by recipe.
+-- '_global' stays reserved and keeps living in source_config/settings_schema —
+-- those knobs (embed budget, throttle, crawl ceilings) are the OPERATOR's, and a
+-- recipe asking for a bigger share of a fleet-wide budget is exactly what the
+-- allowlist exists to refuse.
+CREATE TABLE IF NOT EXISTS recipe_config (
+    recipe     text PRIMARY KEY,
+    values     jsonb NOT NULL DEFAULT '{}',
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- ---------------------------------------------------------------------------
+-- source_units: the PERMANENT watermark, replacing all twelve legacy tables.
+--
+-- Kept strictly separate from the per-run work list (task_units) because their
+-- lifetimes are opposite, and conflating them is the one genuinely dangerous
+-- mistake available here: a year-old crawl frontier can be pruned with no
+-- consequence, whereas pruning warc_files means re-downloading three years of
+-- WARCs — or worse, silently re-ingesting the corpus.
+--
+-- The freshness gate is `upstream IS DISTINCT FROM ingested`, which generalizes
+-- every per-source signal windex invented: an etag/last_modified pair, a docset
+-- mtime, hf's llms_hash, a sitemap lastmod, a dump date, or an empty string for
+-- the sources whose only signal is "seen at all".
+--
+-- Two properties fall out that are per-source accidents today: re-arming a
+-- FAILED unit is free (ingested only advances on clean completion, so a failed
+-- unit is still pending by definition), and fail_count -> dead is one generic
+-- attempts column instead of smallweb's bespoke one.
+--
+-- LIST-partitioned by source so per-source indexes stay small, a source teardown
+-- is DROP PARTITION, and windex_watermark_rows stays one cheap GROUP BY.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS source_units (
+    source     text NOT NULL,           -- recipe name
+    store      text NOT NULL,           -- store declared in recipe.state: warc|shard|window|…
+    unit_key   text NOT NULL,           -- path | name | "2019-01-01..2019-12-31" | slug | url
+    ord        text,                    -- sortable ordering key (path, date, lastmod)
+    status     text NOT NULL DEFAULT 'pending',
+    upstream   jsonb NOT NULL DEFAULT '{}',   -- freshness signal, whatever shape it takes
+    ingested   jsonb NOT NULL DEFAULT '{}',   -- what we have actually ingested
+    stage      text,                    -- lifecycle stage (repos: candidate|hydrated|staged|…)
+    attempts   smallint NOT NULL DEFAULT 0,
+    counts     jsonb NOT NULL DEFAULT '{}',
+    bytes      bigint,
+    attrs      jsonb NOT NULL DEFAULT '{}',   -- attribution HTML, license, host, kind
+    last_run_id   bigint,
+    claimed_at    timestamptz,
+    processed_at  timestamptz,
+    first_seen_at timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (source, store, unit_key)     -- must include the partition key
+) PARTITION BY LIST (source);
+
+CREATE TABLE IF NOT EXISTS source_units_default PARTITION OF source_units DEFAULT;
+CREATE INDEX IF NOT EXISTS source_units_status_idx  ON source_units (source, store, status);
+-- The pending claim: exactly the predicate every discover node runs.
+CREATE INDEX IF NOT EXISTS source_units_pending_idx ON source_units (source, store, ord)
+    WHERE upstream IS DISTINCT FROM ingested;
+-- Rotation order for the sources with no freshness signal at all (smallweb's
+-- 38k feeds): least-recently-processed first.
+CREATE INDEX IF NOT EXISTS source_units_rotate_idx  ON source_units (source, store, processed_at NULLS FIRST);
+
+-- ---------------------------------------------------------------------------
+-- runs / run_tasks / task_units: the execution model, generalizing the
+-- crawl_runs + crawl_urls pair — today the ONLY per-run observability in windex
+-- (every other source has watermarks and a log tail, which is why only crawl can
+-- show a progress bar).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS runs (
+    id             bigserial PRIMARY KEY,
+    -- Deliberately NOT a FK to recipes: run history must outlive a deleted recipe,
+    -- or "what did this source do last month" dies with an uninstall.
+    recipe         text NOT NULL,
+    recipe_version integer NOT NULL DEFAULT 1,
+    source         text NOT NULL,
+    -- FROZEN copy of the compiled recipe, the crawl_runs.recipe discipline
+    -- generalized: editing a recipe must never rewrite what past runs did.
+    spec           jsonb NOT NULL,
+    spec_hash      text NOT NULL DEFAULT '',
+    trigger        text NOT NULL DEFAULT 'manual',  -- manual|schedule|event|chain|system
+    trigger_by     text NOT NULL DEFAULT '',
+    params         jsonb NOT NULL DEFAULT '{}',
+    mode           text NOT NULL DEFAULT 'run',     -- run | dry_run
+    priority       smallint NOT NULL DEFAULT 50,
+    dedupe_key     text NOT NULL,                   -- defaults to the recipe name
+    state          text NOT NULL DEFAULT 'queued',
+                   -- queued | running | succeeded | failed | cancelled | blocked
+    cancel_requested boolean NOT NULL DEFAULT false,
+    queued_at      timestamptz NOT NULL DEFAULT now(),
+    started_at     timestamptz,
+    finished_at    timestamptz,
+    updated_at     timestamptz NOT NULL DEFAULT now(),
+    progress       jsonb NOT NULL DEFAULT '{}',
+    stats          jsonb NOT NULL DEFAULT '{}',
+    error          text
+);
+CREATE INDEX IF NOT EXISTS runs_live_idx    ON runs (state) WHERE state IN ('queued','running','blocked');
+CREATE INDEX IF NOT EXISTS runs_recipe_idx  ON runs (recipe, id DESC);
+CREATE INDEX IF NOT EXISTS runs_source_idx  ON runs (source, id DESC);
+CREATE INDEX IF NOT EXISTS runs_updated_idx ON runs (updated_at DESC);
+-- At most one live run per key. This is what turns a double-fire (a human
+-- clicking Run while the timer fires; two schedulers during migration; a week of
+-- paused nightly runs all releasing at once) into a harmless ON CONFLICT instead
+-- of duplicate ingest. Replaces jobs._spawn_lock's flock, which cannot work
+-- across container boundaries anyway.
+CREATE UNIQUE INDEX IF NOT EXISTS runs_dedupe_live_uniq ON runs (dedupe_key)
+    WHERE state IN ('queued','running','blocked');
+
+CREATE TABLE IF NOT EXISTS run_tasks (
+    id            bigserial PRIMARY KEY,
+    run_id        bigint NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    source        text NOT NULL,          -- denormalized: the claim query's hot predicate
+    node          text NOT NULL,          -- node id within the DAG
+    kind          text NOT NULL,          -- discover|receive|fetch|catalog|extract|transform|collect|load
+    module        text NOT NULL,          -- registered module key, e.g. "http.get"
+    lane          text NOT NULL DEFAULT 'io',   -- gpu | net | cpu_heavy | io | maint
+    config        jsonb NOT NULL DEFAULT '{}',  -- frozen node config
+    depends_on    text[] NOT NULL DEFAULT '{}',
+    preconditions text[] NOT NULL DEFAULT '{}', -- 'storage:staging','gateway','gh_token'
+    state         text NOT NULL DEFAULT 'pending',
+                  -- pending | ready | running | succeeded | failed | skipped | cancelled
+    priority      smallint NOT NULL DEFAULT 50,
+    attempts      smallint NOT NULL DEFAULT 0,
+    max_attempts  smallint NOT NULL DEFAULT 3,
+    -- Lease, split from the liveness heartbeat so reclaim is a bare timestamp
+    -- comparison and a polite 1-req/3s fetch can hold a 10-minute lease while an
+    -- embed task holds two.
+    lease_worker     text,
+    lease_seconds    integer NOT NULL DEFAULT 300,
+    lease_expires_at timestamptz,
+    heartbeat_at     timestamptz,
+    yield_requested  boolean NOT NULL DEFAULT false,
+    -- Resume point INSIDE a unit (wiki shard line offset, OAI resumption token,
+    -- HN page). Without it a 333MB shard is not preemptible and monopolizes a
+    -- lane for its whole duration.
+    cursor        jsonb NOT NULL DEFAULT '{}',
+    units_total   integer NOT NULL DEFAULT -1,   -- -1 = not yet known / indeterminate
+    units_done    integer NOT NULL DEFAULT 0,
+    units_failed  integer NOT NULL DEFAULT 0,
+    weight        real NOT NULL DEFAULT 1.0,     -- share of the run's progress bar
+    stats         jsonb NOT NULL DEFAULT '{}',
+    started_at    timestamptz,
+    finished_at   timestamptz,
+    error         text,
+    UNIQUE (run_id, node)
+);
+CREATE INDEX IF NOT EXISTS run_tasks_claim_idx   ON run_tasks (lane, priority DESC, id) WHERE state = 'ready';
+CREATE INDEX IF NOT EXISTS run_tasks_running_idx ON run_tasks (lane, source) WHERE state = 'running';
+CREATE INDEX IF NOT EXISTS run_tasks_lease_idx   ON run_tasks (lease_expires_at) WHERE state = 'running';
+CREATE INDEX IF NOT EXISTS run_tasks_run_idx     ON run_tasks (run_id);
+
+-- Fair-share bookkeeping. Weighted-fair-queueing over accumulated service time,
+-- so a 20,000-page crawl cannot FIFO-block every other source for eleven hours
+-- the way windex-loop-crawl does today.
+CREATE TABLE IF NOT EXISTS source_sched (
+    source     text PRIMARY KEY,
+    weight     real NOT NULL DEFAULT 1.0,
+    vtime      double precision NOT NULL DEFAULT 0,   -- accumulated service / weight
+    in_flight  integer NOT NULL DEFAULT 0,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- One sequence shared by task_units.id and .seq: `seq` is a TRANSITION sequence,
+-- not an insertion one, and that distinction is a bug fix. crawl_urls.seq is
+-- assigned at insert and never updated, but the BFS claim orders by (depth, seq),
+-- so terminal transitions do NOT happen in insertion order — once an SSE cursor
+-- passes seq 900, a depth-2 row transitioning at seq 500 is never streamed and
+-- the client silently misses it. Bumping seq on every state write makes
+-- "everything that changed since S" exactly correct.
+CREATE SEQUENCE IF NOT EXISTS task_unit_seq;
+CREATE SEQUENCE IF NOT EXISTS run_event_seq;
+
+CREATE TABLE IF NOT EXISTS task_units (
+    id         bigint NOT NULL DEFAULT nextval('task_unit_seq'),
+    run_id     bigint NOT NULL,
+    task_id    bigint NOT NULL,
+    unit_key   text   NOT NULL,     -- joins source_units on (source, store, unit_key)
+    parent     text,                -- crawl: the referring URL. Hierarchical work.
+    depth      integer NOT NULL DEFAULT 0,
+    state      text NOT NULL DEFAULT 'pending',   -- pending|running|done|skipped|failed
+    reason     text,                -- robots|scope|boilerplate|no_text|http_502|…
+    -- The documents id this unit produced. On the row rather than in memory so a
+    -- RESUMED run still knows what it covered — an in-memory set forgets
+    -- everything staged before the restart, and a prune would then delete it.
+    doc_id     text,
+    attempts   smallint NOT NULL DEFAULT 0,
+    bytes      bigint,
+    counts     jsonb NOT NULL DEFAULT '{}',
+    seq        bigint NOT NULL DEFAULT nextval('task_unit_seq'),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    started_at timestamptz,
+    finished_at timestamptz,
+    PRIMARY KEY (created_at, id)      -- must include the partition key
+) PARTITION BY RANGE (created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS task_units_key_uniq  ON task_units (task_id, unit_key, created_at);
+CREATE INDEX IF NOT EXISTS task_units_claim_idx ON task_units (task_id, depth, seq) WHERE state = 'pending';
+CREATE INDEX IF NOT EXISTS task_units_seq_idx   ON task_units (run_id, seq);
+CREATE INDEX IF NOT EXISTS task_units_state_idx ON task_units (task_id, state);
+
+-- Lifecycle and diagnostics — roughly 50-500 rows per run, NOT one per unit
+-- (per-item detail is task_units). This is also what replaces tailing
+-- ~/.windex/logs/<job>.log for job output: those files live in whichever
+-- container wrote them, so with the console gone and a native client the only
+-- way "everything is reachable over HTTP" becomes true is to put job output in
+-- Postgres.
+CREATE TABLE IF NOT EXISTS run_events (
+    seq     bigint NOT NULL DEFAULT nextval('run_event_seq'),
+    run_id  bigint,
+    task_id bigint,
+    ts      timestamptz NOT NULL DEFAULT now(),
+    level   text NOT NULL DEFAULT 'info',   -- debug|info|warn|error
+    event   text NOT NULL,                  -- run.queued|task.leased|task.yielded|…
+    message text NOT NULL DEFAULT '',
+    data    jsonb NOT NULL DEFAULT '{}',
+    PRIMARY KEY (ts, seq)                   -- must include the partition key
+) PARTITION BY RANGE (ts);
+
+CREATE INDEX IF NOT EXISTS run_events_run_idx   ON run_events (run_id, seq);
+CREATE INDEX IF NOT EXISTS run_events_error_idx ON run_events (seq) WHERE level IN ('warn','error');
+
+-- Monthly partitions, rolled forward on every deploy. DROP PARTITION rather than
+-- DELETE is deliberate and load-bearing: schema.sql already records that rolling
+-- deletes on minhash_bands never reached autovacuum's threshold and needed
+-- hand-tuned settings. task_units has the same shape (smallweb alone is ~1k
+-- units/night; one 20k-page crawl is 20k rows), so retention must be O(1).
+--
+-- Three months ahead, so a box that misses deploys for a while still has
+-- somewhere to write. A DEFAULT partition is deliberately NOT created: a row
+-- landing in DEFAULT makes the later CREATE for that month fail, which converts
+-- a retention problem into an outage. Better to keep the window generous.
+DO $$
+DECLARE
+    tbl  text;
+    m    date;
+    part text;
+BEGIN
+    FOREACH tbl IN ARRAY ARRAY['task_units', 'run_events'] LOOP
+        FOR i IN 0..3 LOOP
+            m    := (date_trunc('month', now()) + (i || ' month')::interval)::date;
+            part := format('%s_%s', tbl, to_char(m, 'YYYYMM'));
+            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = part) THEN
+                EXECUTE format(
+                    'CREATE TABLE %I PARTITION OF %I FOR VALUES FROM (%L) TO (%L)',
+                    part, tbl, m, (m + interval '1 month')::date);
+            END IF;
+        END LOOP;
+    END LOOP;
+END $$;
+
+-- Scoped pause, replacing control.indexing + control.loop_<src> + control.ingest_<src>.
+-- Paused work is simply not claimable, so one mechanism stops ingest, embed,
+-- crawl and maintenance alike — and because the scheduler will create ROWS rather
+-- than spawn processes, "pause doesn't stop the scheduler" stops being possible.
+-- `lane:gpu` is a genuinely new capability: free the GPU for interactive queries
+-- while ingest keeps staging parquet.
+CREATE TABLE IF NOT EXISTS pauses (
+    scope      text PRIMARY KEY,   -- 'global' | 'source:wiki' | 'lane:gpu' | 'recipe:hn_backfill'
+    reason     text NOT NULL DEFAULT '',
+    paused_by  text NOT NULL DEFAULT '',
+    paused_at  timestamptz NOT NULL DEFAULT now(),
+    expires_at timestamptz         -- optional auto-resume; NULL = until cleared
+);
+
+-- Triggers, replacing `schedule`. Any recipe becomes schedulable — today
+-- REFRESH_CHAINS hardcodes the eight built-ins and _schedule_sources() subtracts
+-- push sources, so a custom source or a crawl can NEVER be scheduled.
+--
+-- `timezone` fixes a standing lie: schedule.hour's comment says local time, but
+-- _is_due compares datetime.now(), which in a container with no TZ is UTC. Every
+-- migrated trigger gets 'UTC' so behaviour is preserved exactly, and converting
+-- is then an explicit, visible action rather than a silent shift.
+CREATE TABLE IF NOT EXISTS triggers (
+    name             text PRIMARY KEY,
+    recipe           text NOT NULL,
+    type             text NOT NULL DEFAULT 'cron',   -- cron | interval | event | manual
+    cron             text,
+    interval_seconds integer,
+    timezone         text NOT NULL DEFAULT 'UTC',    -- IANA
+    event            text,
+    params           jsonb NOT NULL DEFAULT '{}',
+    priority         smallint NOT NULL DEFAULT 50,
+    jitter_seconds   integer NOT NULL DEFAULT 0,
+    catch_up         boolean NOT NULL DEFAULT false, -- fire ONCE on resume, never N times
+    enabled          boolean NOT NULL DEFAULT true,
+    last_fired_at    timestamptz,
+    next_fire_at     timestamptz,      -- computed in `timezone`, stored absolute
+    last_run_id      bigint,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS triggers_due_idx   ON triggers (next_fire_at) WHERE enabled;
+CREATE INDEX IF NOT EXISTS triggers_event_idx ON triggers (event) WHERE enabled AND type = 'event';
