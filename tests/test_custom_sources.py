@@ -15,6 +15,22 @@ from windex.api.app import app
 from windex.custom_source import registry
 
 
+@pytest.fixture(autouse=True)
+def _isolate_alias(monkeypatch):
+    """Never let a test resolve a live `<source>_current` alias — see the longer
+    note in tests/test_memory_source.py.
+
+    Custom sources make this sharper than elsewhere: source names come from the
+    registry, so the embed round trips below create `notes_current` / `email_current`
+    in the PRODUCTION alias namespace. That is harmless today only because no
+    registered source happens to be called `notes` or `email`; register one and the
+    test starts reading production and clobbering its alias on teardown. Isolating
+    at the file level removes the coincidence.
+    """
+    monkeypatch.setattr("windex.index.qdrant.alias_name",
+                        lambda source: f"{source}_pytest_alias")
+
+
 @pytest.fixture()
 def client(settings, monkeypatch):
     monkeypatch.setattr(app_mod, "get_settings", lambda: settings)

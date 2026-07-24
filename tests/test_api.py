@@ -515,3 +515,47 @@ def test_stats_index_queue_never_totals_across_units(client, pg):
     assert "total" not in body["index"]
     assert set(body["index"]) <= set(service_mod.QUEUE_UNITS)
     assert "total" in body["embed"]  # docs ARE one unit, so this total is real
+
+
+# --- OpenAPI hygiene ---------------------------------------------------------
+# The schema is the contract a generated client is built from. Two ways it can
+# silently lose an operation, both caught here rather than in Xcode.
+
+def test_operation_ids_are_unique_and_handler_named():
+    """`generate_unique_id_function` returns the handler name, so two handlers
+    sharing a name would collide and FastAPI would emit only one of them."""
+    from collections import Counter
+
+    schema = app.openapi()
+    ids = [op["operationId"]
+           for path in schema["paths"].values()
+           for op in path.values()
+           if isinstance(op, dict) and "operationId" in op]
+    assert ids, "no operations in the schema"
+    dupes = {k: n for k, n in Counter(ids).items() if n > 1}
+    assert dupes == {}, f"colliding operationIds: {dupes}"
+    assert "search" in ids and "crawl_start" in ids
+
+
+def test_crawl_recipe_is_expressible_in_the_schema():
+    """The recipe sections used to be bare `dict`, so they rendered as free-form
+    objects and a generated client could not construct a crawl at all."""
+    schemas = app.openapi()["components"]["schemas"]
+    for name in ("CrawlScope", "CrawlLimits", "CrawlExtract", "CrawlDedup"):
+        assert name in schemas, f"{name} missing from the OpenAPI components"
+    assert "path_prefix" in schemas["CrawlScope"]["properties"]
+    # extra="forbid" must survive into the schema, or a client will happily send
+    # a misspelled key that the server then rejects.
+    assert schemas["CrawlScope"].get("additionalProperties") is False
+
+
+def test_bearer_scheme_is_case_insensitive_and_constant_time():
+    from windex.api.app import _bearer_ok
+
+    assert _bearer_ok("Bearer abc", "abc")
+    assert _bearer_ok("bearer abc", "abc")        # RFC 7235: scheme is case-insensitive
+    assert not _bearer_ok("Bearer wrong", "abc")
+    assert not _bearer_ok("Basic abc", "abc")
+    assert not _bearer_ok("abc", "abc")           # bare token is not a bearer header
+    assert not _bearer_ok(None, "abc")
+    assert not _bearer_ok("", "abc")

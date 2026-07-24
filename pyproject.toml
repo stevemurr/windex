@@ -29,6 +29,11 @@ pipeline = [
     "warcio>=1.7",
     "zstandard>=0.23",
     "feedparser>=6.0",  # Small Web RSS/Atom parsing (feed poller)
+    # Direct dep (was transitive via trafilatura): the crawl's link extraction
+    # parses <a href> out of fetched pages. Declared rather than assumed because
+    # a trafilatura that switched parsers would otherwise break the crawler
+    # silently — same call as orjson above.
+    "lxml>=5.0",
 ]
 # Serving layer
 api = [

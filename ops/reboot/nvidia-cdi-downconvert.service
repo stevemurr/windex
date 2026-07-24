@@ -1,0 +1,16 @@
+[Unit]
+Description=Downconvert the NVIDIA CDI spec to 0.6.0 for podman 4.9.3
+Documentation=file:/home/murr/Code/windex/ops/reboot/README.md
+# nvidia-cdi-refresh is Type=oneshot, so After= guarantees it has finished
+# writing /var/run/cdi/nvidia.yaml before we read it.
+After=nvidia-cdi-refresh.service
+Wants=nvidia-cdi-refresh.service
+ConditionPathExists=/usr/local/sbin/nvidia-cdi-downconvert
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/nvidia-cdi-downconvert
+
+[Install]
+WantedBy=multi-user.target

@@ -28,6 +28,13 @@ def _is_loop_start(event) -> bool:
     return isinstance(event, str) and (event == "embed-loop" or event.endswith("-embed"))
 
 
+def _flat(output: str) -> str:
+    """Collapse whitespace before matching a message. Typer wraps to the *ambient*
+    terminal width, so a bare `"not mounted" in output` passes in a wide terminal
+    and fails in a narrow one with a newline between the two words."""
+    return " ".join(output.split())
+
+
 @pytest.fixture()
 def wired(tmp_path, monkeypatch):
     """Stub the environment so up/down/status run pure orchestration. tmp_path
@@ -93,7 +100,7 @@ def test_up_source_subset(wired):
 def test_up_unknown_source_aborts(wired):
     result = runner.invoke(cli.app, ["up", "--source", "bogus"])
     assert result.exit_code == 1
-    assert "unknown source" in result.output
+    assert "unknown source" in _flat(result.output)
 
 
 def test_up_missing_mount_aborts_before_anything(wired):
@@ -101,7 +108,7 @@ def test_up_missing_mount_aborts_before_anything(wired):
     settings.data_root = settings.data_root / "nonexistent"
     result = runner.invoke(cli.app, ["up"])
     assert result.exit_code == 1
-    assert "not mounted" in result.output
+    assert "not mounted" in _flat(result.output)
     assert events == []
 
 
@@ -110,7 +117,7 @@ def test_up_health_gate_timeout_starts_nothing(wired, monkeypatch):
     monkeypatch.setattr(cli, "_qdrant_ready", lambda s: False)
     result = runner.invoke(cli.app, ["up", "--timeout", "0"])
     assert result.exit_code == 1
-    assert "timed out" in result.output
+    assert "timed out" in _flat(result.output)
     assert "serve" not in events
     assert not any(_is_loop_start(e) for e in events)
 
@@ -197,7 +204,7 @@ def test_refresh_skips_when_already_running(monkeypatch):
     monkeypatch.setattr(jobs, "_spawn", lambda name, argv: spawned.append(name) or 1)
     result = runner.invoke(cli.app, ["refresh"])
     assert result.exit_code == 0
-    assert "already running" in result.output
+    assert "already running" in _flat(result.output)
     assert spawned == []
 
 
@@ -205,7 +212,7 @@ def test_refresh_unknown_source_aborts(monkeypatch):
     monkeypatch.setattr(jobs, "_pids", lambda pattern: [])
     result = runner.invoke(cli.app, ["refresh", "--source", "bogus"])
     assert result.exit_code == 1
-    assert "unknown source" in result.output
+    assert "unknown source" in _flat(result.output)
 
 
 def test_bare_refresh_honors_ingest_disabled(monkeypatch):

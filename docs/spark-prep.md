@@ -1,5 +1,22 @@
 # Spark prep — getting the DGX Spark (192.168.1.237) ready for the windex cutover
 
+> **Historical runbook — section 2 is superseded.** This documents the one-time
+> Mac→Spark cutover as it was actually performed. On **2026-07-24** the corpus moved
+> OFF the CIFS share onto the Spark's local NVMe: `WINDEX_DATA_ROOT` is now
+> `/home/murr/windex-data`, compose binds it to the *same* path inside the container,
+> and no CIFS mount is involved. Do not follow section 2 to set up a new box — mount
+> nothing, just point `WINDEX_DATA_ROOT` at a local directory. The share
+> (`//192.168.1.231/External`) still holds the pre-move archive plus the ad-hoc
+> `pg-dump`/`qdrant-snapshots`/`backups` trees, which were deliberately left there.
+>
+> Why it moved: the share is a general-purpose drive on another machine, so it put a
+> network round-trip in the embed reader's parquet hot path, made the corpus
+> unavailable whenever the Mac was down, and caused the boot race that
+> `ops/reboot/`'s mount guard existed to paper over — and which it lost after the
+> 2026-07-24 power outage, because a house-wide outage reboots the Mac too and its
+> boot time is unbounded from the Spark's point of view. Staging is 31G against 1.7T
+> free locally, so there was never a capacity argument for the share.
+
 Do these BEFORE the Phase 4 cutover (see `docs/search-overhaul-plan.md`). Steps
 that need a password or `sudo` are for **you to run** — the Mac session won't
 handle your password or make privileged system changes.

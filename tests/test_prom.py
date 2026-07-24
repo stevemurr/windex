@@ -140,6 +140,37 @@ def test_windex_repos_matches_seeded_rows(client, pg):
     assert _value(text, "windex_repos", status="candidate") == 1.0
 
 
+def test_storage_ok_goes_zero_when_below_the_reserve(client, settings, monkeypatch):
+    """The reserve is what stops staging from filling the disk that Postgres and
+    Qdrant now share. Assert it actually trips, and that a full disk is reported
+    distinctly from an absent one."""
+    settings.staging_dir.mkdir(parents=True, exist_ok=True)
+    settings.downloads_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(settings, "storage_min_free_bytes", 0)  # disabled
+    prom._scrape_cache.clear()
+    assert _value(client.get("/metrics").text, "windex_storage_ok", tier="staging") == 1.0
+
+    # A reserve no filesystem can satisfy ⇒ not ok, but still reporting its size,
+    # so a dashboard can show how far under it is.
+    monkeypatch.setattr(settings, "storage_min_free_bytes", 1 << 62)
+    prom._scrape_cache.clear()
+    text = client.get("/metrics").text
+    assert _value(text, "windex_storage_ok", tier="staging") == 0.0
+    assert _value(text, "windex_storage_free_bytes", tier="staging") > 0.0
+
+
+def test_storage_ok_is_zero_and_sizeless_when_the_tree_is_missing(client, settings,
+                                                                 monkeypatch):
+    """An absent path must not report 0 bytes free — that reads as a full disk.
+    It reports not-ok with no size series, so the dashboard shows a gap."""
+    monkeypatch.setattr(settings, "data_root", settings.data_root / "does-not-exist")
+    prom._scrape_cache.clear()
+    text = client.get("/metrics").text
+    assert _value(text, "windex_storage_ok", tier="staging") == 0.0
+    assert _value(text, "windex_storage_free_bytes", tier="staging") is None
+
+
 def test_indexing_paused_flips_with_control_value(client, pg):
     assert _value(client.get("/metrics").text, "windex_indexing_paused") == 0.0
     assert client.post("/v1/control/pause").json() == {"indexing": "paused"}
@@ -402,6 +433,12 @@ CONTRACT = {
     "windex_db_up": ("gauge", frozenset()),
     "windex_qdrant_up": ("gauge", frozenset()),
     "windex_qdrant_points": ("gauge", frozenset({"collection"})),
+    # Storage. Added when the corpus moved off the CIFS share onto the local NVMe
+    # (2026-07-24) and staging began sharing a filesystem with pgdata and qdrant.
+    "windex_storage_free_bytes": ("gauge", frozenset({"tier"})),
+    "windex_storage_total_bytes": ("gauge", frozenset({"tier"})),
+    "windex_storage_min_free_bytes": ("gauge", frozenset({"tier"})),
+    "windex_storage_ok": ("gauge", frozenset({"tier"})),
     "windex_http_requests": ("counter", frozenset({"handler", "method", "code"})),
     "windex_http_request_duration_seconds": ("histogram", frozenset({"handler"})),
     "windex_search_requests": ("counter", frozenset({"mode", "result"})),

@@ -33,6 +33,7 @@ disjoint) behind a ~10s cache so an aggressive scraper can't multiply DB load.
 
 import importlib.metadata
 import logging
+import os
 import socket
 import time
 from urllib.parse import urlsplit
@@ -270,6 +271,9 @@ class WindexCollector:
         build.add_metric([version], 1.0)
         yield build
 
+        # --- Storage, probed before Postgres: statvfs is local and cannot hang ---
+        yield from self._storage_metrics(s)
+
         # --- Qdrant, probed independently of Postgres (own never-500 firewall) ---
         yield from self._qdrant_metrics(s)
 
@@ -287,6 +291,59 @@ class WindexCollector:
         db_up.add_metric([], 1.0)
         yield db_up
         yield from families
+
+    def _storage_metrics(self, s: Settings):
+        """Free space and writability of the staging tree.
+
+        This became a first-class signal when the corpus moved off the CIFS share
+        onto the local NVMe (2026-07-24): staging now shares a filesystem with
+        pgdata and qdrant storage, so filling it takes the DATABASE down, not just
+        ingest. `windex_storage_ok` is the direct replacement for the old
+        "is the mount there" question — it answers "can this box still stage text",
+        which covers a missing path, a read-only remount, AND a nearly-full disk.
+
+        `statvfs` is a local syscall on a local path: no network, no timeout, so
+        this runs ahead of the Postgres block and cannot itself hang a scrape.
+        """
+        free = GaugeMetricFamily(
+            "windex_storage_free_bytes",
+            "Free bytes on the filesystem backing this storage tier.",
+            labels=["tier"])
+        total = GaugeMetricFamily(
+            "windex_storage_total_bytes",
+            "Total bytes of the filesystem backing this storage tier.",
+            labels=["tier"])
+        reserve = GaugeMetricFamily(
+            "windex_storage_min_free_bytes",
+            "Configured free-space reserve; below this, staging jobs decline to run.",
+            labels=["tier"])
+        ok = GaugeMetricFamily(
+            "windex_storage_ok",
+            "1 if this tier is present, writable and above its free-space reserve.",
+            labels=["tier"])
+
+        for tier, path in (("staging", s.staging_dir), ("downloads", s.downloads_dir)):
+            try:
+                st = os.statvfs(path)
+            except OSError as exc:
+                # Absent or unreadable: report not-ok WITHOUT a free/total series, so
+                # a dashboard shows a gap rather than a misleading 0 bytes free.
+                log.warning("metrics: statvfs(%s) failed: %s", path, exc)
+                ok.add_metric([tier], 0.0)
+                continue
+            free_b = st.f_bavail * st.f_frsize
+            free.add_metric([tier], float(free_b))
+            total.add_metric([tier], float(st.f_blocks * st.f_frsize))
+            reserve.add_metric([tier], float(s.storage_min_free_bytes))
+            writable = os.access(path, os.W_OK)
+            healthy = writable and (s.storage_min_free_bytes <= 0
+                                    or free_b >= s.storage_min_free_bytes)
+            ok.add_metric([tier], 1.0 if healthy else 0.0)
+
+        yield free
+        yield total
+        yield reserve
+        yield ok
 
     def _qdrant_metrics(self, s: Settings):
         """windex_qdrant_up + points per collection. Same never-500 rule as the DB

@@ -1,0 +1,13 @@
+[Unit]
+Description=Re-downconvert the CDI spec whenever nvidia-ctk regenerates it
+Documentation=file:/home/murr/Code/windex/ops/reboot/README.md
+
+[Path]
+# Watch the generated spec itself rather than mirroring nvidia-cdi-refresh.path's
+# module triggers: this fires on the actual cause (the file changed) instead of a
+# proxy for it, and covers a manual `nvidia-ctk cdi generate` too. No feedback
+# loop — the service writes /etc/cdi, never /var/run/cdi.
+PathChanged=/var/run/cdi/nvidia.yaml
+
+[Install]
+WantedBy=multi-user.target

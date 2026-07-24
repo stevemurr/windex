@@ -329,3 +329,62 @@ CREATE TABLE IF NOT EXISTS search_quality (
     detail          jsonb                 -- full by-source / by-leg breakdown
 );
 CREATE INDEX IF NOT EXISTS search_quality_ts_idx ON search_quality (ts);
+
+-- Web-cluster crawls. One row per requested crawl of a seed URL into a custom
+-- source. `recipe` is a FROZEN copy of the settings actually executed, not a
+-- reference to custom_sources.recipe: editing a source's recipe must not rewrite
+-- the history of what past runs did. The worker (`windex crawl-loop`) claims
+-- pending rows FOR UPDATE SKIP LOCKED and heartbeats while running, so a run
+-- whose worker died is reclaimable exactly like a stale warc/arxiv unit.
+CREATE TABLE IF NOT EXISTS crawl_runs (
+    id           bigserial PRIMARY KEY,
+    source       text NOT NULL,          -- custom_sources.name (the crawl's destination)
+    recipe       jsonb NOT NULL,         -- frozen copy of what this run executed
+    status       text NOT NULL DEFAULT 'pending',  -- pending|running|done|failed|cancelled
+    requested_at timestamptz NOT NULL DEFAULT now(),
+    started_at   timestamptz,
+    finished_at  timestamptz,
+    heartbeat_at timestamptz,            -- liveness; cold ⇒ reclaimable to 'pending'
+    stats        jsonb,                  -- {found,fetched,staged,skipped,failed,truncated,…}
+    error        text
+);
+CREATE INDEX IF NOT EXISTS crawl_runs_status_idx ON crawl_runs (status);
+CREATE INDEX IF NOT EXISTS crawl_runs_source_idx ON crawl_runs (source, requested_at DESC);
+
+-- The crawl frontier, persisted rather than held in memory. Two reasons: a
+-- killed run RESUMES instead of restarting from the seed (the same watermark
+-- discipline every other source follows), and the /crawl control page gets
+-- per-URL visibility — including *why* a URL was skipped — for free.
+CREATE TABLE IF NOT EXISTS crawl_urls (
+    run_id  bigint  NOT NULL REFERENCES crawl_runs(id) ON DELETE CASCADE,
+    url     text    NOT NULL,
+    depth   integer NOT NULL,
+    status  text    NOT NULL DEFAULT 'pending',  -- pending|staged|skipped|failed
+    reason  text,                                -- robots | scope | boilerplate | no_text | http | …
+    seq     bigserial,                           -- monotonic: the SSE cursor for tailing transitions
+    PRIMARY KEY (run_id, url)
+);
+CREATE INDEX IF NOT EXISTS crawl_urls_run_status_idx ON crawl_urls (run_id, status);
+CREATE INDEX IF NOT EXISTS crawl_urls_seq_idx ON crawl_urls (run_id, seq);
+-- The documents id this URL produced. Recorded on the frontier rather than held
+-- in memory so `prune` still knows what a RESUMED run covered: an in-memory set
+-- would forget everything staged before the restart and prune would then delete
+-- it. Null for rows that produced no document (skipped/failed/pending).
+ALTER TABLE crawl_urls ADD COLUMN IF NOT EXISTS doc_id text;
+
+-- Runtime-editable source settings. Every built-in source's config otherwise
+-- lives in Settings (pydantic ← .env), which is baked into the container
+-- environment at create time — so changing `wiki_dump` or `hf_request_interval`
+-- meant editing .env, rebuilding the image and recreating containers. A row here
+-- overrides that at run time; see settings_schema.py for WHICH keys may be set
+-- (a declared allowlist — secrets and DSNs are absent by construction) and
+-- config.effective_settings for the precedence.
+--
+-- SPARSE ON PURPOSE: `settings` holds only the keys explicitly changed, so every
+-- untouched key still falls through to .env and then the code default. An
+-- install that never opens the console behaves exactly as it did before.
+CREATE TABLE IF NOT EXISTS source_config (
+    scope      text PRIMARY KEY,          -- source name (wiki|hf|…) or '_global'
+    settings   jsonb NOT NULL DEFAULT '{}',
+    updated_at timestamptz NOT NULL DEFAULT now()
+);

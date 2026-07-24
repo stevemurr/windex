@@ -1,3 +1,6 @@
+import logging
+import threading
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -8,7 +11,16 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="WINDEX_", env_file=".env", extra="ignore")
 
     # Storage. data_root holds everything bulky: downloads, parquet staging.
-    data_root: Path = Path("/Volumes/External/windex")
+    # Local NVMe, never a network share: staging is the source of truth for document
+    # text and is read on the embed hot path. compose binds this to the SAME path
+    # inside the container so it means one thing to a container and to a host CLI.
+    data_root: Path = Path("/home/murr/windex-data")
+    # Free space that must remain on the staging filesystem. Since the move off the
+    # CIFS share, staging shares a filesystem with pgdata and qdrant storage, so a
+    # runaway staging dir is a DATABASE outage rather than a stalled ingest — a worse
+    # failure than the one the move fixed. Jobs that stage new text check this first
+    # and decline rather than fill the disk. 0 disables the check.
+    storage_min_free_bytes: int = 100 * 1024 ** 3   # 100 GiB
     pg_dsn: str = "postgresql://windex:windex@127.0.0.1:5432/windex"
     qdrant_url: str = "http://127.0.0.1:6333"
     # Base URL of the Grafana that scrapes windex's /metrics (the ops box at
@@ -190,6 +202,37 @@ class Settings(BaseSettings):
     hf_request_timeout: float = 30.0
     hf_blog_batch: int = 100                # posts per staged parquet / pause-checked batch
 
+    # --- crawl (arbitrary web clusters from a seed link) ---------------------
+    # Ceilings and defaults for the recipe-driven cluster crawler. A recipe may
+    # tune the per-run knobs below, but never past the *_max ceilings — those are
+    # the operator's guardrail against a recipe (which arrives over the API)
+    # asking for an unbounded crawl. host_interval is deliberately gentler-per-
+    # host than it looks: unlike smallweb's 37.6k strangers, a cluster crawl
+    # hammers ONE host for its whole run, so 2s is the floor, not a target.
+    crawl_host_interval: float = 2.0        # min seconds between hits to the target host
+    crawl_host_interval_min: float = 1.0    # a recipe may not go below this
+    crawl_max_pages: int = 500              # default per-run page budget
+    crawl_max_pages_ceiling: int = 20_000   # a recipe may not exceed this
+    crawl_max_depth: int = 2                # default BFS depth from the seed
+    crawl_max_depth_ceiling: int = 8
+    crawl_robots_ttl: float = 3600.0        # per-host robots.txt cache TTL
+    crawl_max_page_bytes: int = 4_000_000
+    crawl_request_timeout: float = 15.0
+    crawl_batch: int = 50                   # docs per upsert_docs call / pause check
+    crawl_min_chars: int = 200              # drop extractions shorter than this
+    # A soft-404 site (platform.claude.com serves its SPA shell at HTTP 200 for
+    # every unknown path) yields the SAME extracted text for many distinct URLs.
+    # Beyond the seed-hash guard, the Nth sighting of identical extracted text in
+    # one run is dropped as boilerplate rather than staged as a near-duplicate.
+    # 2 = drop from the SECOND sighting on, keeping the first. It was briefly 3,
+    # which let two junk shells through on every crawl of such a site before the
+    # guard engaged — defeating the point of having it. Two different canonical
+    # URLs with byte-identical body text are chrome or an alias in practice, and
+    # min_chars has already screened out trivially short pages by this point.
+    crawl_boilerplate_repeat: int = 2
+    crawl_loop_idle_seconds: float = 5.0    # crawl-loop poll interval when no run is pending
+    crawl_stale_minutes: int = 30           # heartbeat older than this ⇒ reclaimable
+
     github_tokens: str = ""  # comma-separated PATs for hydration
 
     # Threads draining Qdrant upserts in the embed pass. The embed workers hand
@@ -303,5 +346,126 @@ class Settings(BaseSettings):
         return [s.strip() for s in self.hf_roots.split(",") if s.strip()]
 
 
+# The source this process is working on, if it is a single-source job. Set once
+# at CLI-group entry (`windex hf …` → "hf"), so every `get_settings()` inside
+# that process resolves that source's overrides without threading a scope
+# argument through dozens of call sites. A refresh chain runs one source per
+# process, so a module-level value is exactly the right granularity.
+_active_scope: str | None = None
+
+
+def use_scope(scope: str | None) -> None:
+    global _active_scope
+    _active_scope = scope
+
+
 def get_settings() -> Settings:
-    return Settings()
+    """Settings for this process: env, plus any runtime overrides for the global
+    scope and (if bound) the active source. Cheap — the override map is TTL
+    cached and a cache hit adds only a dict merge."""
+    return effective_settings(_active_scope)
+
+
+# --- runtime-editable settings ----------------------------------------------
+# Per-source config used to live only in .env, which containers read at CREATE
+# time — so retuning `hf_request_interval` meant rebuild + recreate. A row in
+# `source_config` now overrides that at run time. Precedence is
+#
+#     DB override  >  env / .env  >  code default
+#
+# which falls straight out of pydantic-settings: init kwargs outrank env, so
+# `Settings(**overrides)` IS the resolution. Everything not overridden keeps
+# reading from env exactly as before, which is what makes this additive.
+
+_OVERRIDE_TTL = 30.0
+_override_cache: dict[str, object] = {"at": 0.0, "values": {}}
+_override_lock = threading.Lock()
+_override_warned = False
+
+
+def _fetch_overrides(dsn: str) -> dict[str, dict]:
+    """All scopes' overrides in one query: ``{scope: {key: value}}``."""
+    import psycopg
+
+    with psycopg.connect(dsn, connect_timeout=5) as conn, conn.cursor() as cur:
+        cur.execute("SELECT scope, settings FROM source_config")
+        return {row[0]: (row[1] or {}) for row in cur.fetchall()}
+
+
+def load_overrides(dsn: str | None = None, *, refresh: bool = False) -> dict[str, dict]:
+    """Cached override map. TTL'd because `get_settings()` is called per request
+    and this must not become a database round-trip on the hot path.
+
+    A database failure is NON-FATAL: config resolution sits on the path of
+    literally every request and job, so a Postgres blip must never take the
+    process down. It returns the LAST KNOWN map rather than an empty one —
+    reverting a running fleet to env values mid-outage would silently undo
+    whatever was tuned, which is a worse failure than carrying on with the last
+    good config. Only a process that never managed a successful load falls back
+    to env alone. Warns once, not per call.
+    """
+    global _override_warned
+    now = time.monotonic()
+    with _override_lock:
+        if not refresh and now - float(_override_cache["at"]) < _OVERRIDE_TTL:
+            return dict(_override_cache["values"])  # type: ignore[arg-type]
+    dsn = dsn or Settings().pg_dsn
+    try:
+        values = _fetch_overrides(dsn)
+        _override_warned = False
+    except Exception as exc:  # noqa: BLE001 — see docstring: degrade, never die
+        if not _override_warned:
+            _override_warned = True
+            logging.getLogger("windex.config").warning(
+                "source_config unreadable (%s); using env settings only", exc)
+        return dict(_override_cache["values"])  # type: ignore[arg-type]
+    with _override_lock:
+        _override_cache["at"], _override_cache["values"] = now, values
+    return dict(values)
+
+
+def invalidate_overrides(*, clear: bool = False) -> None:
+    """Expire the cache so the next read is live — called right after a write so
+    the API reflects an edit immediately instead of up to a TTL later.
+
+    ``clear=True`` also discards the cached VALUES, giving a genuinely cold
+    start. That distinction matters because a failed refresh falls back to the
+    last known map (see load_overrides): expiring alone keeps that safety net,
+    clearing removes it.
+    """
+    with _override_lock:
+        _override_cache["at"] = 0.0
+        if clear:
+            _override_cache["values"] = {}
+
+
+def effective_settings(scope: str | None = None, *, dsn: str | None = None) -> Settings:
+    """Settings with the global overrides applied, plus ``scope``'s if given.
+
+    Jobs and loops call this at the start of a run/cycle rather than holding a
+    Settings from process start, which is what lets an edit land without a
+    restart. Global first, then the source's, so a per-source key always wins
+    over a global one of the same name (none overlap today; the ordering is the
+    contract if one ever does).
+    """
+    from windex.settings_schema import GLOBAL, coerce
+
+    overrides = load_overrides(dsn)
+    merged: dict = {}
+    for key in ([GLOBAL, scope] if scope else [GLOBAL]):
+        merged.update(overrides.get(key) or {})
+    if not merged:
+        return Settings()
+    # Re-validate on READ, not just on write: a row could have been written by an
+    # older schema, edited by hand in psql, or restored from a backup. A bad value
+    # here would be applied to every job, so drop what no longer validates rather
+    # than trusting the database.
+    clean = {}
+    for key, value in merged.items():
+        owner = GLOBAL if key in (overrides.get(GLOBAL) or {}) else scope
+        try:
+            clean[key] = coerce(owner or GLOBAL, key, value)
+        except ValueError:
+            logging.getLogger("windex.config").warning(
+                "ignoring unusable source_config value %s=%r", key, value)
+    return Settings(**clean)

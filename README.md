@@ -294,6 +294,60 @@ uv run windex hf embed    # embed staged pages into the hf collection
 > and link to the unversioned canonical URL the page itself declares. See
 > [`docs/huggingface-source.md`](docs/huggingface-source.md).
 
+### Crawl an arbitrary web cluster
+
+Point windex at one link and it indexes that corner of the web as a searchable
+source — no per-site code. Drive it from the **`/manage` console** (Crawl tab;
+`/crawl` still redirects there), the API, or the CLI:
+
+```sh
+uv run windex crawl --source claude_cookbook \
+  --seed https://platform.claude.com/cookbook/ --max-depth 1
+```
+
+```sh
+# Same thing over the API (write-token gated); windex-loop-crawl executes it.
+curl -X POST :8100/v1/crawl -H "Authorization: Bearer $WINDEX_WRITE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"claude_cookbook","seed":"https://platform.claude.com/cookbook/",
+       "limits":{"max_depth":1}}'
+```
+
+Every call reduces to a **recipe** — seeds, scope rules, limits — stored on the
+source so a cluster is re-crawlable and schedulable, and frozen into each run so
+history stays truthful when the recipe is later edited. A crawled cluster is just
+a custom source: it reuses the same parquet staging, `text_hash` ledger, Qdrant
+collection and embed loop as everything else, so re-crawling unchanged pages
+costs no re-embedding.
+
+> **Scope defaults to the seed's own directory**, not the whole host — the
+> surprising-and-expensive reading of "crawl this cluster". `same_host`, a path
+> prefix, and include/exclude regexes narrow it further; `max_pages` is a hard
+> stop that marks the run `truncated` rather than reporting a clean finish.
+>
+> **Two hazards this handles that a naive crawler does not.** Some sites answer
+> HTTP 200 with the same shell page for *every* unknown path (the Claude cookbook
+> does), so 404s cannot prune and the shell would be indexed once per bad URL —
+> pages whose extracted text matches a seed's, or that repeat within a run, are
+> dropped as boilerplate. And trafilatura declines some legitimate doc pages
+> outright (2 of 84 on the cookbook, ~4,700 words each), so a structural
+> extractor rescues what it drops rather than losing them silently.
+>
+> **Self-cleaning is opt-in** (`dedup.prune`). By default a crawl only ever adds
+> and updates, so narrowing a recipe's scope leaves the previous scope's pages
+> indexed forever. With `prune` on, pages the run did not reach are tombstoned —
+> but only when the run is a trustworthy census: it refuses on a cancelled run, a
+> run that hit `max_pages`, one with any failed page, or one that produced no
+> documents at all. An incomplete crawl is never read as proof a page is gone, so
+> a transient 502 or a too-low page budget cannot silently delete a corpus. The
+> reason it declined is reported as `prune_skipped`.
+>
+> Because the seed URL comes from an API caller, the fetcher rejects any target
+> resolving to a loopback, private, or link-local address — re-checked after every
+> redirect, not just on the seed — so a crawl can never be pointed at Postgres,
+> Qdrant, or cloud instance metadata. robots.txt is always honoured; there is no
+> override.
+
 ### Keep it fresh
 
 Every job is idempotent — a rerun is a no-op, a crashed run resumes from its watermark.

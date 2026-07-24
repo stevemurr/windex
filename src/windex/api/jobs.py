@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+from windex.schema.param import Param as SchemaParam
+
 LOG_DIR = Path.home() / ".windex" / "logs"
 VENV_BIN = Path(sys.executable).parent
 PROJECT_ROOT = VENV_BIN.parent.parent
@@ -23,12 +25,41 @@ PROJECT_ROOT = VENV_BIN.parent.parent
 
 @dataclass(frozen=True)
 class Param:
+    """One job argument: a CLI flag plus the bounds its value must satisfy.
+
+    Deliberately NOT `windex.schema.Param`, because the validation rule differs and
+    the difference is the point: a settings value is CLAMPED to the operator's bound
+    (a form submit shouldn't fail over a typo), whereas a job argument someone typed
+    is REJECTED when out of range (`build_argv`) — silently running a different job
+    than the one requested is worse than an error. What they do share is how a client
+    renders the control, which is what `to_param` emits.
+    """
+
     flag: str
     kind: str  # int | date | choice
     lo: int = 0
     hi: int = 0
     choices: tuple[str, ...] = ()
     default: object = None
+
+    def to_param(self, key: str) -> SchemaParam:
+        """The shared form-schema view, for `/v1/jobs` and the Swift SchemaForm.
+
+        `lo`/`hi` default to 0 here and are only meaningful for `int`, so they are
+        passed through only for that kind — otherwise every date and choice control
+        would advertise a bogus 0..0 range.
+        """
+        numeric = self.kind == "int"
+        return SchemaParam(
+            key=key,
+            kind=self.kind,
+            lo=self.lo if numeric else None,
+            hi=self.hi if numeric else None,
+            choices=self.choices,
+            default=self.default,
+            label=key.replace("_", " ").capitalize(),
+            enforce="reject",   # build_argv raises rather than clamping
+        )
 
 
 @dataclass(frozen=True)
@@ -238,8 +269,9 @@ def list_jobs() -> list[dict]:
             "name": job.name, "title": job.title, "description": job.description,
             "category": job.category, "running": bool(pids), "pids": pids,
             "confirm": job.confirm,
-            "params": {k: {"kind": p.kind, "default": p.default,
-                           "choices": list(p.choices)} for k, p in job.params.items()},
+            # The shared form-schema shape (a superset of the old
+            # {kind, default, choices}, so existing readers keep working).
+            "params": {k: p.to_param(k).describe() for k, p in job.params.items()},
             "last_log": _log_tail(job.name),
         })
     return out

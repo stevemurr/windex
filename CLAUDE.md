@@ -7,10 +7,19 @@ and link to things. Full design/plan: `~/.claude/plans/i-want-to-build-functiona
 - **Everything self-hosted and open source.** No proprietary SaaS (no BigQuery, no hosted
   query services). Only external touchpoints: Common Crawl bucket, GH Archive downloads,
   GitHub API for README hydration.
-- **This machine uses Apple's `container` CLI, not Docker.** Services via `scripts/dev.sh
-  up|down|status|psql`. There is no compose; don't add docker-compose workflows.
-- **Bulk downloads and parquet staging live on `/Volumes/External/windex`** (WINDEX_DATA_ROOT).
-  Never stage large files on the internal disk or in /tmp.
+- **Production is Linux + rootless podman-compose** on the Spark (DGX GB10), project `windex`,
+  via `compose.yaml` + `Containerfile`. The image BAKES the source (`COPY src ./src`), so a
+  code change needs a rebuild + recreate, not a restart. `scripts/dev.sh` and Apple's
+  `container` CLI are the old macOS dev path — don't treat them as the deployment.
+- **All bulk data is on the local NVMe**, never a network share and never /tmp:
+  `WINDEX_DATA_ROOT` (default `/home/murr/windex-data`) holds parquet staging + downloads;
+  `WINDEX_STACK_DATA` (default `/home/murr/windex-stack`) holds pgdata + qdrant storage.
+  compose binds `WINDEX_DATA_ROOT` to the **same path** inside the container, so it means one
+  thing everywhere. Staging is the source of truth for document text and is read on the embed
+  hot path, so keep it local — it was on a CIFS share until 2026-07-24 and that put a network
+  round-trip in that path plus a boot race in the startup sequence.
+  `documents.text_ref` is stored RELATIVE to `staging_dir`, so relocating the tree is an rsync
+  plus a `WINDEX_DATA_ROOT` change — never a ledger rewrite.
 - **The embedding model is user-supplied** (WINDEX_EMBED_* in .env). Never hardcode a model;
   everything flows through the `Embedder` interface (src/windex/embed/). Extracted text and
   embeddings are persisted to parquet so a model swap is re-embed + Qdrant alias flip, never
@@ -24,7 +33,8 @@ and link to things. Full design/plan: `~/.claude/plans/i-want-to-build-functiona
 - Pipeline reuses datatrove (FineWeb blocks) — don't hand-roll extraction/quality/dedup.
 
 ## Commands
-- `scripts/dev.sh up` — start postgres:5432 + qdrant:6333
+- `podman-compose -p windex -f compose.yaml up -d` — the whole stack (prod)
+- `scripts/dev.sh up` — macOS dev only: postgres:5432 + qdrant:6333
 - Metrics: `windex serve` exposes Prometheus `/metrics` on :8100, scraped by the user's self-hosted Prometheus/Grafana on 192.168.1.237 (config to paste in `ops/`).
 - `uv run windex init-db` / `health` / `ensure-collections`
 - `uv run pytest`

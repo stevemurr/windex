@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import time
 import uuid
 
@@ -6,12 +7,13 @@ import orjson
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Header, Query
-from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.responses import (HTMLResponse, RedirectResponse, Response,
+                               StreamingResponse)
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from fastapi import Body
@@ -27,7 +29,12 @@ STARTED_AT = time.time()  # serve-process uptime for the console
 # used below for the SSE stream, which is hand-assembled outside response
 # serialization (measured 5.8-9.4x over stdlib dumps there, 2026-07-19).
 app = FastAPI(title="windex", version="0.1.0",
-              description="Self-hosted web index for search agents")
+              description="Self-hosted web index for search agents",
+              # Operation ids become the handler name, so a generated client gets
+              # `search(...)` rather than FastAPI's default `searchV1SearchGet(...)`.
+              # Names must stay unique across routes — tests/test_api.py asserts it,
+              # because a collision silently drops an operation from the schema.
+              generate_unique_id_function=lambda route: route.name)
 
 
 @app.get("/", include_in_schema=False)
@@ -120,6 +127,23 @@ class MemoryPush(BaseModel):
     chunks: list[MemoryChunk] = Field(default_factory=list)
 
 
+def _bearer_ok(authorization: str | None, token: str) -> bool:
+    """Constant-time bearer check.
+
+    `hmac.compare_digest` rather than `!=`: the timing signal is not a realistic
+    threat on a trusted LAN, but it costs one line, and the previous form also
+    compared the whole `"Bearer <tok>"` string — so it was case-sensitive about
+    the scheme, which RFC 7235 says it must not be, and rejected an otherwise
+    valid `bearer <tok>`.
+    """
+    if not authorization:
+        return False
+    scheme, _, value = authorization.partition(" ")
+    if scheme.lower() != "bearer":
+        return False
+    return hmac.compare_digest(value.strip().encode(), token.encode())
+
+
 def require_write_token(authorization: str | None = Header(None)) -> None:
     """Bearer-token gate for the /v1/memory/* write side. No-op when
     WINDEX_WRITE_TOKEN is empty (open, trusted-LAN default); otherwise the
@@ -127,7 +151,7 @@ def require_write_token(authorization: str | None = Header(None)) -> None:
     token = get_settings().write_token
     if not token:
         return
-    if authorization != f"Bearer {token}":
+    if not _bearer_ok(authorization, token):
         raise HTTPException(401, "missing or invalid write token")
 
 
@@ -586,6 +610,266 @@ async def events(ticks: int | None = Query(None, ge=1, le=100)) -> StreamingResp
             if ticks is not None and n >= ticks:
                 return
             await asyncio.sleep(2)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# --- source settings: runtime-editable per-source config ---------------------
+# Reads are open like the rest of the console API; writes are write-token gated.
+# The editable surface is the allowlist in settings_schema — secrets and DSNs are
+# absent from it by construction, so they cannot be reached through here.
+
+
+class SettingsPatch(BaseModel):
+    values: dict
+
+
+@app.get("/v1/settings")
+def source_settings_all() -> dict:
+    """Every scope: field schema, effective value, and where the value came
+    from (default | env | db)."""
+    return {"scopes": service.all_source_settings(get_settings())}
+
+
+@app.get("/v1/settings/{scope}")
+def source_settings_get(scope: str) -> dict:
+    out = service.source_settings(get_settings(), scope)
+    if out is None:
+        raise HTTPException(404, f"no editable settings for scope: {scope}")
+    return out
+
+
+@app.patch("/v1/settings/{scope}", dependencies=[Depends(require_write_token)])
+def source_settings_patch(scope: str, body: SettingsPatch) -> dict:
+    """Set one or more overrides. 422 for an unknown key, a key belonging to a
+    different scope, or a value of the wrong type; numbers are clamped to their
+    declared range rather than rejected."""
+    try:
+        out = service.patch_source_settings(get_settings(), scope, body.values)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    if out is None:
+        raise HTTPException(404, f"no editable settings for scope: {scope}")
+    return out
+
+
+@app.delete("/v1/settings/{scope}/{key}",
+            dependencies=[Depends(require_write_token)])
+def source_settings_revert(scope: str, key: str) -> dict:
+    """Drop one override so the key falls back to env, then the code default."""
+    try:
+        out = service.revert_source_setting(get_settings(), scope, key)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    if out is None:
+        raise HTTPException(404, f"no editable settings for scope: {scope}")
+    return out
+
+
+# --- crawl: index an arbitrary web cluster from a seed link ------------------
+# Writes (start/cancel) are write-token gated like /v1/sources mutations; reads
+# stay open like the rest of the console API. A crawl runs for minutes, so the
+# POST only QUEUES it — windex-loop-crawl executes it — and the control page at
+# /crawl follows progress over SSE.
+
+
+# The recipe sections, typed. These were `dict` — which meant a misspelled key
+# was silently DROPPED: `{"scope": {"path_prfix": "/docs/"}}` validated, parsed to
+# an empty scope, and crawled the whole host. `extra="forbid"` turns that into a
+# 422 naming the bad key. It also makes the recipe visible in the OpenAPI schema,
+# which a generated client needs in order to express a crawl at all.
+#
+# Every field is `| None` and dumping uses `exclude_none=True`, because in
+# `crawl.recipe.parse` an ABSENT key and a null one are not the same thing:
+# `drop_boilerplate` defaults to True when missing, and `path_prefix` missing
+# means "the seed's own directory" while an explicit "" means "the whole host".
+# Dropping nulls keeps "unset" unset, so those defaults still apply.
+#
+# Bounds deliberately live in `crawl.recipe.parse`, not here: it clamps to the
+# operator's ceilings, and duplicating the numbers in a second place is how the
+# two drift apart.
+
+class CrawlScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    same_host: bool | None = None
+    path_prefix: str | None = None
+    include: list[str] | None = None
+    exclude: list[str] | None = None
+
+
+class CrawlLimits(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    max_pages: int | None = None
+    max_depth: int | None = None
+    host_interval: float | None = None
+    request_timeout: float | None = None
+    max_page_bytes: int | None = None
+
+
+class CrawlExtract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    quality_filters: bool | None = None
+    min_chars: int | None = None
+
+
+class CrawlDedup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    drop_boilerplate: bool | None = None
+    prune: bool | None = None
+
+
+class _RecipeBody(BaseModel):
+    """The inline recipe shared by start and preview.
+
+    `seed` is accepted as a singular alias for `seeds` so a one-link crawl — the
+    headline use case — needs no array syntax. `version` is accepted because the
+    console's "Re-run" posts a stored recipe back verbatim, and `Recipe.to_dict()`
+    includes it; without it, `extra="forbid"` would break re-run.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: int | None = None
+    seed: str | None = None
+    seeds: list[str] | None = None
+    scope: CrawlScope | None = None
+    limits: CrawlLimits | None = None
+    extract: CrawlExtract | None = None
+    dedup: CrawlDedup | None = None
+
+    # ClassVar, not a field: pydantic would otherwise make an underscore-annotated
+    # attribute a private attr, and a plain annotation a request body key.
+    NOT_RECIPE: ClassVar[tuple[str, ...]] = ()
+
+    def recipe(self) -> dict:
+        return {k: v for k, v in self.model_dump(exclude_none=True).items()
+                if k not in self.NOT_RECIPE}
+
+
+class CrawlStart(_RecipeBody):
+    source: str                       # custom-source name (created if absent)
+    title: str = ""
+    description: str = ""
+
+    NOT_RECIPE: ClassVar[tuple[str, ...]] = ("source", "title", "description")
+
+
+class CrawlPreview(_RecipeBody):
+    pass
+
+
+@app.get("/manage", include_in_schema=False)
+def manage_console() -> HTMLResponse:
+    """Source settings + crawling — its own space, not a dashboard tab."""
+    return HTMLResponse(
+        files("windex.api").joinpath("static/manage.html").read_text(),
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/crawl", include_in_schema=False)
+def crawl_console() -> RedirectResponse:
+    """The crawl page became a tab of /manage. Redirect rather than drop it —
+    this URL is already bookmarked and referenced in the README."""
+    return RedirectResponse("/manage#crawl", status_code=308)
+
+
+@app.post("/v1/crawl/preview", dependencies=[Depends(require_write_token)])
+async def crawl_preview(body: CrawlPreview) -> dict:
+    """Dry run: fetch only the seed(s) and report what WOULD be crawled.
+
+    Write-gated despite writing nothing — it makes the server issue outbound
+    requests to a caller-chosen host, which is the same capability as starting a
+    crawl and should carry the same gate.
+    """
+    try:
+        return await run_in_threadpool(service.crawl_preview, get_settings(), body.recipe())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@app.post("/v1/crawl", dependencies=[Depends(require_write_token)], status_code=202)
+async def crawl_start(body: CrawlStart) -> dict:
+    """Queue a crawl. 202 + {run_id} — the worker picks it up; 422 on a bad
+    recipe or source name."""
+    try:
+        return await run_in_threadpool(
+            service.crawl_start, get_settings(), body.source, body.recipe(),
+            body.title, body.description)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@app.get("/v1/crawl/runs")
+def crawl_runs(source: str | None = None,
+               limit: int = Query(50, ge=1, le=200)) -> dict:
+    return {"runs": service.crawl_runs(get_settings(), source, limit)}
+
+
+@app.get("/v1/crawl/runs/{run_id}")
+def crawl_run_get(run_id: int) -> dict:
+    run = service.crawl_run_get(get_settings(), run_id)
+    if run is None:
+        raise HTTPException(404, f"no such crawl run: {run_id}")
+    return run
+
+
+@app.post("/v1/crawl/runs/{run_id}/cancel", dependencies=[Depends(require_write_token)])
+def crawl_cancel(run_id: int) -> dict:
+    out = service.crawl_cancel(get_settings(), run_id)
+    if out is None:
+        raise HTTPException(409, "run is not pending or running")
+    return out
+
+
+@app.get("/v1/crawl/runs/{run_id}/events")
+async def crawl_events(run_id: int,
+                       ticks: int | None = Query(None, ge=1, le=10_000)
+                       ) -> StreamingResponse:
+    """SSE for one crawl: `run` (status + stats) each tick, `urls` for frontier
+    rows that reached a terminal state since the last event. Same shape as
+    /v1/events; `ticks` bounds the stream for tests.
+
+    URLs are streamed by a monotonic `seq` cursor rather than re-sent wholesale,
+    so a long crawl's stream stays O(new rows) instead of O(frontier) per tick.
+    The stream ends on its own once the run is finished AND its backlog has been
+    flushed — an EventSource that closes cleanly is what stops the browser
+    reconnecting forever to a run that ended.
+    """
+    settings = get_settings()
+
+    async def gen():
+        cursor, n, finished_seen = 0, 0, False
+        while True:
+            run = await run_in_threadpool(service.crawl_run_get, settings, run_id)
+            if run is None:
+                yield f"event: error\ndata: {orjson.dumps({'error': 'unknown run'}).decode()}\n\n"
+                return
+            yield f"event: run\ndata: {orjson.dumps(run).decode()}\n\n"
+            while True:
+                rows = await run_in_threadpool(service.crawl_run_urls, settings,
+                                               run_id, cursor, 200)
+                if not rows:
+                    break
+                cursor = rows[-1]["seq"]
+                yield f"event: urls\ndata: {orjson.dumps(rows).decode()}\n\n"
+                if len(rows) < 200:
+                    break
+            n += 1
+            if ticks is not None and n >= ticks:
+                return
+            # One extra pass after the terminal status so the last transitions
+            # are delivered before the stream closes.
+            if run["status"] in ("done", "failed", "cancelled"):
+                if finished_seen:
+                    yield "event: end\ndata: {}\n\n"
+                    return
+                finished_seen = True
+            await asyncio.sleep(1)
 
     return StreamingResponse(
         gen(),

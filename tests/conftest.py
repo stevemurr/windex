@@ -47,7 +47,10 @@ def pg(pg_dsn):
         cur.execute(
             "TRUNCATE documents, warc_files, repos, gharchive_files, gh_shards, minhash_bands, "
             "control, wiki_dumps, arxiv_windows, feeds, docsets, hn_windows, "
-            "hf_roots, hf_posts, search_metrics, custom_sources"
+            "hf_roots, hf_posts, search_metrics, custom_sources, "
+            # crawl_urls FKs crawl_runs; both are listed so the truncate needs no
+            # CASCADE (which would silently reach tables not named here).
+            "crawl_runs, crawl_urls"
         )
     conn.commit()
     yield conn

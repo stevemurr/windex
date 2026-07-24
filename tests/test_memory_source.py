@@ -22,6 +22,31 @@ CID = "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
 OTHER_CID = "11111111-2222-3333-4444-555555555555"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_alias(monkeypatch):
+    """Never let a test resolve a live `<source>_current` alias.
+
+    AUTOUSE, not per-test, because the failure mode is someone forgetting: the
+    destructive tests below each patched this individually and the search round
+    trip did not, so it wrote to `memory__pytest-model` and then searched through
+    `memory_current` — production's collection — and could never find its own doc.
+
+    The dangerous half is worse than a wrong assertion. `ensure_collection` points
+    `<source>_current` at the collection it just made whenever that alias does not
+    exist yet (windex/index/qdrant.py:118), so on a fresh box or in CI an unpatched
+    run creates `memory_current -> memory__pytest-model`, and the session-scoped
+    qclient teardown then deletes that collection and takes the alias with it —
+    production memory search silently returns nothing until the next embed pass.
+    Same class of bug as the one recorded in tests/test_hf_embed.py, which a test
+    once hit for real through `arxiv_current`.
+
+    The `f"{s}_pytest_alias"` shape is load-bearing: it must stay a function of the
+    source, or a `source="all"` fan-out resolves every source to one collection.
+    """
+    monkeypatch.setattr("windex.index.qdrant.alias_name",
+                        lambda source: f"{source}_pytest_alias")
+
+
 def _chunk(index: int, text: str, ended_at: datetime | None = None) -> dict:
     return {"index": index, "text": text, "started_at": None,
             "ended_at": ended_at, "message_range": None}

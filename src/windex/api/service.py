@@ -1353,3 +1353,273 @@ def get_stats(settings: Settings, ttl: float = _PG_STATS_TTL) -> dict:
     # when this (qdrant + heavy-pg) call is slow/cold.
     stats["links"] = {"grafana": settings.grafana_url}
     return stats
+
+
+# --- crawl (recipe-driven web-cluster crawls) --------------------------------
+# Thin wrappers like the custom-source block above: validation lives in
+# crawl.recipe (ValueError → 422 at the route), execution lives in the
+# windex-loop-crawl worker. Nothing here fetches anything except `crawl_preview`,
+# which is a deliberate, bounded, synchronous exception (see its docstring).
+
+def crawl_start(settings: Settings, source: str, recipe_body: dict,
+                title: str = "", description: str = "") -> dict:
+    """Register the source if new, persist the recipe on it, queue a run.
+
+    The recipe is stored on the source (so it is re-runnable and schedulable) AND
+    frozen into the run row (so history stays truthful if the source's recipe is
+    later edited). Raises ValueError for a bad name or recipe → 422.
+    """
+    from windex.crawl import recipe as crecipe
+    from windex.crawl import run as crun
+    from windex.custom_source import registry
+
+    parsed = crecipe.parse(recipe_body, settings)
+    with db.pooled(settings.pg_dsn) as conn:
+        if registry.get(conn, source) is None:
+            registry.create(conn, source, title or source, description,
+                            parsed.to_dict())
+        else:
+            registry.update(conn, source, recipe=parsed.to_dict())
+        run_id = crun.create_run(conn, source, parsed)
+    return {"run_id": run_id, "source": source, "recipe": parsed.to_dict()}
+
+
+def crawl_preview(settings: Settings, recipe_body: dict, limit: int = 200) -> dict:
+    """Dry run: fetch ONLY the seeds and report what would be crawled.
+
+    Synchronous on purpose — it is bounded to the seed pages themselves (a
+    handful of requests), which is what makes it usable as the tuning loop in the
+    control page. It writes nothing: no source, no run, no documents.
+    """
+    from windex.crawl import fetch as cfetch
+    from windex.crawl import recipe as crecipe
+    from windex.crawl.links import extract_links
+    from windex.crawl.run import extract_page
+    from windex.crawl.scope import in_scope, suggest_prefix
+
+    parsed = crecipe.parse(recipe_body, settings)
+    seed = parsed.seeds[0]
+    client = cfetch.build_client(parsed)
+    try:
+        fetcher = cfetch.build_fetcher(client, settings, parsed)
+        in_scope_urls: list[str] = []
+        rejected: dict[str, int] = {}
+        prefix_rejects: list[str] = []
+        seeds_out, sample = [], None
+        for s in parsed.seeds:
+            body, final_url, reason = fetcher.fetch(s)
+            if body is None:
+                seeds_out.append({"url": s, "ok": False, "reason": reason})
+                continue
+            links = extract_links(body, final_url)
+            for link in links:
+                ok, why = in_scope(link, parsed, seed)
+                if ok:
+                    if link not in in_scope_urls:
+                        in_scope_urls.append(link)
+                else:
+                    rejected[why] = rejected.get(why, 0) + 1
+                    if why == "prefix":
+                        prefix_rejects.append(link)
+            page = extract_page(body, final_url, parsed)
+            seeds_out.append({"url": final_url, "ok": True, "reason": "",
+                              "links": len(links)})
+            if sample is None and page is not None:
+                sample = {"url": final_url, "title": page["title"],
+                          "chars": len(page["text"]),
+                          "excerpt": page["text"][:400]}
+    finally:
+        client.close()
+    # The seed itself is normally among its own links; it is crawled as depth 0
+    # regardless, so exclude it from the "would additionally fetch" count.
+    pages = [u for u in in_scope_urls if u not in parsed.seeds]
+    # Turn the "hub page" shape from a silent zero-page result into an actionable
+    # one: the seed's links all live under some OTHER path, and here it is.
+    suggestion = None
+    hit = suggest_prefix(prefix_rejects) if prefix_rejects else None
+    if hit is not None:
+        suggestion = {"path_prefix": hit[0], "would_add": hit[1]}
+    return {
+        "recipe": parsed.to_dict(),
+        "suggest": suggestion,
+        "seeds": seeds_out,
+        "in_scope": len(pages),
+        "urls": pages[:limit],
+        "truncated": len(pages) > limit,
+        "rejected": rejected,
+        "sample": sample,
+    }
+
+
+def crawl_runs(settings: Settings, source: str | None = None, limit: int = 50) -> list[dict]:
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT id, source, status, requested_at, started_at, finished_at,
+                      stats, error, recipe
+               FROM crawl_runs WHERE (%s::text IS NULL OR source = %s::text)
+               ORDER BY id DESC LIMIT %s""",
+            # The ::text casts are load-bearing: with a bare %s, Postgres cannot
+            # infer a type for a NULL parameter in `%s IS NULL` and raises
+            # IndeterminateDatatype rather than treating it as "no filter".
+            (source, source, limit),
+        )
+        rows = cur.fetchall()
+    return [_crawl_row(r) for r in rows]
+
+
+def _crawl_row(r: tuple) -> dict:
+    return {
+        "id": r[0], "source": r[1], "status": r[2],
+        "requested_at": r[3].isoformat() if r[3] else None,
+        "started_at": r[4].isoformat() if r[4] else None,
+        "finished_at": r[5].isoformat() if r[5] else None,
+        "stats": r[6] or {}, "error": r[7], "recipe": r[8],
+    }
+
+
+def crawl_run_get(settings: Settings, run_id: int) -> dict | None:
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT id, source, status, requested_at, started_at, finished_at,
+                      stats, error, recipe FROM crawl_runs WHERE id = %s""",
+            (run_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        out = _crawl_row(row)
+        cur.execute(
+            "SELECT status, count(*) FROM crawl_urls WHERE run_id = %s GROUP BY status",
+            (run_id,),
+        )
+        out["urls"] = dict(cur.fetchall())
+    return out
+
+
+def crawl_run_urls(settings: Settings, run_id: int, after_seq: int = 0,
+                   limit: int = 200) -> list[dict]:
+    """Frontier rows past `after_seq` — the SSE cursor. Only terminal rows are
+    returned: a 'pending' row has nothing to report yet, and skipping them keeps
+    the stream to actual transitions."""
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT seq, url, depth, status, reason FROM crawl_urls
+               WHERE run_id = %s AND seq > %s AND status <> 'pending'
+               ORDER BY seq LIMIT %s""",
+            (run_id, after_seq, limit),
+        )
+        rows = cur.fetchall()
+    return [{"seq": r[0], "url": r[1], "depth": r[2], "status": r[3], "reason": r[4]}
+            for r in rows]
+
+
+def crawl_cancel(settings: Settings, run_id: int) -> dict | None:
+    """Request cancellation. A pending run stops immediately; a running one stops
+    at its next batch boundary (the worker polls this status), so the response
+    reports the state we set, not a promise the work has already halted."""
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE crawl_runs SET status = 'cancelled', finished_at = "
+            "CASE WHEN status = 'pending' THEN now() ELSE finished_at END "
+            "WHERE id = %s AND status IN ('pending', 'running') RETURNING status",
+            (run_id,),
+        )
+        row = cur.fetchone()
+        conn.commit()
+    if row is None:
+        return None
+    return {"run_id": run_id, "status": row[0]}
+
+
+# --- source settings (runtime-editable config) -------------------------------
+# The console's read/write surface over `source_config`. Validation lives in
+# settings_schema (ValueError → 422 at the route); precedence and caching live in
+# config.effective_settings. Nothing here may widen the allowlist.
+
+def _origin(key: str, base: Settings, overridden: bool) -> str:
+    """Where a value is coming from: db | env | default.
+
+    Without this the console is a trap — after one edit the .env value for that
+    key is silently ignored, and a future debugging session would have no way to
+    see that from the outside.
+    """
+    if overridden:
+        return "db"
+    field = type(base).model_fields.get(key)
+    default = field.default if field is not None else None
+    return "env" if getattr(base, key, None) != default else "default"
+
+
+def source_settings(settings: Settings, scope: str) -> dict | None:
+    """Schema + effective value + origin for one scope. None ⇒ unknown scope."""
+    from windex import settings_schema as schema
+    from windex.config import Settings as S
+    from windex.config import effective_settings, load_overrides
+
+    if scope not in schema.scopes():
+        return None
+    overrides = load_overrides(settings.pg_dsn).get(scope) or {}
+    effective = effective_settings(scope if scope != schema.GLOBAL else None,
+                                   dsn=settings.pg_dsn)
+    base = S()
+    out = []
+    for field in schema.fields_for(scope):
+        out.append({
+            **field.describe(),
+            "value": getattr(effective, field.key, None),
+            "origin": _origin(field.key, base, field.key in overrides),
+        })
+    return {"scope": scope, "fields": out}
+
+
+def all_source_settings(settings: Settings) -> list[dict]:
+    from windex import settings_schema as schema
+
+    return [source_settings(settings, s) for s in schema.scopes()]
+
+
+def patch_source_settings(settings: Settings, scope: str, values: dict) -> dict | None:
+    """Merge validated overrides into a scope. Raises ValueError (→ 422)."""
+    from psycopg.types.json import Jsonb
+
+    from windex import settings_schema as schema
+    from windex.config import invalidate_overrides
+
+    if scope not in schema.scopes():
+        return None
+    clean = schema.coerce_all(scope, values)   # all-or-nothing; never half-applies
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO source_config (scope, settings) VALUES (%s, %s)
+               ON CONFLICT (scope) DO UPDATE
+                 SET settings = source_config.settings || EXCLUDED.settings,
+                     updated_at = now()""",
+            (scope, Jsonb(clean)),
+        )
+        conn.commit()
+    # The read cache is TTL'd; drop it now so the response and the next job see
+    # the edit immediately rather than up to 30s later.
+    invalidate_overrides()
+    return source_settings(settings, scope)
+
+
+def revert_source_setting(settings: Settings, scope: str, key: str) -> dict | None:
+    """Remove one override so the key falls back to env/default."""
+    from windex import settings_schema as schema
+    from windex.config import invalidate_overrides
+
+    if scope not in schema.scopes():
+        return None
+    # Ownership check by scope, not just "is this key editable anywhere" — the
+    # console must not let /wiki/settings revert a key that belongs to _global.
+    if key not in {f.key for f in schema.fields_for(scope)}:
+        raise ValueError(f"setting {key!r} is not editable under scope {scope!r}")
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE source_config SET settings = settings - %s, updated_at = now() "
+            "WHERE scope = %s",
+            (key, scope),
+        )
+        conn.commit()
+    invalidate_overrides()
+    return source_settings(settings, scope)

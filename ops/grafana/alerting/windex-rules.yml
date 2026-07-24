@@ -436,3 +436,53 @@ groups:
             ~0.93). A relevance regression — suspect a model swap, index
             corruption, or a ranking change. Re-run `windex eval` and check the
             Search quality row. Tune the 0.8 threshold to the observed baseline.
+
+      # Staging is nearly full, gone, or read-only. Since the corpus moved off the
+      # CIFS share onto the local NVMe (2026-07-24), staging shares a filesystem
+      # with pgdata and qdrant storage — so filling it takes POSTGRES AND QDRANT
+      # down, not just ingest. This is the successor to "is the mount there": it
+      # covers a missing path, a read-only remount and a nearly-full disk alike.
+      # Critical because the blast radius is the whole data plane, and because the
+      # cure (free space) takes longer than the time between 0 and wedged.
+      - uid: windex-storage-low
+        title: StorageLow
+        condition: C
+        for: 10m
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: REPLACE_WITH_PROMETHEUS_DS_UID
+            model:
+              refId: A
+              expr: min(windex_storage_ok)
+              instant: true
+              range: false
+              editorMode: code
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: lt
+                    params: [1]
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          app: windex
+          severity: critical
+        annotations:
+          summary: "Staging storage is unavailable or below its free-space reserve"
+          description: >-
+            windex_storage_ok == 0 for 10m. The staging tree is missing, not
+            writable, or has less than windex_storage_min_free_bytes free (default
+            100 GiB). Staging shares the NVMe with pgdata and qdrant storage, so
+            this escalates to a Postgres/Qdrant outage if it runs to zero. Check
+            `windex_storage_free_bytes` for the headroom and `df -h /`.

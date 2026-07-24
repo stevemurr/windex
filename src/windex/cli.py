@@ -1,12 +1,20 @@
 import typer
 from rich.console import Console
 
-from windex import db
+from windex import config, db
 from windex.config import get_settings
 
 app = typer.Typer(no_args_is_help=True, help="windex — self-hosted web index for search agents")
 ccnews_app = typer.Typer(no_args_is_help=True, help="CC-News ingestion")
 app.add_typer(ccnews_app, name="ccnews")
+
+
+@ccnews_app.callback()
+def _ccnews_scope() -> None:
+    """Bind this process to the `ccnews` settings scope (config.use_scope),
+    so runtime overrides for this source apply without a redeploy."""
+    config.use_scope("ccnews")
+
 console = Console()
 
 
@@ -160,6 +168,14 @@ gh_app = typer.Typer(no_args_is_help=True, help="GitHub ingestion (GH Archive + 
 app.add_typer(gh_app, name="gh")
 
 
+@gh_app.callback()
+def _gh_scope() -> None:
+    """Bind this process to the `gh` settings scope (config.use_scope),
+    so runtime overrides for this source apply without a redeploy."""
+    config.use_scope("gh")
+
+
+
 @gh_app.command("sync-hours")
 def gh_sync_hours(
     days: int = typer.Option(None, help="Trailing window of hourly files"),
@@ -264,6 +280,14 @@ wiki_app = typer.Typer(no_args_is_help=True, help="Wikipedia ingestion (CirrusSe
 app.add_typer(wiki_app, name="wiki")
 
 
+@wiki_app.callback()
+def _wiki_scope() -> None:
+    """Bind this process to the `wiki` settings scope (config.use_scope),
+    so runtime overrides for this source apply without a redeploy."""
+    config.use_scope("wiki")
+
+
+
 @wiki_app.command("sync")
 def wiki_sync() -> None:
     """Record the newest complete Wikipedia snapshot's shard files as pending."""
@@ -318,6 +342,14 @@ def wiki_status() -> None:
 
 arxiv_app = typer.Typer(no_args_is_help=True, help="arXiv ingestion (OAI-PMH metadata harvest)")
 app.add_typer(arxiv_app, name="arxiv")
+
+
+@arxiv_app.callback()
+def _arxiv_scope() -> None:
+    """Bind this process to the `arxiv` settings scope (config.use_scope),
+    so runtime overrides for this source apply without a redeploy."""
+    config.use_scope("arxiv")
+
 
 
 @arxiv_app.command("harvest")
@@ -386,6 +418,14 @@ smallweb_app = typer.Typer(no_args_is_help=True, help="Small Web ingestion (Kagi
 app.add_typer(smallweb_app, name="smallweb")
 
 
+@smallweb_app.callback()
+def _smallweb_scope() -> None:
+    """Bind this process to the `smallweb` settings scope (config.use_scope),
+    so runtime overrides for this source apply without a redeploy."""
+    config.use_scope("smallweb")
+
+
+
 @smallweb_app.command("sync")
 def smallweb_sync() -> None:
     """Reconcile the feeds table against Kagi's smallweb.txt (idempotent)."""
@@ -444,6 +484,14 @@ def smallweb_status() -> None:
 
 docs_app = typer.Typer(no_args_is_help=True, help="Programming docs ingestion (DevDocs bundles)")
 app.add_typer(docs_app, name="docs")
+
+
+@docs_app.callback()
+def _docs_scope() -> None:
+    """Bind this process to the `docs` settings scope (config.use_scope),
+    so runtime overrides for this source apply without a redeploy."""
+    config.use_scope("docs")
+
 
 
 @docs_app.command("sync")
@@ -508,6 +556,14 @@ def docs_status() -> None:
 
 hn_app = typer.Typer(no_args_is_help=True, help="Hacker News ingestion (Algolia API + parquet mirror)")
 app.add_typer(hn_app, name="hn")
+
+
+@hn_app.callback()
+def _hn_scope() -> None:
+    """Bind this process to the `hn` settings scope (config.use_scope),
+    so runtime overrides for this source apply without a redeploy."""
+    config.use_scope("hn")
+
 
 
 @hn_app.command("harvest")
@@ -620,6 +676,14 @@ def hn_backfill_duplicates() -> None:
 hf_app = typer.Typer(no_args_is_help=True,
                      help="Hugging Face ingestion (huggingface.co docs, courses, blog)")
 app.add_typer(hf_app, name="hf")
+
+
+@hf_app.callback()
+def _hf_scope() -> None:
+    """Bind this process to the `hf` settings scope (config.use_scope),
+    so runtime overrides for this source apply without a redeploy."""
+    config.use_scope("hf")
+
 
 
 @hf_app.command("sync")
@@ -834,10 +898,17 @@ def embed_loop(
         raise typer.Exit(1)
     embed_pending = importlib.import_module(EMBED_SOURCES[source]).embed_pending
 
+    # Bind the process to this source's settings scope, then RE-RESOLVE each
+    # cycle rather than holding one Settings for the life of the loop: that is
+    # what lets an embed knob edited in the console (throttle, concurrency,
+    # order) take effect on the next pass instead of the next redeploy. The
+    # override map is TTL-cached, so this costs a dict merge, not a query.
+    config.use_scope(source)
     settings = get_settings()
     failures = 0
     while True:
         try:
+            settings = get_settings()
             with db.connect(settings.pg_dsn) as conn:
                 # Liveness heartbeat: the containerized loops run in separate
                 # containers, so `windex status`/the console read this instead of
@@ -907,6 +978,112 @@ def scheduler(
         except Exception as exc:  # noqa: BLE001 — a blip must not kill the loop
             console.print(f"[red]scheduler tick failed: {exc}[/red]")
         time_mod.sleep(interval)
+
+
+@app.command("crawl-loop")
+def crawl_loop(
+    interval: float = typer.Option(0.0, help="Seconds between polls (0 = crawl_loop_idle_seconds)"),
+) -> None:
+    """Never-exiting worker: claim queued crawls and execute them.
+
+    Robust like the embed loops and the scheduler: a Postgres blip or a single
+    bad crawl is caught and the loop waits for the next poll. It must NEVER exit
+    on failure — nothing supervises these loops, and a short blip that killed the
+    worker would leave crawls queued forever (the failure mode that stalled
+    indexing ~36h on 2026-07-17).
+
+    Reclaims runs whose worker died before draining the queue: the frontier is
+    persisted, so a reclaimed run resumes from its remaining pending URLs rather
+    than restarting at the seed.
+    """
+    import time as time_mod
+
+    from windex.crawl import recipe as crecipe
+    from windex.crawl import run as crun
+
+    settings = get_settings()
+    idle = interval or settings.crawl_loop_idle_seconds
+    console.print("crawl loop started")
+    while True:
+        try:
+            # Re-resolved per poll so a crawl-default edited in the console
+            # (host interval, page budget, depth) applies to the NEXT claimed
+            # run without restarting this worker.
+            settings = get_settings()
+            with db.connect(settings.pg_dsn) as conn:
+                reclaimed = crun.reclaim_stale(conn, settings)
+                if reclaimed:
+                    console.print(f"[yellow]reclaimed {reclaimed} stale crawl run(s)[/yellow]")
+                claimed = crun.claim_run(conn)
+                if claimed is None:
+                    time_mod.sleep(idle)
+                    continue
+                run_id, source = claimed["id"], claimed["source"]
+                console.print(f"[bold]crawl run {run_id}[/bold] → {source}")
+                try:
+                    # The FROZEN recipe from the run row, not the source's current
+                    # one: a run must execute what it was queued with.
+                    recipe = crecipe.parse(claimed["recipe"], settings)
+                    stats = crun.execute(
+                        conn, settings, run_id, source, recipe,
+                        should_stop=lambda: crun.is_cancelled(conn, run_id),
+                        on_progress=lambda s: crun.heartbeat(conn, run_id, s),
+                    )
+                    status = "cancelled" if crun.is_cancelled(conn, run_id) else "done"
+                    crun.finish(conn, run_id, status, stats)
+                    console.print(f"  {status}: {stats}")
+                except Exception as exc:  # noqa: BLE001 — one bad crawl, not the loop
+                    conn.rollback()
+                    crun.finish(conn, run_id, "failed", {}, str(exc))
+                    console.print(f"[red]crawl run {run_id} failed[/red] ({exc})")
+        except Exception as exc:  # noqa: BLE001 — a DB blip must not kill the loop
+            console.print(f"[red]crawl loop tick failed: {exc}[/red]")
+            time_mod.sleep(idle)
+
+
+@app.command()
+def crawl(
+    source: str = typer.Option(..., help="Custom-source name to index into (created if absent)"),
+    seed: str = typer.Option(..., help="Seed URL — the cluster to crawl"),
+    max_depth: int = typer.Option(2, help="BFS depth from the seed"),
+    max_pages: int = typer.Option(500, help="Hard page budget for the run"),
+    host_interval: float = typer.Option(2.0, help="Min seconds between hits to the host"),
+    path_prefix: str = typer.Option("", help="Scope prefix (default: the seed's directory)"),
+    quality_filters: bool = typer.Option(False, help="Apply the smallweb quality gate"),
+) -> None:
+    """One-shot crawl, run inline. The API + `crawl-loop` are the normal path;
+    this is for local testing and for crawling without the stack up."""
+    from windex.crawl import recipe as crecipe
+    from windex.crawl import run as crun
+    from windex.custom_source import registry
+
+    settings = get_settings()
+    body = {
+        "seeds": [seed],
+        "scope": {"exclude": [r"\.(js|css|woff2?|png|svg|ico|gif|jpg|jpeg|pdf)$"]},
+        "limits": {"max_depth": max_depth, "max_pages": max_pages,
+                   "host_interval": host_interval},
+        "extract": {"quality_filters": quality_filters},
+    }
+    if path_prefix:
+        body["scope"]["path_prefix"] = path_prefix
+    recipe = crecipe.parse(body, settings)
+    with db.connect(settings.pg_dsn) as conn:
+        if registry.get(conn, source) is None:
+            registry.create(conn, source, source, f"Crawled from {seed}", recipe.to_dict())
+            console.print(f"registered source [bold]{source}[/bold]")
+        run_id = crun.create_run(conn, source, recipe)
+        crun.claim_run(conn)
+        console.print(f"crawl run {run_id}: {seed}")
+        try:
+            stats = crun.execute(conn, settings, run_id, source, recipe,
+                                 on_progress=lambda s: crun.heartbeat(conn, run_id, s))
+            crun.finish(conn, run_id, "done", stats)
+        except Exception as exc:
+            crun.finish(conn, run_id, "failed", {}, str(exc))
+            raise
+    console.print(f"[green]{stats}[/green]")
+    console.print("embed with: windex embed-loop custom   (or wait for windex-loop-custom)")
 
 
 @app.command()
