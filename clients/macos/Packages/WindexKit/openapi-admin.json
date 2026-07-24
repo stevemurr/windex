@@ -361,90 +361,6 @@
         "title": "CrawlStart",
         "type": "object"
       },
-      "CustomDoc": {
-        "properties": {
-          "extra": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Extra"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "published_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Published At"
-          },
-          "text": {
-            "title": "Text",
-            "type": "string"
-          },
-          "title": {
-            "default": "",
-            "title": "Title",
-            "type": "string"
-          },
-          "url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
-          }
-        },
-        "required": [
-          "id",
-          "text"
-        ],
-        "title": "CustomDoc",
-        "type": "object"
-      },
-      "DocsDelete": {
-        "properties": {
-          "ids": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Ids",
-            "type": "array"
-          }
-        },
-        "title": "DocsDelete",
-        "type": "object"
-      },
-      "DocsPush": {
-        "properties": {
-          "docs": {
-            "items": {
-              "$ref": "#/components/schemas/CustomDoc"
-            },
-            "title": "Docs",
-            "type": "array"
-          }
-        },
-        "title": "DocsPush",
-        "type": "object"
-      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -456,88 +372,6 @@
           }
         },
         "title": "HTTPValidationError",
-        "type": "object"
-      },
-      "MemoryChunk": {
-        "properties": {
-          "ended_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ended At"
-          },
-          "index": {
-            "minimum": 0.0,
-            "title": "Index",
-            "type": "integer"
-          },
-          "message_range": {
-            "anyOf": [
-              {
-                "maxItems": 2,
-                "minItems": 2,
-                "prefixItems": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "integer"
-                  }
-                ],
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Message Range"
-          },
-          "started_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Started At"
-          },
-          "text": {
-            "title": "Text",
-            "type": "string"
-          }
-        },
-        "required": [
-          "index",
-          "text"
-        ],
-        "title": "MemoryChunk",
-        "type": "object"
-      },
-      "MemoryPush": {
-        "properties": {
-          "chunks": {
-            "items": {
-              "$ref": "#/components/schemas/MemoryChunk"
-            },
-            "title": "Chunks",
-            "type": "array"
-          },
-          "title": {
-            "default": "",
-            "title": "Title",
-            "type": "string"
-          }
-        },
-        "title": "MemoryPush",
         "type": "object"
       },
       "SettingsPatch": {
@@ -552,81 +386,6 @@
           "values"
         ],
         "title": "SettingsPatch",
-        "type": "object"
-      },
-      "SourceCreate": {
-        "properties": {
-          "description": {
-            "default": "",
-            "title": "Description",
-            "type": "string"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "recipe": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Recipe"
-          },
-          "title": {
-            "default": "",
-            "title": "Title",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "title": "SourceCreate",
-        "type": "object"
-      },
-      "SourcePatch": {
-        "properties": {
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "recipe": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Recipe"
-          },
-          "title": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Title"
-          }
-        },
-        "title": "SourcePatch",
         "type": "object"
       },
       "ValidationError": {
@@ -672,17 +431,34 @@
     }
   },
   "info": {
-    "description": "Self-hosted web index for search agents",
-    "title": "windex",
-    "version": "0.1.0"
+    "description": "windex control plane. Separately versioned from the /v1 agent API.",
+    "title": "windex admin",
+    "version": "1.0.0"
   },
   "openapi": "3.1.0",
   "paths": {
     "/v1/activity": {
       "get": {
-        "deprecated": true,
         "description": "Watchable things for the log drawer: actions, loops, services \u2014 with\nrunning state, last activity, and crash flag. Tail any via GET /v1/logs/{name}.",
         "operationId": "activity_state",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -698,6 +474,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Activity State"
@@ -705,7 +491,6 @@
     },
     "/v1/control/{action}": {
       "post": {
-        "deprecated": true,
         "operationId": "control",
         "parameters": [
           {
@@ -719,6 +504,22 @@
               ],
               "title": "Action",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -751,7 +552,6 @@
     },
     "/v1/crawl": {
       "post": {
-        "deprecated": true,
         "description": "Queue a crawl. 202 + {run_id} \u2014 the worker picks it up; 422 on a bad\nrecipe or source name.",
         "operationId": "crawl_start",
         "parameters": [
@@ -811,7 +611,6 @@
     },
     "/v1/crawl/preview": {
       "post": {
-        "deprecated": true,
         "description": "Dry run: fetch only the seed(s) and report what WOULD be crawled.\n\nWrite-gated despite writing nothing \u2014 it makes the server issue outbound\nrequests to a caller-chosen host, which is the same capability as starting a\ncrawl and should carry the same gate.",
         "operationId": "crawl_preview",
         "parameters": [
@@ -871,7 +670,6 @@
     },
     "/v1/crawl/runs": {
       "get": {
-        "deprecated": true,
         "operationId": "crawl_runs",
         "parameters": [
           {
@@ -900,6 +698,22 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -932,7 +746,6 @@
     },
     "/v1/crawl/runs/{run_id}": {
       "get": {
-        "deprecated": true,
         "operationId": "crawl_run_get",
         "parameters": [
           {
@@ -942,6 +755,22 @@
             "schema": {
               "title": "Run Id",
               "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -974,7 +803,6 @@
     },
     "/v1/crawl/runs/{run_id}/cancel": {
       "post": {
-        "deprecated": true,
         "operationId": "crawl_cancel",
         "parameters": [
           {
@@ -1032,7 +860,6 @@
     },
     "/v1/crawl/runs/{run_id}/events": {
       "get": {
-        "deprecated": true,
         "description": "SSE for one crawl: `run` (status + stats) each tick, `urls` for frontier\nrows that reached a terminal state since the last event. Same shape as\n/v1/events; `ticks` bounds the stream for tests.\n\nURLs are streamed by a monotonic `seq` cursor rather than re-sent wholesale,\nso a long crawl's stream stays O(new rows) instead of O(frontier) per tick.\nThe stream ends on its own once the run is finished AND its backlog has been\nflushed \u2014 an EventSource that closes cleanly is what stops the browser\nreconnecting forever to a run that ended.",
         "operationId": "crawl_events",
         "parameters": [
@@ -1062,6 +889,22 @@
               ],
               "title": "Ticks"
             }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
           }
         ],
         "responses": {
@@ -1089,7 +932,6 @@
     },
     "/v1/datasets/{source}/stats": {
       "get": {
-        "deprecated": true,
         "description": "Per-dataset detail (freshness row-click): counts by pipeline status +\ncontent date range.",
         "operationId": "dataset_stats",
         "parameters": [
@@ -1100,6 +942,22 @@
             "schema": {
               "title": "Source",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -1130,50 +988,8 @@
         "summary": "Dataset Stats"
       }
     },
-    "/v1/docs/{doc_id}": {
-      "get": {
-        "operationId": "get_doc",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "doc_id",
-            "required": true,
-            "schema": {
-              "title": "Doc Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Doc",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Doc"
-      }
-    },
     "/v1/events": {
       "get": {
-        "deprecated": true,
         "description": "SSE stream for the dashboard: `stats` every ~2s, `recent` only when it\nchanges, `timeseries` every ~16s. REST endpoints remain the poll/agent API;\n`ticks` bounds the stream for tests.",
         "operationId": "events",
         "parameters": [
@@ -1193,6 +1009,22 @@
                 }
               ],
               "title": "Ticks"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -1221,9 +1053,26 @@
     },
     "/v1/freshness": {
       "get": {
-        "deprecated": true,
         "description": "Per-source indexed/pending counts + last embed-loop activity.",
         "operationId": "freshness_state",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1239,14 +1088,72 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Freshness State"
       }
     },
+    "/v1/health": {
+      "get": {
+        "description": "Unauthenticated liveness + capability probe \u2014 the one open admin route.\n\nA client needs to know a backend exists and whether it wants a token before it\ncan pair, so this answers without one. It deliberately carries no state beyond\nthat: no counts, no config, no source names.",
+        "operationId": "admin_health",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Health",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Health"
+      }
+    },
     "/v1/ingest/{source}": {
       "post": {
-        "deprecated": true,
         "description": "Turn a source's auto-ingest on/off (desired-state). Off means the refresh\nsweep and the scheduler skip fetching it; a manual 'check now' still runs.",
         "operationId": "ingest_set",
         "parameters": [
@@ -1257,6 +1164,22 @@
             "schema": {
               "title": "Source",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -1301,8 +1224,25 @@
     },
     "/v1/jobs": {
       "get": {
-        "deprecated": true,
         "operationId": "jobs_list",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1318,6 +1258,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Jobs List"
@@ -1325,7 +1275,6 @@
     },
     "/v1/jobs/{name}/start": {
       "post": {
-        "deprecated": true,
         "operationId": "jobs_start",
         "parameters": [
           {
@@ -1335,6 +1284,22 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -1379,7 +1344,6 @@
     },
     "/v1/jobs/{name}/stop": {
       "post": {
-        "deprecated": true,
         "operationId": "jobs_stop",
         "parameters": [
           {
@@ -1389,6 +1353,22 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -1421,8 +1401,25 @@
     },
     "/v1/logs": {
       "get": {
-        "deprecated": true,
         "operationId": "logs_list",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1438,6 +1435,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Logs List"
@@ -1445,7 +1452,6 @@
     },
     "/v1/logs/{name}": {
       "get": {
-        "deprecated": true,
         "operationId": "logs_tail",
         "parameters": [
           {
@@ -1506,6 +1512,22 @@
               ],
               "title": "Level"
             }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
           }
         ],
         "responses": {
@@ -1537,9 +1559,26 @@
     },
     "/v1/loops": {
       "get": {
-        "deprecated": true,
         "description": "Per-source loop desired-state + running, and whether the supervisor is\nalive. Lightweight (pgrep + one control read) so the console control panel\ncan poll it responsively, independent of the heavier /v1/stats.",
         "operationId": "loops_state",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1552,6 +1591,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Loops State"
@@ -1559,7 +1608,6 @@
     },
     "/v1/loops/{source}": {
       "post": {
-        "deprecated": true,
         "description": "Turn an embed loop on/off (desired-state). `off` stops it and keeps it off\n\u2014 `windex up` and the watchdog both honor the flag, so it won't come back.",
         "operationId": "loop_set",
         "parameters": [
@@ -1570,6 +1618,22 @@
             "schema": {
               "title": "Source",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -1612,182 +1676,8 @@
         "summary": "Loop Set"
       }
     },
-    "/v1/memory/conversations/{conversation_id}": {
-      "delete": {
-        "description": "Tombstone every chunk of a conversation. Idempotent (deleting nothing \u2192\ndeleted: 0).",
-        "operationId": "memory_delete",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "conversation_id",
-            "required": true,
-            "schema": {
-              "title": "Conversation Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Memory Delete",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Memory Delete"
-      },
-      "post": {
-        "description": "Full-replace one conversation's chat-memory chunks. Returns\n{conversation_id, chunks, staged, skipped, deleted}; staged+deleted>0 means\nwork happened. 422 on a malformed push, 503 when staging isn't writable.",
-        "operationId": "memory_push",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "conversation_id",
-            "required": true,
-            "schema": {
-              "title": "Conversation Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemoryPush"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Memory Push",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Memory Push"
-      }
-    },
-    "/v1/memory/status": {
-      "get": {
-        "description": "Corpus-wide memory rollup: conversation count, chunk counts by status,\nlast embed time. The app's Settings status row + health probe.",
-        "operationId": "memory_status",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Memory Status",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Memory Status"
-      }
-    },
     "/v1/metrics": {
       "get": {
-        "deprecated": true,
         "description": "Search-performance rollup: latency percentiles + hybrid\u2192keyword\ndegradation counts over the trailing window.",
         "operationId": "metrics",
         "parameters": [
@@ -1801,6 +1691,22 @@
               "minimum": 1,
               "title": "Minutes",
               "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -1833,7 +1739,6 @@
     },
     "/v1/recent": {
       "get": {
-        "deprecated": true,
         "operationId": "recent",
         "parameters": [
           {
@@ -1846,6 +1751,22 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -1881,7 +1802,6 @@
     },
     "/v1/recent/embedded": {
       "get": {
-        "deprecated": true,
         "description": "Recently embedded (landed in Qdrant), newest first \u2014 console progress feed.",
         "operationId": "recent_embedded",
         "parameters": [
@@ -1895,6 +1815,22 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -1930,7 +1866,6 @@
     },
     "/v1/recent/indexed": {
       "get": {
-        "deprecated": true,
         "description": "Recently indexed (harvested/staged), newest first \u2014 console progress feed.",
         "operationId": "recent_indexed",
         "parameters": [
@@ -1944,6 +1879,22 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -1979,9 +1930,26 @@
     },
     "/v1/schedule": {
       "get": {
-        "deprecated": true,
         "description": "The editable schedule entries with running + last-run \u2014 what the console\nschedule editor reads (name, kind, target, hour, minute, weekday, enabled).",
         "operationId": "schedule_state",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1997,6 +1965,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Schedule State"
@@ -2004,7 +1982,6 @@
     },
     "/v1/schedule/{name}": {
       "delete": {
-        "deprecated": true,
         "description": "Delete a schedule entry (404 if it doesn't exist).",
         "operationId": "schedule_delete",
         "parameters": [
@@ -2015,6 +1992,22 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -2045,7 +2038,6 @@
         "summary": "Schedule Delete"
       },
       "put": {
-        "deprecated": true,
         "description": "Create or edit a schedule entry. Body: any of hour/minute/weekday/enabled\n/target/kind. Editing an existing entry preserves unspecified fields;\ncreating a new one requires kind + target. 422 on an invalid entry.",
         "operationId": "schedule_upsert",
         "parameters": [
@@ -2056,6 +2048,22 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -2100,7 +2108,6 @@
     },
     "/v1/schedule/{name}/run": {
       "post": {
-        "deprecated": true,
         "description": "Run a scheduled entry now (detached), ignoring the ingest desired-state\nflag (a manual run is an explicit 'check now').",
         "operationId": "schedule_run",
         "parameters": [
@@ -2111,6 +2118,22 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -2141,131 +2164,14 @@
         "summary": "Schedule Run"
       }
     },
-    "/v1/search": {
+    "/v1/settings": {
       "get": {
-        "operationId": "search",
+        "description": "Every scope: field schema, effective value, and where the value came\nfrom (default | env | db).",
+        "operationId": "source_settings_all",
         "parameters": [
           {
-            "in": "query",
-            "name": "q",
-            "required": true,
-            "schema": {
-              "minLength": 1,
-              "title": "Q",
-              "type": "string"
-            }
-          },
-          {
-            "description": "news | github | wiki | arxiv | smallweb | docs | hn | hf | memory | all, or a registered custom source name",
-            "in": "query",
-            "name": "source",
-            "required": false,
-            "schema": {
-              "default": "all",
-              "description": "news | github | wiki | arxiv | smallweb | docs | hn | hf | memory | all, or a registered custom source name",
-              "title": "Source",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 10,
-              "maximum": 50,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "mode",
-            "required": false,
-            "schema": {
-              "default": "hybrid",
-              "enum": [
-                "hybrid",
-                "dense",
-                "lexical"
-              ],
-              "title": "Mode",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "published_after",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Published After"
-            }
-          },
-          {
-            "in": "query",
-            "name": "published_before",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Published Before"
-            }
-          },
-          {
-            "in": "query",
-            "name": "min_stars",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Min Stars"
-            }
-          },
-          {
-            "description": "Minimum HN points, e.g. 50",
-            "in": "query",
-            "name": "min_points",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Minimum HN points, e.g. 50",
-              "title": "Min Points"
-            }
-          },
-          {
-            "in": "query",
-            "name": "language",
+            "in": "header",
+            "name": "authorization",
             "required": false,
             "schema": {
               "anyOf": [
@@ -2276,121 +2182,7 @@
                   "type": "null"
                 }
               ],
-              "title": "Language"
-            }
-          },
-          {
-            "description": "arXiv primary category, e.g. cs.LG",
-            "in": "query",
-            "name": "category",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "arXiv primary category, e.g. cs.LG",
-              "title": "Category"
-            }
-          },
-          {
-            "description": "Small Web feed host, e.g. example.com",
-            "in": "query",
-            "name": "outlet",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 253,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Small Web feed host, e.g. example.com",
-              "title": "Outlet"
-            }
-          },
-          {
-            "description": "Docs framework, e.g. python or react",
-            "in": "query",
-            "name": "framework",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Docs framework, e.g. python or react",
-              "title": "Framework"
-            }
-          },
-          {
-            "description": "HF doc root, e.g. transformers or agents-course",
-            "in": "query",
-            "name": "root",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "HF doc root, e.g. transformers or agents-course",
-              "title": "Root"
-            }
-          },
-          {
-            "description": "HF page kind: docs, learn or blog",
-            "in": "query",
-            "name": "kind",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 16,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "HF page kind: docs, learn or blog",
-              "title": "Kind"
-            }
-          },
-          {
-            "description": "Memory: scope recall to one conversation uuid",
-            "in": "query",
-            "name": "conversation_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Memory: scope recall to one conversation uuid",
-              "title": "Conversation Id"
+              "title": "Authorization"
             }
           }
         ],
@@ -2400,7 +2192,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Search",
+                  "title": "Response Source Settings All",
                   "type": "object"
                 }
               }
@@ -2418,34 +2210,11 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Search"
-      }
-    },
-    "/v1/settings": {
-      "get": {
-        "deprecated": true,
-        "description": "Every scope: field schema, effective value, and where the value came\nfrom (default | env | db).",
-        "operationId": "source_settings_all",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Source Settings All",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
         "summary": "Source Settings All"
       }
     },
     "/v1/settings/{scope}": {
       "get": {
-        "deprecated": true,
         "operationId": "source_settings_get",
         "parameters": [
           {
@@ -2455,6 +2224,22 @@
             "schema": {
               "title": "Scope",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -2485,7 +2270,6 @@
         "summary": "Source Settings Get"
       },
       "patch": {
-        "deprecated": true,
         "description": "Set one or more overrides. 422 for an unknown key, a key belonging to a\ndifferent scope, or a value of the wrong type; numbers are clamped to their\ndeclared range rather than rejected.",
         "operationId": "source_settings_patch",
         "parameters": [
@@ -2554,7 +2338,6 @@
     },
     "/v1/settings/{scope}/{key}": {
       "delete": {
-        "deprecated": true,
         "description": "Drop one override so the key falls back to env, then the code default.",
         "operationId": "source_settings_revert",
         "parameters": [
@@ -2620,409 +2403,28 @@
         "summary": "Source Settings Revert"
       }
     },
-    "/v1/sources": {
-      "get": {
-        "description": "Every registered custom source with doc counts: {\"sources\": [IndexInfo\u2026]}.",
-        "operationId": "sources_list",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Sources List",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Sources List"
-      },
-      "post": {
-        "description": "Register a custom source. 201 with its IndexInfo; 409 if it already\nexists; 422 for a malformed or reserved name.",
-        "operationId": "source_create",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SourceCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Source Create",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Create"
-      }
-    },
-    "/v1/sources/{name}": {
-      "delete": {
-        "description": "Delete a whole custom source: tombstone its docs, drop the registry row,\nremove its staging. Returns {\"deleted\": N}; 404 if the source is unknown.",
-        "operationId": "source_delete",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Source Delete",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Delete"
-      },
-      "get": {
-        "description": "One custom source's IndexInfo (recipe + doc_count + pending). 404 unknown.",
-        "operationId": "source_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Source Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Get"
-      },
-      "patch": {
-        "description": "Update a source's title/description/recipe (only the fields sent). 404\nunknown.",
-        "operationId": "source_patch",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SourcePatch"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Source Patch",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Patch"
-      }
-    },
-    "/v1/sources/{name}/docs": {
-      "post": {
-        "description": "Upsert docs into a custom source (changed-text delta staged + embedded;\nunchanged docs skipped). Returns {source, docs, staged, skipped}. 404 unknown\nsource, 422 on a malformed push, 503 when staging isn't writable.",
-        "operationId": "source_push",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DocsPush"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Source Push",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Push"
-      }
-    },
-    "/v1/sources/{name}/docs/delete": {
-      "post": {
-        "description": "Tombstone specific docs by id suffix. Returns {\"deleted\": N}. 404 unknown\nsource; idempotent (already-deleted / unknown ids don't count).",
-        "operationId": "source_delete_docs",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DocsDelete"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Source Delete Docs",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Delete Docs"
-      }
-    },
-    "/v1/stats": {
-      "get": {
-        "operationId": "stats",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Stats",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Stats"
-      }
-    },
     "/v1/system/loops": {
       "post": {
-        "deprecated": true,
         "description": "Bulk on/off for every embed loop ('start all' / 'stop all').",
         "operationId": "loops_bulk",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3064,9 +2466,26 @@
     },
     "/v1/system/refresh": {
       "post": {
-        "deprecated": true,
         "description": "Kick off a freshness sweep \u2014 detached `windex refresh [--source \u2026]`.",
         "operationId": "system_refresh",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3108,9 +2527,26 @@
     },
     "/v1/system/refresh-stats": {
       "post": {
-        "deprecated": true,
         "description": "Force-drop the cached doc rollups so /metrics + /v1/stats recompute now\n(used after a bulk cleanup so dashboards reflect immediately).",
         "operationId": "refresh_stats",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3123,6 +2559,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Refresh Stats"
@@ -3130,9 +2576,26 @@
     },
     "/v1/system/restart": {
       "post": {
-        "deprecated": true,
         "description": "Bounce the loops \u2014 stop every one, then `windex up` restarts the enabled.",
         "operationId": "system_restart",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3145,6 +2608,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "System Restart"
@@ -3152,9 +2625,26 @@
     },
     "/v1/system/up": {
       "post": {
-        "deprecated": true,
         "description": "Reconcile to desired state \u2014 detached `windex up` (starts enabled loops\nand serve that are down).",
         "operationId": "system_up",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3167,6 +2657,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "System Up"
@@ -3174,7 +2674,6 @@
     },
     "/v1/throttle/{profile}": {
       "post": {
-        "deprecated": true,
         "description": "Embedding throughput profile \u2014 read by embedders at each pass, so it\napplies within about a minute without restarting anything.",
         "operationId": "throttle",
         "parameters": [
@@ -3190,6 +2689,22 @@
               ],
               "title": "Profile",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -3222,7 +2737,6 @@
     },
     "/v1/timeseries": {
       "get": {
-        "deprecated": true,
         "operationId": "timeseries",
         "parameters": [
           {
@@ -3235,6 +2749,22 @@
               "minimum": 5,
               "title": "Minutes",
               "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -3268,10 +2798,76 @@
         "summary": "Timeseries"
       }
     },
+    "/v1/whoami": {
+      "get": {
+        "description": "Gated echo, so pairing fails at setup with a clear message rather than on\nthe first write.",
+        "operationId": "admin_whoami",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Whoami",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Whoami"
+      }
+    },
     "/v1/workers": {
       "get": {
-        "deprecated": true,
         "operationId": "workers",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3284,6 +2880,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Workers"

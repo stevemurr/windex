@@ -562,12 +562,22 @@ class PrometheusMiddleware:
     would blow up label cardinality. /metrics is excluded so the scrape doesn't
     instrument itself."""
 
-    def __init__(self, app, routes):
+    def __init__(self, app, routes, label_prefix: str = "", skip_prefixes: tuple = ()):
         self.app = app
         self.routes = routes
+        # A mounted sub-app resolves its own routes relative to the mount, so its
+        # instance re-attaches the prefix to keep the label a full path. The parent
+        # then SKIPS that prefix, or every admin request would be counted twice —
+        # once as its real template and once as the Mount's bare "/admin".
+        self.label_prefix = label_prefix
+        self.skip_prefixes = skip_prefixes
+        self._flat = None
+        self._flat_len = -1
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("path") == "/metrics":
+        path = scope.get("path", "")
+        if (scope["type"] != "http" or path == "/metrics"
+                or any(path.startswith(p) for p in self.skip_prefixes)):
             await self.app(scope, receive, send)
             return
         method = scope.get("method", "GET")
@@ -588,15 +598,46 @@ class PrometheusMiddleware:
                 handler=handler, method=method, code=str(status["code"])).inc()
             metrics.HTTP_REQUEST_DURATION.labels(handler=handler).observe(elapsed)
 
+    def _resolvable(self):
+        """The route list flattened enough to yield a TEMPLATE for every endpoint.
+
+        FastAPI defers `include_router`: the parent holds a single `_IncludedRouter`
+        that matches on behalf of many routes but carries no `path` of its own. A
+        naive scan therefore matches it, finds no template, and labels every
+        included endpoint `__unmatched__` — which would silently collapse the RED
+        metrics for the entire operational surface into one series the moment those
+        routes moved onto a router. `effective_candidates()` expands it into
+        per-route contexts that do carry `path` (and `matches`).
+
+        Cached, and invalidated by length, because routes are fixed after startup
+        but tests build apps repeatedly.
+        """
+        routes = self.routes
+        if self._flat is None or self._flat_len != len(routes):
+            flat = []
+            for r in routes:
+                expand = getattr(r, "effective_candidates", None)
+                if callable(expand):
+                    try:
+                        flat.extend(expand())
+                        continue
+                    except Exception:  # noqa: BLE001 — fall back to the route itself
+                        pass
+                flat.append(r)
+            self._flat, self._flat_len = flat, len(routes)
+        return self._flat
+
     def _handler(self, scope) -> str:
         # Resolve the template by re-matching the routes (Starlette 1.3 doesn't
         # stash the matched Route in scope). Unmatched paths (404s, random
         # probes) collapse to one bucket rather than one series each.
-        for route in self.routes:
+        for route in self._resolvable():
             try:
                 match, _ = route.matches(scope)
             except Exception:  # noqa: BLE001 — a Mount/odd route shouldn't break metrics
                 continue
             if match == Match.FULL:
-                return getattr(route, "path", "__unmatched__")
+                path = getattr(route, "path", None)
+                if path:
+                    return self.label_prefix + path
         return "__unmatched__"

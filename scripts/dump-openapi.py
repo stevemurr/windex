@@ -22,12 +22,13 @@ import sys
 from pathlib import Path
 
 DEFAULT_OUT = Path("clients/macos/Packages/WindexKit/openapi.json")
+DEFAULT_ADMIN_OUT = Path("clients/macos/Packages/WindexKit/openapi-admin.json")
 
 
-def _schema() -> dict:
-    from windex.api.app import app
+def _schema(which: str = "agent") -> dict:
+    from windex.api.app import admin, app
 
-    return app.openapi()
+    return (admin if which == "admin" else app).openapi()
 
 
 def _summarize(doc: dict) -> set[str]:
@@ -46,9 +47,15 @@ def main() -> int:
                     help=f"output path (default: stdout; CI uses {DEFAULT_OUT})")
     ap.add_argument("--check", action="store_true",
                     help="compare against the file instead of writing it")
+    ap.add_argument("--which", choices=("agent", "admin"), default="agent",
+                    help="which contract: the /v1 agent API or the /admin control "
+                         "plane. They are separate documents on purpose — the "
+                         "admin surface churns while /v1 is additive-only.")
     args = ap.parse_args()
+    if args.which == "admin" and args.out is None and args.check:
+        args.out = DEFAULT_ADMIN_OUT
 
-    doc = _schema()
+    doc = _schema(args.which)
     # sort_keys so an unrelated dict-ordering change never shows up as a diff.
     text = json.dumps(doc, indent=2, sort_keys=True) + "\n"
 

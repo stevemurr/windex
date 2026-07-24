@@ -9,7 +9,8 @@ from importlib.resources import files
 from pathlib import Path
 from typing import ClassVar, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Header, Query
+from fastapi import (APIRouter, Depends, FastAPI, HTTPException, Header, Query,
+                     Request)
 from fastapi.responses import (HTMLResponse, RedirectResponse, Response,
                                StreamingResponse)
 from fastapi.staticfiles import StaticFiles
@@ -35,6 +36,18 @@ app = FastAPI(title="windex", version="0.1.0",
               # Names must stay unique across routes — tests/test_api.py asserts it,
               # because a collision silently drops an operation from the schema.
               generate_unique_id_function=lambda route: route.name)
+
+# The operational surface, defined once and served twice: at /admin/v1 (the real
+# home, gated) and — until the console is deleted — at /v1 as a deprecated alias,
+# so the existing dashboard keeps working through the whole migration.
+#
+# Two prefixes because they are two contracts with different lifetimes. /v1 is the
+# agent-facing promise: additive-only, consumed by the MCP server and the memory
+# push client, and it should shrink to exactly search + docs + push. The control
+# plane will churn weekly while the native client is built. One version number
+# cannot govern both.
+ops = APIRouter()
+# `admin` is constructed after require_admin is defined, below.
 
 
 @app.get("/", include_in_schema=False)
@@ -153,6 +166,88 @@ def require_write_token(authorization: str | None = Header(None)) -> None:
         return
     if not _bearer_ok(authorization, token):
         raise HTTPException(401, "missing or invalid write token")
+
+
+# Paths under the /admin mount that answer without a token. Exactly one: the app
+# has to be able to ask "are you there, and do you want a token" BEFORE it can
+# pair. Kept as a set rather than a second unguarded router so that adding an
+# admin route cannot accidentally land it outside the gate — the mount-level
+# dependency is what makes "unauthenticated admin route" unrepresentable, and
+# this is the single, visible exception to it.
+ADMIN_OPEN_PATHS = frozenset({"/v1/health"})
+
+
+def require_admin(request: Request, authorization: str | None = Header(None)) -> None:
+    """Blanket gate for /admin/**.
+
+    Two behaviours the /v1 side deliberately does not have:
+
+    * **Fails closed off-loopback.** The admin surface can crawl a caller-chosen
+      host and (later) clone a caller-chosen git URL. Served on the LAN with no
+      token that is not a trusted-LAN default, it is an open SSRF proxy — so
+      binding off-loopback without a token disables the surface with a fix-it
+      message rather than silently serving it. Loopback stays open so `curl
+      localhost:8100/admin/v1/jobs` on the box still works.
+    * **On by default.** Gating is at the mount, not per route, because per-route
+      opt-in is precisely why ~35 operational routes ended up ungated: nobody
+      forgot on purpose, the mechanism made forgetting the default.
+    """
+    # Starlette keeps the FULL path in scope["path"] and records the mount in
+    # root_path, so the mount prefix has to be stripped to compare against a
+    # mount-relative allowlist. Doing it this way also keeps working if the app is
+    # ever served unmounted (root_path empty).
+    path = request.scope.get("path", "")
+    root = request.scope.get("root_path", "")
+    if root and path.startswith(root):
+        path = path[len(root):] or "/"
+    if path in ADMIN_OPEN_PATHS:
+        return
+    settings = get_settings()
+    token = settings.write_token
+    if not token:
+        if settings.serve_host not in ("127.0.0.1", "::1", "localhost"):
+            raise HTTPException(
+                503, "admin API disabled: set WINDEX_WRITE_TOKEN, or bind "
+                     "WINDEX_SERVE_HOST=127.0.0.1. Generate one with: "
+                     "python -c 'import secrets;print(secrets.token_urlsafe(32))'")
+        return                      # loopback + no token = trusted local dev
+    if not _bearer_ok(authorization, token):
+        raise HTTPException(401, "missing or invalid admin token")
+
+
+admin = FastAPI(
+    title="windex admin", version="1.0.0",
+    description="windex control plane. Separately versioned from the /v1 agent API.",
+    dependencies=[Depends(require_admin)],
+    generate_unique_id_function=lambda route: route.name,
+)
+
+
+@admin.get("/v1/health")
+def admin_health() -> dict:
+    """Unauthenticated liveness + capability probe — the one open admin route.
+
+    A client needs to know a backend exists and whether it wants a token before it
+    can pair, so this answers without one. It deliberately carries no state beyond
+    that: no counts, no config, no source names.
+    """
+    settings = get_settings()
+    return {
+        "status": "ok",
+        "service": "windex",
+        "version": app.version,
+        "auth_required": bool(settings.write_token),
+        "started_at": STARTED_AT,
+        "uptime_s": round(time.time() - STARTED_AT, 1),
+    }
+
+
+@admin.get("/v1/whoami")
+def admin_whoami() -> dict:
+    """Gated echo, so pairing fails at setup with a clear message rather than on
+    the first write."""
+    return {"ok": True, "scopes": ["admin"],
+            "auth_required": bool(get_settings().write_token)}
 
 
 def _validate_push(conversation_id: str, body: MemoryPush) -> None:
@@ -357,7 +452,7 @@ def _stats_with_uptime(settings) -> dict:
     return body
 
 
-@app.get("/v1/metrics")
+@ops.get("/metrics")
 def metrics(minutes: int = Query(60, ge=1, le=43200)) -> dict:
     """Search-performance rollup: latency percentiles + hybrid→keyword
     degradation counts over the trailing window."""
@@ -374,24 +469,24 @@ def prometheus_metrics() -> Response:
     return Response(prom.render(get_settings()), media_type=prom.CONTENT_TYPE_LATEST)
 
 
-@app.get("/v1/recent")
+@ops.get("/recent")
 def recent(limit: int = Query(30, ge=1, le=100)) -> list[dict]:
     return service.get_recent(get_settings(), limit=limit)
 
 
-@app.get("/v1/recent/embedded")
+@ops.get("/recent/embedded")
 def recent_embedded(limit: int = Query(25, ge=1, le=100)) -> list[dict]:
     """Recently embedded (landed in Qdrant), newest first — console progress feed."""
     return service.recent_feed(get_settings(), "indexed_at", limit=limit)
 
 
-@app.get("/v1/recent/indexed")
+@ops.get("/recent/indexed")
 def recent_indexed(limit: int = Query(25, ge=1, le=100)) -> list[dict]:
     """Recently indexed (harvested/staged), newest first — console progress feed."""
     return service.recent_feed(get_settings(), "created_at", limit=limit)
 
 
-@app.post("/v1/system/refresh-stats")
+@ops.post("/system/refresh-stats")
 def refresh_stats() -> dict:
     """Force-drop the cached doc rollups so /metrics + /v1/stats recompute now
     (used after a bulk cleanup so dashboards reflect immediately)."""
@@ -399,28 +494,28 @@ def refresh_stats() -> dict:
     return {"ok": True}
 
 
-@app.get("/v1/timeseries")
+@ops.get("/timeseries")
 def timeseries(minutes: int = Query(60, ge=5, le=1440)) -> list[dict]:
     return service.get_timeseries(get_settings(), minutes=minutes)
 
 
-@app.post("/v1/control/{action}")
+@ops.post("/control/{action}")
 def control(action: Literal["start", "pause"]) -> dict:
     value = "running" if action == "start" else "paused"
     return {"indexing": service.set_control(get_settings(), value)}
 
 
-@app.get("/v1/workers")
+@ops.get("/workers")
 def workers() -> dict:
     return service.get_worker_activity(get_settings())
 
 
-@app.get("/v1/logs")
+@ops.get("/logs")
 def logs_list() -> list[dict]:
     return logs.list_logs()
 
 
-@app.get("/v1/logs/{name}")
+@ops.get("/logs/{name}")
 def logs_tail(
     name: str,
     lines: int = Query(200, ge=1, le=2000),
@@ -433,12 +528,12 @@ def logs_tail(
         raise HTTPException(404, f"unknown log: {name}")
 
 
-@app.get("/v1/jobs")
+@ops.get("/jobs")
 def jobs_list() -> list[dict]:
     return jobs.list_jobs()
 
 
-@app.post("/v1/jobs/{name}/start")
+@ops.post("/jobs/{name}/start")
 def jobs_start(name: str, params: dict = Body(default={})) -> dict:
     try:
         return jobs.start(name, params)
@@ -450,7 +545,7 @@ def jobs_start(name: str, params: dict = Body(default={})) -> dict:
         raise HTTPException(409, str(exc))
 
 
-@app.post("/v1/jobs/{name}/stop")
+@ops.post("/jobs/{name}/stop")
 def jobs_stop(name: str) -> dict:
     try:
         return jobs.stop(name)
@@ -458,14 +553,14 @@ def jobs_stop(name: str) -> dict:
         raise HTTPException(404, f"unknown job: {name}")
 
 
-@app.post("/v1/throttle/{profile}")
+@ops.post("/throttle/{profile}")
 def throttle(profile: Literal["polite", "full", "env"]) -> dict:
     """Embedding throughput profile — read by embedders at each pass, so it
     applies within about a minute without restarting anything."""
     return {"embed_profile": service.set_embed_profile(get_settings(), profile)}
 
 
-@app.get("/v1/loops")
+@ops.get("/loops")
 def loops_state() -> dict:
     """Per-source loop desired-state + running, and whether the supervisor is
     alive. Lightweight (pgrep + one control read) so the console control panel
@@ -473,7 +568,7 @@ def loops_state() -> dict:
     return service.supervisor_status(get_settings())
 
 
-@app.post("/v1/loops/{source}")
+@ops.post("/loops/{source}")
 def loop_set(source: str, params: dict = Body(default={})) -> dict:
     """Turn an embed loop on/off (desired-state). `off` stops it and keeps it off
     — `windex up` and the watchdog both honor the flag, so it won't come back."""
@@ -483,7 +578,7 @@ def loop_set(source: str, params: dict = Body(default={})) -> dict:
         raise HTTPException(404, f"unknown source: {source}")
 
 
-@app.post("/v1/ingest/{source}")
+@ops.post("/ingest/{source}")
 def ingest_set(source: str, params: dict = Body(default={})) -> dict:
     """Turn a source's auto-ingest on/off (desired-state). Off means the refresh
     sweep and the scheduler skip fetching it; a manual 'check now' still runs."""
@@ -493,38 +588,38 @@ def ingest_set(source: str, params: dict = Body(default={})) -> dict:
         raise HTTPException(404, f"unknown source: {source}")
 
 
-@app.post("/v1/system/loops")
+@ops.post("/system/loops")
 def loops_bulk(params: dict = Body(default={})) -> dict:
     """Bulk on/off for every embed loop ('start all' / 'stop all')."""
     return {"loops": service.set_all_loops_enabled(get_settings(), bool(params.get("enabled", True)))}
 
 
-@app.post("/v1/system/up")
+@ops.post("/system/up")
 def system_up() -> dict:
     """Reconcile to desired state — detached `windex up` (starts enabled loops
     and serve that are down)."""
     return service.system_up(get_settings())
 
 
-@app.post("/v1/system/restart")
+@ops.post("/system/restart")
 def system_restart() -> dict:
     """Bounce the loops — stop every one, then `windex up` restarts the enabled."""
     return service.restart_loops(get_settings())
 
 
-@app.post("/v1/system/refresh")
+@ops.post("/system/refresh")
 def system_refresh(params: dict = Body(default={})) -> dict:
     """Kick off a freshness sweep — detached `windex refresh [--source …]`."""
     return service.run_refresh(get_settings(), params.get("sources") or [])
 
 
-@app.get("/v1/freshness")
+@ops.get("/freshness")
 def freshness_state() -> list[dict]:
     """Per-source indexed/pending counts + last embed-loop activity."""
     return service.freshness(get_settings())
 
 
-@app.get("/v1/datasets/{source}/stats")
+@ops.get("/datasets/{source}/stats")
 def dataset_stats(source: str) -> dict:
     """Per-dataset detail (freshness row-click): counts by pipeline status +
     content date range."""
@@ -534,14 +629,14 @@ def dataset_stats(source: str) -> dict:
         raise HTTPException(404, f"unknown source: {source}")
 
 
-@app.get("/v1/schedule")
+@ops.get("/schedule")
 def schedule_state() -> list[dict]:
     """The editable schedule entries with running + last-run — what the console
     schedule editor reads (name, kind, target, hour, minute, weekday, enabled)."""
     return service.schedule_status(get_settings())
 
 
-@app.put("/v1/schedule/{name}")
+@ops.put("/schedule/{name}")
 def schedule_upsert(name: str, params: dict = Body(default={})) -> dict:
     """Create or edit a schedule entry. Body: any of hour/minute/weekday/enabled
     /target/kind. Editing an existing entry preserves unspecified fields;
@@ -552,7 +647,7 @@ def schedule_upsert(name: str, params: dict = Body(default={})) -> dict:
         raise HTTPException(422, str(exc))
 
 
-@app.delete("/v1/schedule/{name}")
+@ops.delete("/schedule/{name}")
 def schedule_delete(name: str) -> dict:
     """Delete a schedule entry (404 if it doesn't exist)."""
     try:
@@ -561,7 +656,7 @@ def schedule_delete(name: str) -> dict:
         raise HTTPException(404, f"unknown scheduled job: {name}")
 
 
-@app.post("/v1/schedule/{name}/run")
+@ops.post("/schedule/{name}/run")
 def schedule_run(name: str) -> dict:
     """Run a scheduled entry now (detached), ignoring the ingest desired-state
     flag (a manual run is an explicit 'check now')."""
@@ -571,14 +666,14 @@ def schedule_run(name: str) -> dict:
         raise HTTPException(404, f"unknown scheduled job: {name}")
 
 
-@app.get("/v1/activity")
+@ops.get("/activity")
 def activity_state() -> list[dict]:
     """Watchable things for the log drawer: actions, loops, services — with
     running state, last activity, and crash flag. Tail any via GET /v1/logs/{name}."""
     return service.activity(get_settings())
 
 
-@app.get("/v1/events")
+@ops.get("/events")
 async def events(ticks: int | None = Query(None, ge=1, le=100)) -> StreamingResponse:
     """SSE stream for the dashboard: `stats` every ~2s, `recent` only when it
     changes, `timeseries` every ~16s. REST endpoints remain the poll/agent API;
@@ -628,14 +723,14 @@ class SettingsPatch(BaseModel):
     values: dict
 
 
-@app.get("/v1/settings")
+@ops.get("/settings")
 def source_settings_all() -> dict:
     """Every scope: field schema, effective value, and where the value came
     from (default | env | db)."""
     return {"scopes": service.all_source_settings(get_settings())}
 
 
-@app.get("/v1/settings/{scope}")
+@ops.get("/settings/{scope}")
 def source_settings_get(scope: str) -> dict:
     out = service.source_settings(get_settings(), scope)
     if out is None:
@@ -643,7 +738,7 @@ def source_settings_get(scope: str) -> dict:
     return out
 
 
-@app.patch("/v1/settings/{scope}", dependencies=[Depends(require_write_token)])
+@ops.patch("/settings/{scope}", dependencies=[Depends(require_write_token)])
 def source_settings_patch(scope: str, body: SettingsPatch) -> dict:
     """Set one or more overrides. 422 for an unknown key, a key belonging to a
     different scope, or a value of the wrong type; numbers are clamped to their
@@ -657,7 +752,7 @@ def source_settings_patch(scope: str, body: SettingsPatch) -> dict:
     return out
 
 
-@app.delete("/v1/settings/{scope}/{key}",
+@ops.delete("/settings/{scope}/{key}",
             dependencies=[Depends(require_write_token)])
 def source_settings_revert(scope: str, key: str) -> dict:
     """Drop one override so the key falls back to env, then the code default."""
@@ -778,7 +873,7 @@ def crawl_console() -> RedirectResponse:
     return RedirectResponse("/manage#crawl", status_code=308)
 
 
-@app.post("/v1/crawl/preview", dependencies=[Depends(require_write_token)])
+@ops.post("/crawl/preview", dependencies=[Depends(require_write_token)])
 async def crawl_preview(body: CrawlPreview) -> dict:
     """Dry run: fetch only the seed(s) and report what WOULD be crawled.
 
@@ -792,7 +887,7 @@ async def crawl_preview(body: CrawlPreview) -> dict:
         raise HTTPException(422, str(exc))
 
 
-@app.post("/v1/crawl", dependencies=[Depends(require_write_token)], status_code=202)
+@ops.post("/crawl", dependencies=[Depends(require_write_token)], status_code=202)
 async def crawl_start(body: CrawlStart) -> dict:
     """Queue a crawl. 202 + {run_id} — the worker picks it up; 422 on a bad
     recipe or source name."""
@@ -804,13 +899,13 @@ async def crawl_start(body: CrawlStart) -> dict:
         raise HTTPException(422, str(exc))
 
 
-@app.get("/v1/crawl/runs")
+@ops.get("/crawl/runs")
 def crawl_runs(source: str | None = None,
                limit: int = Query(50, ge=1, le=200)) -> dict:
     return {"runs": service.crawl_runs(get_settings(), source, limit)}
 
 
-@app.get("/v1/crawl/runs/{run_id}")
+@ops.get("/crawl/runs/{run_id}")
 def crawl_run_get(run_id: int) -> dict:
     run = service.crawl_run_get(get_settings(), run_id)
     if run is None:
@@ -818,7 +913,7 @@ def crawl_run_get(run_id: int) -> dict:
     return run
 
 
-@app.post("/v1/crawl/runs/{run_id}/cancel", dependencies=[Depends(require_write_token)])
+@ops.post("/crawl/runs/{run_id}/cancel", dependencies=[Depends(require_write_token)])
 def crawl_cancel(run_id: int) -> dict:
     out = service.crawl_cancel(get_settings(), run_id)
     if out is None:
@@ -826,7 +921,7 @@ def crawl_cancel(run_id: int) -> dict:
     return out
 
 
-@app.get("/v1/crawl/runs/{run_id}/events")
+@ops.get("/crawl/runs/{run_id}/events")
 async def crawl_events(run_id: int,
                        ticks: int | None = Query(None, ge=1, le=10_000)
                        ) -> StreamingResponse:
@@ -878,7 +973,28 @@ async def crawl_events(run_id: int,
     )
 
 
+# --- serve the operational surface twice ------------------------------------
+# Must run after every @ops decorator above: include_router COPIES the routes as
+# they stand, so a registration added later would silently not be served.
+#
+# The /v1 copy is marked deprecated in the schema rather than removed. Deleting it
+# now would break the running console, and the whole point of the phased plan is
+# that the console keeps working until the native client covers every screen —
+# the alias is what makes stopping partway a supported outcome rather than being
+# stranded.
+admin.include_router(ops, prefix="/v1")
+app.include_router(ops, prefix="/v1", deprecated=True)
+app.mount("/admin", admin)
+
 # HTTP RED metrics (windex/api/prom.py). Registered last, after every route is
 # defined, so the middleware's route-template resolver sees the full routing
 # table (the live routes list, not a copy).
-app.add_middleware(prom.PrometheusMiddleware, routes=app.router.routes)
+#
+# One instance per app. The parent skips /admin so an admin request is counted
+# once, by the sub-app, against its real route template — without the skip the
+# parent would also record it as the bare Mount path "/admin" and every admin
+# endpoint would collapse into one series (and be double counted).
+admin.add_middleware(prom.PrometheusMiddleware, routes=admin.router.routes,
+                     label_prefix="/admin")
+app.add_middleware(prom.PrometheusMiddleware, routes=app.router.routes,
+                   skip_prefixes=("/admin",))

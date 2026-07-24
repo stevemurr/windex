@@ -29,11 +29,21 @@ _SHAPES = [
 
 
 class QuietAccess(logging.Filter):
-    """Drops uvicorn access lines for the dashboard's own polling endpoints —
-    they would otherwise dominate serve.log with zero information."""
+    """Drops uvicorn access lines for a client's own polling endpoints — they
+    would otherwise dominate serve.log with zero information.
+
+    Matching is by SUBSTRING, so each entry covers the /admin/v1 copy of the route
+    as well as the deprecated /v1 alias ("/v1/jobs" is a substring of
+    "/admin/v1/jobs"). Adding the prefixed forms separately would be redundant.
+
+    Everything a status view refreshes on a timer belongs here; anything that
+    mutates does not, because those lines are the audit trail.
+    """
 
     NOISY = ("/v1/events", "/v1/workers", "/v1/stats", "/v1/jobs", "/v1/logs",
-             "/v1/recent", "/v1/timeseries", "favicon", "apple-touch")
+             "/v1/recent", "/v1/timeseries", "/v1/loops", "/v1/freshness",
+             "/v1/activity", "/v1/schedule", "/v1/health", "/v1/runs",
+             "favicon", "apple-touch")
 
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
