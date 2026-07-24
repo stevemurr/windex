@@ -826,6 +826,46 @@ def migrate_watermarks() -> None:
     console.print("\n[dim]Now run: windex migrate verify[/dim]")
 
 
+@migrate_app.command("dual-write")
+def migrate_dual_write(
+    action: str = typer.Argument(..., help="on | off | status"),
+) -> None:
+    """Mirror legacy watermark writes into `source_units` as they happen.
+
+    Implemented as database triggers, not a Python helper, because there are a
+    dozen write sites across ten sources and missing one produces exactly the
+    failure the whole migration guards against — a unit that quietly looks done.
+    A trigger cannot be bypassed by application code and commits with the write
+    that caused it.
+
+    Turn this on, leave it for a week, and re-run `windex migrate verify` daily.
+    Reads still come from the legacy tables throughout; `off` removes every
+    trigger and changes nothing else.
+    """
+    from windex.migrate import dualwrite
+
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        if action == "on":
+            tables = dualwrite.enable(conn)
+            console.print(f"mirroring {len(tables)} tables: {', '.join(tables)}")
+            console.print("[dim]reads unchanged; run `windex migrate verify` daily[/dim]")
+        elif action == "off":
+            tables = dualwrite.disable(conn)
+            console.print(f"stopped mirroring {len(tables)} tables")
+        elif action == "status":
+            rows = dualwrite.status(conn)
+            for r in rows:
+                mark = "[green]on [/green]" if r["mirroring"] else "[dim]off[/dim]"
+                console.print(f"{mark} {r['table']:<16} → {r['recipe']}/{r['store']}")
+            live = sum(1 for r in rows if r["mirroring"])
+            if live and live != len(rows):
+                console.print(f"\n[yellow]partially installed ({live}/{len(rows)}) — "
+                              f"re-run `windex migrate dual-write on`[/yellow]")
+        else:
+            raise typer.BadParameter("action must be on, off or status")
+
+
 @migrate_app.command("verify")
 def migrate_verify() -> None:
     """Assert the two models agree, and exit non-zero if they don't.

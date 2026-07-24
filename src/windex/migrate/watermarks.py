@@ -51,9 +51,15 @@ class Mapping:
     recipe: str          # source_units.source — the recipe that will own these
     store: str           # store name within that recipe
     table: str           # legacy table
-    insert: str          # INSERT ... SELECT, idempotent
+    # INSERT ... SELECT, idempotent. Carries a literal `{WHERE}` marker so the same
+    # projection serves both the bulk backfill (no filter) and the per-row mirror a
+    # trigger runs (filtered to the changed row). One definition, so the two can
+    # never disagree about what a unit means.
+    insert: str
     legacy_pending: str  # SELECT unit_key ... — the predicate the LIVE code uses
     selector: str        # token | rotate | rearm — how the new model selects
+    key_expr: str = ""   # SQL for unit_key, in terms of the legacy table's columns
+    pk: tuple[str, ...] = ()   # legacy primary key, for the per-row filter
     # Divergences we accept, with the reason. Empty means the two predicates are
     # expected to agree exactly, and verify() treats any difference as a failure.
     tolerated: str = ""
@@ -81,9 +87,11 @@ _SEEN = "jsonb_build_object('seen', 1)"
 
 def _status_gated(recipe: str, store: str, table: str, key: str, ord_expr: str,
                   counts: str = "'{}'::jsonb", bytes_expr: str = "NULL",
-                  attrs: str = "'{}'::jsonb") -> Mapping:
+                  attrs: str = "'{}'::jsonb",
+                  pk: tuple[str, ...] = ()) -> Mapping:
     return Mapping(
         recipe=recipe, store=store, table=table, selector="token",
+        key_expr=key, pk=pk,
         insert=f"""
             INSERT INTO source_units
                 (source, store, unit_key, ord, status, upstream, ingested,
@@ -92,7 +100,7 @@ def _status_gated(recipe: str, store: str, table: str, key: str, ord_expr: str,
                    {_SEEN},
                    CASE WHEN status = 'done' THEN {_SEEN} ELSE '{{}}'::jsonb END,
                    {counts}, {bytes_expr}, {attrs}, processed_at
-            FROM {table}
+            FROM {table} {{WHERE}}
             {_UPSERT}
         """,
         legacy_pending=f"SELECT {key} FROM {table} WHERE status = 'pending'",
@@ -108,24 +116,25 @@ def _status_gated(recipe: str, store: str, table: str, key: str, ord_expr: str,
 
 MAPPINGS: tuple[Mapping, ...] = (
     _status_gated("ccnews", "warc", "warc_files", "path", "path",
-                  counts="coalesce(doc_counts, '{}'::jsonb)"),
-    _status_gated("gh", "hour", "gharchive_files", "name", "name"),
+                  counts="coalesce(doc_counts, '{}'::jsonb)", pk=("path",)),
+    _status_gated("gh", "hour", "gharchive_files", "name", "name", pk=("name",)),
     _status_gated("wiki", "shard", "wiki_dumps", "name", "name",
                   counts="coalesce(doc_counts, '{}'::jsonb)", bytes_expr="bytes",
-                  attrs="jsonb_build_object('dump_date', dump_date)"),
+                  attrs="jsonb_build_object('dump_date', dump_date)", pk=("name",)),
     _status_gated("arxiv", "window", "arxiv_windows",
                   "from_date || '..' || until_date", "from_date",
                   counts="jsonb_build_object('pages', pages, 'records', records,"
                          " 'staged', staged, 'deleted', deleted)",
-                  attrs="jsonb_build_object('token', token)"),
+                  attrs="jsonb_build_object('token', token)", pk=("from_date", "until_date")),
     _status_gated("hn", "window", "hn_windows",
                   "from_ts::text || '..' || until_ts::text", "lpad(from_ts::text, 20, '0')",
                   counts="jsonb_build_object('queries', queries, 'hits', hits,"
-                         " 'staged', staged, 'refreshed', refreshed)"),
+                         " 'staged', staged, 'refreshed', refreshed)", pk=("from_ts", "until_ts")),
 
     # --- token-gated -------------------------------------------------------
     Mapping(
         recipe="docs", store="docset", table="docsets", selector="token",
+        key_expr="slug", pk=("slug",),
         # Same key both sides, or the gate would never read equal.
         insert=f"""
             INSERT INTO source_units
@@ -137,7 +146,7 @@ MAPPINGS: tuple[Mapping, ...] = (
                    coalesce(doc_counts, '{{}}'::jsonb), db_size,
                    jsonb_build_object('release', release, 'attribution', attribution),
                    processed_at
-            FROM docsets
+            FROM docsets {{WHERE}}
             {_UPSERT}
         """,
         legacy_pending="SELECT slug FROM docsets "
@@ -149,6 +158,7 @@ MAPPINGS: tuple[Mapping, ...] = (
     ),
     Mapping(
         recipe="hf", store="root", table="hf_roots", selector="token",
+        key_expr="root", pk=("root",),
         # A root with no llms.txt is NOT pending in the live code
         # (`llms_hash IS NOT NULL`). Mirror that by making both sides equal when
         # the hash is absent, rather than leaving a null-vs-value mismatch that
@@ -167,7 +177,7 @@ MAPPINGS: tuple[Mapping, ...] = (
                                       'version', version, 'license', license,
                                       'pages', pages),
                    processed_at
-            FROM hf_roots
+            FROM hf_roots {{WHERE}}
             {_UPSERT}
         """,
         legacy_pending="SELECT root FROM hf_roots WHERE llms_hash IS NOT NULL "
@@ -175,6 +185,7 @@ MAPPINGS: tuple[Mapping, ...] = (
     ),
     Mapping(
         recipe="hf", store="post", table="hf_posts", selector="token",
+        key_expr="slug", pk=("slug",),
         insert=f"""
             INSERT INTO source_units
                 (source, store, unit_key, ord, status, upstream, ingested,
@@ -185,7 +196,7 @@ MAPPINGS: tuple[Mapping, ...] = (
                    '{{}}'::jsonb, NULL,
                    jsonb_build_object('url', url),
                    processed_at
-            FROM hf_posts
+            FROM hf_posts {{WHERE}}
             {_UPSERT}
         """,
         legacy_pending="SELECT slug FROM hf_posts "
@@ -197,6 +208,7 @@ MAPPINGS: tuple[Mapping, ...] = (
     # --- not content-gated -------------------------------------------------
     Mapping(
         recipe="smallweb", store="feed", table="feeds", selector="rotate",
+        key_expr="url", pk=("url",),
         # Feeds are polled on ROTATION, not because content changed: there is no
         # cheap upstream signal for 38k blogs. etag/last_modified are conditional-GET
         # validators for the fetcher, so they live in attrs; both gate sides stay
@@ -212,13 +224,15 @@ MAPPINGS: tuple[Mapping, ...] = (
                                       'last_modified', last_modified,
                                       'last_status', last_status),
                    least(fail_count, 32767), last_polled
-            FROM feeds
+            FROM feeds {{WHERE}}
             {_UPSERT}
         """,
         legacy_pending="SELECT url FROM feeds WHERE status = 'active'",
     ),
     Mapping(
         recipe="gh", store="gh_shard", table="gh_shards", selector="rearm",
+        key_expr="from_date::text || '..' || to_date::text || '@' || star_threshold::text",
+        pk=("from_date", "to_date", "star_threshold"),
         # Re-armed on age (RESUME_DAYS=7), not content. Gate stays false; the
         # recipe's `rearm` predicate reads processed_at.
         insert=f"""
@@ -233,7 +247,7 @@ MAPPINGS: tuple[Mapping, ...] = (
                    jsonb_build_object('from_date', from_date, 'to_date', to_date,
                                       'star_threshold', star_threshold),
                    processed_at
-            FROM gh_shards
+            FROM gh_shards {{WHERE}}
             {_UPSERT}
         """,
         legacy_pending="SELECT from_date::text || '..' || to_date::text || '@' "
@@ -262,7 +276,7 @@ def migrate(conn: psycopg.Connection) -> list[dict]:
                 out.append({"table": m.table, "store": m.store, "rows": 0,
                             "skipped": "table does not exist"})
                 continue
-            cur.execute(m.insert)
+            cur.execute(m.insert.replace("{WHERE}", ""))   # bulk: every row
             rows = cur.rowcount or 0
             out.append({"table": m.table, "recipe": m.recipe, "store": m.store,
                         "rows": rows})
