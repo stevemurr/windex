@@ -148,3 +148,45 @@ def test_admin_traffic_is_counted_once(client):
     scope = {"type": "http", "method": "GET", "path": "/v1/health",
              "headers": [], "root_path": ""}
     assert sub._handler(scope) == "/admin/v1/health"
+
+
+# --- the recipe engine surface ----------------------------------------------
+
+def test_registry_serves_the_whole_palette(client):
+    """The graph editor renders nodes, connection rules and every inspector from
+    this one document, so a windex that gains a module needs no client release."""
+    r = client.get("/admin/v1/registry", headers=auth())
+    assert r.status_code == 200
+    d = r.json()
+    assert d["modules"] and d["kinds"] and d["port_types"]
+    assert r.headers.get("ETag"), "clients cache this and revalidate"
+    http_get = next(m for m in d["modules"] if m["id"] == "http.get")
+    fields = {f["key"]: f for f in http_get["config"]["fields"]}
+    # the two attributes a form cannot be built correctly without
+    # both ends bounded: lo/hi declared, and `floor` names the operator key
+    assert fields["host_interval"]["clamp"] == "both"
+    assert fields["host_interval"]["clampNote"]
+    assert fields["ssrf_guard"]["lockedReason"]
+
+
+def test_registry_requires_the_admin_token(client):
+    assert client.get("/admin/v1/registry").status_code == 401
+
+
+def test_recipe_validate_is_pure_and_reports_precisely(client):
+    good = {"name": "probe", "corpus": {"source": "probe"},
+            "state": {"s": {}},
+            "flows": {"f": {"nodes": {
+                "d": {"kind": "discover", "uses": "state.pending",
+                      "with": {"store": "s"}},
+                "g": {"kind": "fetch", "uses": "http.get", "with": {}},
+                "x": {"kind": "extract", "uses": "html.trafilatura", "with": {}},
+                "l": {"kind": "load", "uses": "ledger.stage", "with": {}}},
+                "edges": [["d", "g"], ["g", "x"], ["x", "l"]]}}}
+    r = client.post("/admin/v1/recipes/validate", json=good, headers=auth())
+    assert r.status_code == 200 and r.json()["valid"] is True
+
+    good["flows"]["f"]["nodes"]["g"]["with"] = {"host_intervall": 2}
+    r = client.post("/admin/v1/recipes/validate", json=good, headers=auth())
+    assert r.json()["valid"] is False
+    assert "host_intervall" in r.json()["errors"][0]["message"]

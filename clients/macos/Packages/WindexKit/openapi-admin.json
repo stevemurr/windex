@@ -1928,6 +1928,116 @@
         "summary": "Recent Indexed"
       }
     },
+    "/v1/recipes/validate": {
+      "post": {
+        "description": "Parse + type-check a recipe. Pure: no network, no database, no filesystem.\n\nThat purity is the point \u2014 an editor can call this on every keystroke, and it\nis what separates `validate` from `preview` (which fetches the seeds) and\n`dry-run` (which executes the graph against a counting sink).",
+        "operationId": "admin_recipe_validate",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Recipe Validate",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Recipe Validate"
+      }
+    },
+    "/v1/registry": {
+      "get": {
+        "description": "The module palette: port types, node kinds, and every module's config schema.\n\nThe load-bearing endpoint for the native client \u2014 the graph editor renders its\npalette, its connection rules and every node inspector from this, so it\nhardcodes no vocabulary and a windex that gains a module needs no client\nrelease. ETag'd because a client caches it and revalidates.",
+        "operationId": "admin_registry",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Registry",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Registry"
+      }
+    },
     "/v1/schedule": {
       "get": {
         "description": "The editable schedule entries with running + last-run \u2014 what the console\nschedule editor reads (name, kind, target, hour, minute, weekday, enabled).",

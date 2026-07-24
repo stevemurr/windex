@@ -137,6 +137,32 @@ class Param:
             return "ceiling"
         return ""
 
+    def to_spec(self) -> dict:
+        """The STORAGE form — exactly the declaration, and nothing else.
+
+        Distinct from `describe()` on purpose. `describe()` is for a client
+        rendering a control: it resolves bounds against the operator's settings,
+        camelCases for JS, and omits `ceiling`/`floor` because those name operator
+        keys a client has no business seeing. None of that round-trips. A recipe's
+        frozen spec must reconstruct the identical Param or a re-run is not a
+        re-run, so this emits the declared values verbatim and omits defaults.
+        """
+        out = {"key": self.key, "kind": self.kind}
+        for attr, default in (
+            ("lo", None), ("hi", None), ("choices", ()), ("label", ""), ("help", ""),
+            ("default", None), ("prefill", None), ("required", False),
+            ("ceiling", None), ("floor", None), ("max_items", None),
+            ("max_len", None), ("pattern", ""), ("editor", ""), ("section", ""),
+            ("unit", ""), ("advanced", False), ("secret", False),
+            ("enum_titles", ()), ("locked_reason", ""), ("depends_on", None),
+            ("clamp_note", ""), ("stage", "runtime"), ("allow", ()),
+            ("enforce", "clamp"),
+        ):
+            value = getattr(self, attr)
+            if value != default:
+                out[attr] = list(value) if isinstance(value, tuple) else value
+        return out
+
     def describe(self, effective: object = None) -> dict:
         """The JSON a client renders a control from.
 

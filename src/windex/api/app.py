@@ -242,6 +242,45 @@ def admin_health() -> dict:
     }
 
 
+@admin.get("/v1/registry")
+def admin_registry(response: Response) -> dict:
+    """The module palette: port types, node kinds, and every module's config schema.
+
+    The load-bearing endpoint for the native client — the graph editor renders its
+    palette, its connection rules and every node inspector from this, so it
+    hardcodes no vocabulary and a windex that gains a module needs no client
+    release. ETag'd because a client caches it and revalidates.
+    """
+    from windex.recipe import registry
+
+    doc = registry.describe()
+    response.headers["ETag"] = f'W/"registry-{doc["registry_version"]}"'
+    response.headers["Cache-Control"] = "no-cache"
+    return doc
+
+
+class RecipeDoc(BaseModel):
+    """A recipe document. Deliberately untyped at this boundary: the schema is
+    versioned INSIDE the document and validated by `recipe.parse`, which is the
+    security boundary. Mirroring it in pydantic would be a second definition to
+    keep in step, and the one that 422s would not be the one that matters."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+@admin.post("/v1/recipes/validate")
+def admin_recipe_validate(body: dict) -> dict:
+    """Parse + type-check a recipe. Pure: no network, no database, no filesystem.
+
+    That purity is the point — an editor can call this on every keystroke, and it
+    is what separates `validate` from `preview` (which fetches the seeds) and
+    `dry-run` (which executes the graph against a counting sink).
+    """
+    from windex.recipe import parse as recipe_parse
+
+    return recipe_parse.validate(body, get_settings())
+
+
 @admin.get("/v1/whoami")
 def admin_whoami() -> dict:
     """Gated echo, so pairing fails at setup with a clear message rather than on
