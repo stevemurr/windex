@@ -177,6 +177,12 @@ def test_every_declared_module_resolves():
     assert all(callable(C.resolve(name)) for name in registry.MODULES)
 
 
+def test_worker_default_resolver_uses_the_executable_recipe_registry():
+    from windex.worker import default_resolve
+
+    assert default_resolve("push.docs") is C.resolve("push.docs")
+
+
 def test_unavailable_modules_is_unique_and_sorted(monkeypatch):
     from windex.recipe import runners
 

@@ -62,16 +62,18 @@ def default_resolve(module: str) -> Runner:
     """
     try:
         from windex import recipe as _recipe          # noqa: PLC0415
-        registry = _recipe.registry                   # type: ignore[attr-defined]
     except Exception as exc:                          # noqa: BLE001
         raise PermanentTaskError(
             f"no runner registry for module {module!r}: the recipe engine "
             f"(windex.recipe) is not available ({exc})") from None
 
-    resolver = getattr(registry, "resolve", None)
+    # ``registry`` is the declarative editor catalog. The executable resolver is
+    # exported by the recipe package (and implemented by recipe.compile). Looking
+    # on the catalog made the worker disagree with the API's ``implemented`` flag.
+    resolver = getattr(_recipe, "resolve", None)
     if callable(resolver):
         return resolver(module)
-    runners = getattr(registry, "RUNNERS", None)
+    runners = getattr(_recipe, "RUNNERS", None)
     if isinstance(runners, dict) and module in runners:
         return runners[module]
     raise PermanentTaskError(f"module {module!r} is not registered")
