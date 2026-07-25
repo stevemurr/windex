@@ -47,12 +47,18 @@ def test_each_builtin_compiles_to_tasks(name, settings):
     """Placement must resolve for every flow, not just the first — a recipe whose
     second flow cannot compile fails at fan-out, hours later."""
     recipe = P.parse(_docs()[name], settings, builtin=True)
+    from windex.worker import preconditions
+
+    known_preconditions = set(preconditions.KNOWN) | set(preconditions.ALIASES)
     for flow in recipe.flows:
         tasks = recipe_compile.compile_tasks(
             recipe.to_dict(), flow=flow.name, settings=settings)
         assert tasks, f"{name}/{flow.name} compiled to nothing"
         for t in tasks:
             assert set(t) <= recipe_compile.TASK_KEYS
+            assert set(t["preconditions"]) <= known_preconditions, (
+                f"{name}/{flow.name}/{t['node']} has an unknown precondition"
+            )
 
 
 def test_reserved_names_are_only_available_to_builtins(settings):

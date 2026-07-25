@@ -44,6 +44,13 @@ KIND_WEIGHT = {
     "fetch": 1.0, "extract": 1.0, "transform": 0.3, "load": 0.5,
 }
 
+# Secret references name Settings fields; worker preconditions name operational
+# capabilities. Keep the translation explicit so a valid secret ref cannot
+# compile into an unknown precondition that parks a task forever.
+SECRET_PRECONDITIONS = {
+    "github_tokens": "gh_token",
+}
+
 
 def resolve_config(recipe: recipe_parse.Recipe, settings: Settings,
                    values: Mapping[str, object]) -> dict[str, object]:
@@ -113,7 +120,10 @@ def compile_tasks(spec: dict, *, flow: str | None = None,
         # not after it has burned an attempt discovering the token is missing.
         for field in mod.fields:
             if field.kind == "secret_ref" and node.config.get(field.key):
-                pre.update(field.allow or ())
+                pre.update(
+                    SECRET_PRECONDITIONS.get(name, name)
+                    for name in (field.allow or ())
+                )
         config = dict(node.config)
         if resolved is not None:
             for key, value in config.items():

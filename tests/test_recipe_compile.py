@@ -114,6 +114,18 @@ def test_preconditions_are_declared_and_include_referenced_secrets():
         "edges": [["d", "g"], ["g", "x"], ["x", "l"]]}}
     doc["refresh"] = ["h"]
     assert "gh_token" in by_node(C.compile_tasks(doc))["g"]["preconditions"]
+    assert "github_tokens" not in by_node(C.compile_tasks(doc))["g"]["preconditions"]
+
+    doc["flows"]["h"]["nodes"]["g"] = {
+        "kind": "fetch",
+        "uses": "http.paginate",
+        "with": {
+            "protocol": "github_search_pages",
+            "allowed_hosts": "api.github.com",
+            "token_ref": "@secret.github_tokens",
+        },
+    }
+    assert by_node(C.compile_tasks(doc))["g"]["preconditions"] == ["gh_token"]
 
 
 def test_every_precondition_is_one_the_worker_knows():
