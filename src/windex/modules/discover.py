@@ -199,12 +199,29 @@ def state_pending(ctx: TaskContext) -> SliceResult:
     anchor_filter = sql.SQL("")
     anchor_args: list[Any] = []
     source_filter = sql.SQL("")
+    source_args: list[Any] = []
     if source == "hf" and store == "root":
         # The sitemap includes a few client-rendered roots with no llms.txt.
         # Sync records them with a null hash for observability; they are not a
-        # crawl frontier because there is no complete page enumeration.
+        # crawl frontier because there is no complete page enumeration. A few
+        # valid manifests currently enumerate zero pages; selecting those would
+        # repeat forever because no downstream batch can advance their watermark.
         source_filter = sql.SQL(
-            "AND u.upstream->>'llms_hash' IS NOT NULL")
+            "AND u.upstream->>'llms_hash' IS NOT NULL "
+            "AND (NOT (u.attrs ? 'pages') "
+            "     OR coalesce((u.attrs->>'pages')::integer, 0) > 0)")
+        raw_roots = ctx.params.get("roots")
+        roots = [
+            str(value).strip().strip("/")
+            for value in (
+                raw_roots.split(",")
+                if isinstance(raw_roots, str) else raw_roots or []
+            )
+            if str(value).strip()
+        ]
+        if roots:
+            source_filter += sql.SQL(" AND u.unit_key = ANY(%s)")
+            source_args.append(roots)
     raw_anchors = ctx.params.get("anchor_ids")
     if source == "hf" and raw_anchors:
         anchors = (
@@ -257,6 +274,7 @@ def state_pending(ctx: TaskContext) -> SliceResult:
     params: list[Any] = [source, store, *args]
     if claim == "lease":
         params.append(stale)
+    params.extend(source_args)
     params.extend(anchor_args)
     params.extend([ctx.task_id, take + 1])
 

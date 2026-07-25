@@ -755,6 +755,50 @@ def test_state_pending_can_replay_exact_hf_anchors(pg):
     ]
 
 
+def test_state_pending_honors_hf_root_subset_and_skips_empty_manifests(pg):
+    _seed(
+        pg,
+        source="hf",
+        store="root",
+        key="docs/keep",
+        upstream={"llms_hash": "present"},
+        attrs={"pages": 2},
+    )
+    _seed(
+        pg,
+        source="hf",
+        store="root",
+        key="docs/drop",
+        upstream={"llms_hash": "present"},
+        attrs={"pages": 3},
+    )
+    _seed(
+        pg,
+        source="hf",
+        store="root",
+        key="docs/empty",
+        upstream={"llms_hash": "present"},
+        attrs={"pages": 0},
+    )
+    ctx, _ = _ctx(
+        pg,
+        task_id=7110,
+        recipe="hf",
+        source="hf",
+        module="state.pending",
+        config={
+            "store": "root",
+            "predicate": "token_moved",
+            "order": "key",
+            "batch": 10,
+        },
+        params={"roots": "docs/keep,docs/empty"},
+    )
+
+    assert state_pending(ctx).units_done == 1
+    assert [key for key, _ in _outputs(pg, ctx.task_id)] == ["docs/keep"]
+
+
 def test_state_pending_yields_after_a_committed_unit_and_resumes(pg):
     _seed(pg, key="a")
     _seed(pg, key="b")
