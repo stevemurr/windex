@@ -23,24 +23,27 @@ from urllib.parse import urlsplit
 
 import httpx
 import pyarrow.dataset as ds
+from psycopg.types.json import Jsonb
 
 from windex.config import Settings
 from windex.crawl.fetch import BlockedTarget, check_url
 from windex.crawl.links import extract_links
 from windex.crawl.scope import canonicalize, in_scope
 from windex.modules.common import (
-    InputBatch,
+    _store_outputs,
     finish_batch,
     pending_batches,
     require_type,
 )
-from windex.recipe.ports import RawBlob, WorkUnit
+from windex.recipe.ports import PartitionRef, RawBlob, WorkUnit
 from windex.smallweb.poll import HostRateLimiter, RobotsCache
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 _INPUT_BATCH = 40
 _USER_AGENT = "windex/1.0 (+local knowledge index)"
 _REDIRECTS = frozenset({301, 302, 303, 307, 308})
+_CRAWL_UNIT_PREFIX = "crawl-url:"
+_CRAWL_COVERAGE_KEY = "crawl-coverage"
 
 
 def _hosts(raw) -> set[str]:
@@ -397,11 +400,11 @@ def _node_config(ctx: TaskContext, module: str) -> dict:
     return {}
 
 
-def _crawl_recipe(ctx: TaskContext, seeds: list[str]):
+def _crawl_recipe(ctx: TaskContext, seed: str):
     links = _node_config(ctx, "crawl.links")
     prefix = links.get("path_prefix")
     if prefix is None:
-        path = urlsplit(seeds[0]).path
+        path = urlsplit(seed).path
         prefix = path if path.endswith("/") else path.rsplit("/", 1)[0] + "/"
     include = tuple(re.compile(value) for value in (links.get("include") or []))
     exclude = tuple(re.compile(value) for value in (links.get("exclude") or []))
@@ -414,50 +417,334 @@ def _crawl_recipe(ctx: TaskContext, seeds: list[str]):
     return SimpleNamespace(scope=scope), int(links.get("max_depth", 2))
 
 
-def _crawl_pages(ctx: TaskContext, batches: list[InputBatch],
-                 client: httpx.Client, robots: RobotsCache,
-                 limiter: HostRateLimiter) -> tuple[list[RawBlob], int]:
-    units = [
-        require_type(value, WorkUnit, ctx.module)
-        for batch in batches for value in batch.values
-    ]
-    seeds = [str(unit.payload.get("seed") or _unit_url(ctx, unit)) for unit in units]
-    recipe, max_depth = _crawl_recipe(ctx, seeds)
-    max_pages = max((int(unit.payload.get("max_pages", 500)) for unit in units),
-                    default=500)
-    queue = deque((canonicalize(seed), seed, 0) for seed in seeds)
-    seen: set[str] = set()
-    outputs = []
-    while queue and len(outputs) < max_pages:
-        url, seed, depth = queue.popleft()
-        if url in seen:
-            continue
-        seen.add(url)
+def _crawl_unit_key(url: str) -> str:
+    return _CRAWL_UNIT_PREFIX + hashlib.sha256(url.encode()).hexdigest()
+
+
+def _crawl_insert_url(
+    ctx: TaskContext,
+    *,
+    url: str,
+    seed: str,
+    depth: int,
+    max_pages: int,
+    store: str,
+    id_scope: str | None,
+    parent: str | None = None,
+) -> str:
+    """Add one URL if neither the seen set nor the run budget contains it."""
+    key = _crawl_unit_key(url)
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                count(*) FILTER (WHERE unit_key LIKE %s),
+                bool_or(unit_key = %s)
+              FROM task_units
+             WHERE task_id = %s
+            """,
+            (f"{_CRAWL_UNIT_PREFIX}%", key, ctx.task_id),
+        )
+        count, exists = cur.fetchone()
+        if exists:
+            return "seen"
+        if int(count or 0) >= max_pages:
+            return "budget"
+        cur.execute(
+            """
+            INSERT INTO task_units
+                   (run_id, task_id, unit_key, parent, depth, state, counts)
+            VALUES (%s, %s, %s, %s, %s, 'pending', %s)
+            """,
+            (
+                ctx.run_id,
+                ctx.task_id,
+                key,
+                parent,
+                depth,
+                Jsonb({
+                    "url": url,
+                    "seed": seed,
+                    "max_pages": max_pages,
+                    "store": store,
+                    "id_scope": id_scope,
+                }),
+            ),
+        )
+    return "inserted"
+
+
+def _crawl_mark_incomplete(ctx: TaskContext, reason: str) -> None:
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE task_units
+               SET counts = counts || %s, reason = %s
+             WHERE task_id = %s AND unit_key = %s
+            """,
+            (
+                Jsonb({"truncated": True}),
+                reason,
+                ctx.task_id,
+                _CRAWL_COVERAGE_KEY,
+            ),
+        )
+
+
+def _crawl_initialize(ctx: TaskContext) -> None:
+    """Consume seed batches and persist their URLs before any network work."""
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO task_units
+                   (run_id, task_id, unit_key, state, counts)
+            SELECT %s, %s, %s, 'pending', %s
+             WHERE NOT EXISTS (
+                   SELECT 1 FROM task_units
+                    WHERE task_id = %s AND unit_key = %s)
+            """,
+            (
+                ctx.run_id,
+                ctx.task_id,
+                _CRAWL_COVERAGE_KEY,
+                Jsonb({"truncated": False}),
+                ctx.task_id,
+                _CRAWL_COVERAGE_KEY,
+            ),
+        )
+    batches, _ = pending_batches(ctx, limit=_INPUT_BATCH)
+    for batch in batches:
+        for value in batch.values:
+            unit = require_type(value, WorkUnit, ctx.module)
+            seed = canonicalize(
+                str(unit.payload.get("seed") or _unit_url(ctx, unit)))
+            inserted = _crawl_insert_url(
+                ctx,
+                url=seed,
+                seed=seed,
+                depth=0,
+                max_pages=int(unit.payload.get("max_pages", 500)),
+                store=unit.ref.store,
+                id_scope=unit.ref.id_scope,
+            )
+            if inserted == "budget":
+                _crawl_mark_incomplete(ctx, "page_budget")
+        # This empty row is the durable edge-consumption marker. The URL rows
+        # below carry the actual RawBlob outputs once fetched.
+        finish_batch(ctx, batch)
+    ctx.conn.commit()
+
+
+def _crawl_pending(ctx: TaskContext):
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT unit_key, depth, counts
+              FROM task_units
+             WHERE task_id = %s AND state = 'pending'
+               AND unit_key LIKE %s
+             ORDER BY depth, seq
+             LIMIT 1
+            """,
+            (ctx.task_id, f"{_CRAWL_UNIT_PREFIX}%"),
+        )
+        return cur.fetchone()
+
+
+def _crawl_finish_url(
+    ctx: TaskContext,
+    key: str,
+    *,
+    state: str,
+    outputs: list[RawBlob] | None = None,
+    reason: str | None = None,
+    size: int | None = None,
+) -> None:
+    stored = _store_outputs(ctx, key, outputs or [])
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE task_units
+               SET state = %s, reason = %s, bytes = %s, outputs = %s,
+                   seq = nextval('task_unit_seq'), finished_at = now()
+             WHERE task_id = %s AND unit_key = %s AND state = 'pending'
+            """,
+            (state, reason, size, Jsonb(stored), ctx.task_id, key),
+        )
+
+
+def _crawl_finish_coverage(ctx: TaskContext) -> bool:
+    """Emit the census marker consumed by the prune guard."""
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT counts, reason
+              FROM task_units
+             WHERE task_id = %s AND unit_key = %s
+            """,
+            (ctx.task_id, _CRAWL_COVERAGE_KEY),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return False
+        counts, reason = row
+        truncated = bool(counts.get("truncated"))
+        cur.execute(
+            """
+            SELECT counts
+              FROM task_units
+             WHERE task_id = %s AND unit_key LIKE %s
+             ORDER BY depth, id
+             LIMIT 1
+            """,
+            (ctx.task_id, f"{_CRAWL_UNIT_PREFIX}%"),
+        )
+        seed_row = cur.fetchone()
+    seed_counts = seed_row[0] if seed_row else {}
+    seed = str(seed_counts.get("seed") or "")
+    marker = RawBlob(
+        ref=PartitionRef(
+            store=str(seed_counts.get("store") or "frontier"),
+            key=seed,
+            id_scope=seed_counts.get("id_scope"),
+        ),
+        uri=seed,
+        body=b"",
+        meta={
+            "missing": True,
+            "_coverage_truncated": truncated,
+            "reason": reason or "",
+        },
+        epoch=ctx.run_id,
+    )
+    stored = _store_outputs(ctx, _CRAWL_COVERAGE_KEY, [marker])
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE task_units
+               SET state = 'done', outputs = %s,
+                   seq = nextval('task_unit_seq'), finished_at = now()
+             WHERE task_id = %s AND unit_key = %s AND state = 'pending'
+            """,
+            (Jsonb(stored), ctx.task_id, _CRAWL_COVERAGE_KEY),
+        )
+    return truncated
+
+
+def _crawl_http_get(
+    ctx: TaskContext,
+    client: httpx.Client,
+    robots: RobotsCache,
+    limiter: HostRateLimiter,
+) -> SliceResult:
+    """Fetch a durable BFS frontier, committing one URL at a time."""
+    _crawl_initialize(ctx)
+    processed = outputs = skipped = 0
+    last = ""
+    while row := _crawl_pending(ctx):
+        key, depth, counts = row
+        url = str(counts["url"])
+        seed = str(counts["seed"])
+        max_pages = int(counts["max_pages"])
         unit = WorkUnit(
-            ref=units[0].ref.__class__(
-                store=units[0].ref.store,
+            ref=PartitionRef(
+                store=str(counts["store"]),
                 key=url,
-                id_scope=units[0].ref.id_scope,
+                id_scope=counts.get("id_scope"),
             ),
             payload={"url": url, "seed": seed, "depth": depth},
             epoch=ctx.run_id,
         )
         try:
             blob = _page(ctx, unit, client, robots, limiter)
-        except (httpx.HTTPError, BlockedTarget):
-            continue
-        if blob.body:
-            outputs.append(blob)
-            if depth < max_depth and "html" in blob.media_type:
-                text = blob.body.decode("utf-8", errors="replace")
-                for found in extract_links(text, blob.uri):
-                    candidate = canonicalize(found)
-                    allowed, _ = in_scope(candidate, recipe, seed)
-                    if allowed and candidate not in seen:
-                        queue.append((candidate, seed, depth + 1))
+        except (httpx.HTTPError, BlockedTarget) as exc:
+            response = getattr(exc, "response", None)
+            reason = (
+                f"http_{response.status_code}"
+                if response is not None
+                else type(exc).__name__.lower()
+            )
+            _crawl_finish_url(ctx, key, state="skipped", reason=reason)
+            _crawl_mark_incomplete(ctx, reason)
+            skipped += 1
+        else:
+            if blob.body:
+                recipe, max_depth = _crawl_recipe(ctx, seed)
+                if depth < max_depth and "html" in blob.media_type:
+                    for found in extract_links(
+                            blob.body.decode("utf-8", errors="replace"),
+                            blob.uri):
+                        candidate = canonicalize(found)
+                        allowed, _ = in_scope(candidate, recipe, seed)
+                        if allowed:
+                            inserted = _crawl_insert_url(
+                                ctx,
+                                url=candidate,
+                                seed=seed,
+                                depth=depth + 1,
+                                max_pages=max_pages,
+                                store=unit.ref.store,
+                                id_scope=unit.ref.id_scope,
+                                parent=url,
+                            )
+                            if inserted == "budget":
+                                _crawl_mark_incomplete(ctx, "page_budget")
+                _crawl_finish_url(
+                    ctx,
+                    key,
+                    state="done",
+                    outputs=[blob],
+                    size=len(blob.body),
+                )
+                outputs += 1
+            else:
+                _crawl_finish_url(
+                    ctx,
+                    key,
+                    state="skipped",
+                    reason=str(blob.meta.get("reason") or "empty"),
+                )
+                _crawl_mark_incomplete(
+                    ctx, str(blob.meta.get("reason") or "empty"))
+                skipped += 1
+        ctx.conn.commit()
+        processed += 1
+        last = url
+        ctx.heartbeat(
+            processed,
+            0,
+            {"last": last, "outputs": outputs, "skipped": skipped},
+        )
         if ctx.should_yield():
             break
-    return outputs, len(seen)
+
+    pending = _crawl_pending(ctx) is not None
+    truncated = False
+    if not pending:
+        truncated = _crawl_finish_coverage(ctx)
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT count(*)
+              FROM task_units
+             WHERE task_id = %s AND unit_key LIKE %s
+            """,
+            (ctx.task_id, f"{_CRAWL_UNIT_PREFIX}%"),
+        )
+        total = int(cur.fetchone()[0])
+    ctx.conn.commit()
+    return SliceResult(
+        units_done=processed,
+        exhausted=not pending,
+        units_total=total,
+        stats={
+            "inputs": processed,
+            "outputs": outputs,
+            "skipped": skipped,
+            "truncated": truncated,
+            "last": last,
+        },
+    )
 
 
 def _hf_sync_blob(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
@@ -689,7 +976,6 @@ def _smallweb_feed(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
 
 
 def http_get(ctx: TaskContext) -> SliceResult:
-    batches, more = pending_batches(ctx, limit=_INPUT_BATCH)
     timeout = float(ctx.config.get("request_timeout", 15))
     interval = float(ctx.config.get("host_interval", 2))
     settings = Settings()
@@ -704,21 +990,9 @@ def http_get(ctx: TaskContext) -> SliceResult:
             user_agent=_USER_AGENT,
         )
         limiter = _page_limiter(ctx.source, interval)
-        if ctx.source == "crawl" and batches:
-            outputs, visited = _crawl_pages(ctx, batches, client, robots, limiter)
-            finish_batch(ctx, batches[0], outputs=outputs)
-            for batch in batches[1:]:
-                finish_batch(ctx, batch)
-            ctx.conn.commit()
-            ctx.heartbeat(len(batches), 0, {
-                "outputs": len(outputs), "visited": visited,
-            })
-            return SliceResult(
-                units_done=len(batches),
-                exhausted=not more,
-                stats={"inputs": len(batches), "outputs": len(outputs),
-                       "visited": visited},
-            )
+        if ctx.source == "crawl":
+            return _crawl_http_get(ctx, client, robots, limiter)
+        batches, more = pending_batches(ctx, limit=_INPUT_BATCH)
         processed = []
         count = 0
         for batch in batches:

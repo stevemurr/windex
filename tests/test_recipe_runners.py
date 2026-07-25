@@ -29,6 +29,7 @@ from windex.modules.fetch import (
     _page_limiter,
     _smallweb_feed,
     _template_url,
+    http_get,
 )
 from windex.modules.load import ledger_stage
 from windex.modules.receive import push_docs
@@ -99,6 +100,158 @@ def test_recipe_http_get_uses_response_aware_limiter_for_hf():
 
     assert isinstance(_page_limiter("hf", 3), PagesRateLimiter)
     assert type(_page_limiter("docs", 3)) is HostRateLimiter
+
+
+def test_crawl_http_get_resumes_its_durable_frontier_after_yield(
+        pg, monkeypatch):
+    from windex.worker import dag
+
+    seed = "https://example.com/docs/"
+    child = "https://example.com/docs/child"
+    grandchild = "https://example.com/docs/grandchild"
+    spec = {
+        "flows": {
+            "crawl": {
+                "nodes": {
+                    "links": {
+                        "uses": "crawl.links",
+                        "with": {"same_host": True, "max_depth": 2},
+                    },
+                },
+            },
+        },
+    }
+    run_id = dag.submit_run(
+        pg,
+        recipe="crawl",
+        source="crawl",
+        spec=spec,
+        params={"flow": "crawl"},
+        dedupe_key="durable-crawl-frontier",
+        tasks=[
+            {
+                "node": "seed",
+                "module": "crawl.frontier",
+                "kind": "discover",
+                "config": {
+                    "store": "frontier",
+                    "seeds": [seed],
+                    "max_pages": 2,
+                },
+            },
+            {
+                "node": "get",
+                "module": "http.get",
+                "kind": "fetch",
+                "config": {"robots": False},
+                "depends_on": ["seed"],
+            },
+        ],
+    )
+    assert run_id is not None
+    with pg.cursor() as cur:
+        cur.execute("SELECT node, id FROM run_tasks WHERE run_id = %s", (run_id,))
+        tasks = dict(cur.fetchall())
+
+    frontier, _ = _ctx(
+        pg,
+        run_id=run_id,
+        task_id=tasks["seed"],
+        recipe="crawl",
+        source="crawl",
+        node="seed",
+        module="crawl.frontier",
+        config={
+            "store": "frontier",
+            "seeds": [seed],
+            "max_pages": 2,
+        },
+        spec=spec,
+        params={"flow": "crawl"},
+    )
+    assert discover_module.crawl_frontier(frontier).exhausted
+
+    fetched = []
+
+    def page(_ctx, unit, *_args):
+        fetched.append(unit.payload["url"])
+        body = (
+            f'<a href="{child}">child</a>'.encode()
+            if unit.payload["url"] == seed
+            else f'<a href="{grandchild}">grandchild</a>'.encode()
+        )
+        return RawBlob(
+            ref=unit.ref,
+            uri=unit.payload["url"],
+            media_type="text/html",
+            body=body,
+            meta={"payload": unit.payload},
+            epoch=unit.epoch,
+        )
+
+    monkeypatch.setattr(fetch_module, "_page", page)
+    first, _ = _ctx(
+        pg,
+        run_id=run_id,
+        task_id=tasks["get"],
+        recipe="crawl",
+        source="crawl",
+        node="get",
+        module="http.get",
+        config={"robots": False},
+        spec=spec,
+        params={"flow": "crawl"},
+        should_yield=lambda: len(fetched) >= 1,
+    )
+    result = http_get(first)
+    assert result.units_done == 1
+    assert not result.exhausted
+    assert fetched == [seed]
+    with pg.cursor() as cur:
+        cur.execute(
+            """
+            SELECT state, depth, parent
+              FROM task_units
+             WHERE task_id = %s AND unit_key LIKE 'crawl-url:%%'
+             ORDER BY depth
+            """,
+            (tasks["get"],),
+        )
+        assert cur.fetchall() == [
+            ("done", 0, None),
+            ("pending", 1, seed),
+        ]
+
+    resumed, _ = _ctx(
+        pg,
+        run_id=run_id,
+        task_id=tasks["get"],
+        recipe="crawl",
+        source="crawl",
+        node="get",
+        module="http.get",
+        config={"robots": False},
+        spec=spec,
+        params={"flow": "crawl"},
+    )
+    result = http_get(resumed)
+    assert result.units_done == 1
+    assert result.exhausted
+    assert fetched == [seed, child]
+    values = [
+        value
+        for _, outputs in _outputs(pg, tasks["get"])
+        for value in outputs
+    ]
+    assert {
+        value.uri for value in values if isinstance(value, RawBlob)
+    } == {seed, child}
+    [coverage] = [
+        value for value in values
+        if isinstance(value, RawBlob)
+        and "_coverage_truncated" in value.meta
+    ]
+    assert coverage.meta["_coverage_truncated"] is True
 
 
 def test_download_template_can_use_frozen_config_and_partition_payload(pg):
@@ -913,6 +1066,89 @@ def test_exact_transform_and_loader_preserve_duplicate_ledger_row(
     assert rows[0][0:3] == ("hn:1", "deduped", None)
     assert rows[1][0:3] == ("hn:2", "duplicate", "hn:1")
     assert rows[0][3] and rows[1][3] is None
+
+
+def test_source_prune_skips_a_truncated_recipe_census(
+        pg, tmp_path, monkeypatch):
+    from windex.worker import dag
+
+    monkeypatch.setenv("WINDEX_DATA_ROOT", str(tmp_path))
+    spec = {"corpus": {"source": "crawl", "id_prefix": "crawl:"}}
+
+    def stage(dedupe: str, docs: list[ExtractedDoc], *, replace: bool):
+        run_id = dag.submit_run(
+            pg,
+            recipe="crawl",
+            source="crawl",
+            spec=spec,
+            dedupe_key=dedupe,
+            tasks=[
+                {"node": "extract", "module": "test.extract", "kind": "extract"},
+                {
+                    "node": "stage",
+                    "module": "ledger.stage",
+                    "kind": "load",
+                    "depends_on": ["extract"],
+                },
+            ],
+        )
+        assert run_id is not None
+        with pg.cursor() as cur:
+            cur.execute(
+                "SELECT node, id FROM run_tasks WHERE run_id = %s", (run_id,))
+            tasks = dict(cur.fetchall())
+            cur.execute(
+                """
+                INSERT INTO task_units
+                       (run_id, task_id, unit_key, state, outputs, finished_at)
+                VALUES (%s, %s, 'page', 'done', %s, now())
+                """,
+                (run_id, tasks["extract"], Jsonb(wire.encode_many(docs))),
+            )
+        pg.commit()
+        ctx, _ = _ctx(
+            pg,
+            run_id=run_id,
+            task_id=tasks["stage"],
+            recipe="crawl",
+            source="crawl",
+            node="stage",
+            module="ledger.stage",
+            config={
+                "replace": replace,
+                "replace_scope": "source",
+                "replace_guard": "census",
+            },
+            spec=spec,
+        )
+        return ledger_stage(ctx)
+
+    live = ExtractedDoc(
+        ref=PartitionRef(store="frontier", key="https://example.com/"),
+        suffix="kept",
+        url="https://example.com/",
+        title="Keep",
+        text="This document must survive a truncated refresh.",
+    )
+    assert stage("crawl-complete", [live], replace=False).exhausted
+
+    marker = ExtractedDoc(
+        ref=live.ref,
+        suffix="",
+        url=live.url,
+        text="",
+        fields={
+            "_coverage_only": True,
+            "_coverage_truncated": True,
+        },
+    )
+    result = stage("crawl-truncated", [marker], replace=True)
+
+    assert result.exhausted
+    assert result.stats["prune_skipped"] == "truncated"
+    with pg.cursor() as cur:
+        cur.execute("SELECT status FROM documents WHERE id = 'crawl:kept'")
+        assert cur.fetchone()[0] != "deleted"
 
 
 def test_anchor_replay_does_not_advance_partial_source_watermark(

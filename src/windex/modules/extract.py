@@ -44,6 +44,8 @@ def _run(ctx: TaskContext, parse, *, limit: int = _INPUT_BATCH) -> SliceResult:
                 text="",
                 fields={
                     "_coverage_only": True,
+                    "_coverage_truncated": bool(
+                        blob.meta.get("_coverage_truncated")),
                     "_source_attrs": {
                         key: blob.meta.get(key)
                         for key in ("etag", "last_modified")

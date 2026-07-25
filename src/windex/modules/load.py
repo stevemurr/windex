@@ -280,6 +280,21 @@ def _all_coverage(ctx: TaskContext) -> set[str]:
     return ids
 
 
+def _census_truncated(ctx: TaskContext) -> bool:
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT coalesce(bool_or(
+                       coalesce((counts->>'census_truncated')::boolean, false)
+                   ), false)
+              FROM task_units
+             WHERE task_id = %s
+            """,
+            (ctx.task_id,),
+        )
+        return bool(cur.fetchone()[0])
+
+
 def _tombstone_missing(ctx: TaskContext, *, scope: str,
                        current: set[str],
                        guard: str) -> tuple[list[str], list[str]]:
@@ -405,6 +420,7 @@ def ledger_stage(ctx: TaskContext) -> SliceResult:
     total = changed = skipped = 0
     tombstoned: set[str] = set()
     vector_tombstones: set[str] = set()
+    prune_skipped = ""
     for batch in batches:
         received = [
             _sanitize(require_type(value, ExtractedDoc, ctx.module))
@@ -412,6 +428,8 @@ def ledger_stage(ctx: TaskContext) -> SliceResult:
         ]
         coverage_docs = [
             doc for doc in received if doc.fields.get("_coverage_only")]
+        census_truncated = any(
+            doc.fields.get("_coverage_truncated") for doc in coverage_docs)
         docs = [
             doc for doc in received if not doc.fields.get("_coverage_only")]
         tombstoned.update(_doc_id(ctx, doc) for doc in docs if doc.deleted)
@@ -496,8 +514,10 @@ def ledger_stage(ctx: TaskContext) -> SliceResult:
                 "coverage_path": coverage,
                 "documents": len(docs),
                 "staged": len(stage_docs),
+                "census_truncated": census_truncated,
             } if coverage else {
                 "documents": len(docs), "staged": len(stage_docs),
+                "census_truncated": census_truncated,
             },
         )
         processed.append(batch)
@@ -507,11 +527,14 @@ def ledger_stage(ctx: TaskContext) -> SliceResult:
     final = not more and len(processed) == len(batches)
     if (ctx.mode != "dry_run" and replace_enabled
             and replace_scope == "source" and final):
-        current = _all_coverage(ctx)
-        removed, vectors = _tombstone_missing(
-            ctx, scope="source", current=current, guard=guard)
-        tombstoned.update(removed)
-        vector_tombstones.update(vectors)
+        if guard == "census" and _census_truncated(ctx):
+            prune_skipped = "truncated"
+        else:
+            current = _all_coverage(ctx)
+            removed, vectors = _tombstone_missing(
+                ctx, scope="source", current=current, guard=guard)
+            tombstoned.update(removed)
+            vector_tombstones.update(vectors)
     ctx.conn.commit()
     if ctx.mode != "dry_run":
         _delete_vectors(ctx, vector_tombstones)
@@ -527,5 +550,6 @@ def ledger_stage(ctx: TaskContext) -> SliceResult:
         stats={
             "documents": total, "staged": changed, "skipped": skipped,
             "deleted": len(tombstoned), "dry_run": ctx.mode == "dry_run",
+            "prune_skipped": prune_skipped,
         },
     )
