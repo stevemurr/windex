@@ -70,6 +70,7 @@ class TaskContext:
     mode: str = "run"                              # run | dry_run
     attempt: int = 0                               # run_tasks.attempts at claim
     worker: str = ""                               # lease_worker id, for logs
+    recipe: str = ""                               # source_units namespace
 
 
 @dataclass(frozen=True)

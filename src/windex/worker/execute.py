@@ -224,7 +224,7 @@ def run_slice(ctl: psycopg.Connection, work: psycopg.Connection,
             module=task.module, config=task.config, spec=task.spec, cursor=task.cursor,
             conn=work, should_yield=ctrl.should_yield, heartbeat=ctrl.heartbeat,
             params=task.params, mode=task.mode, attempt=task.attempts,
-            worker=task.worker,
+            worker=task.worker, recipe=task.recipe,
         )
         try:
             result = runner(ctx)

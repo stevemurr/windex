@@ -484,7 +484,7 @@ CREATE TABLE IF NOT EXISTS source_units (
     ord        text,                    -- sortable ordering key (path, date, lastmod)
     status     text NOT NULL DEFAULT 'pending',
     upstream   jsonb NOT NULL DEFAULT '{}',   -- freshness signal, whatever shape it takes
-    ingested   jsonb NOT NULL DEFAULT '{}',   -- what we have actually ingested
+    ingested   jsonb,                         -- what we have actually ingested
     stage      text,                    -- lifecycle stage (repos: candidate|hydrated|staged|…)
     attempts   smallint NOT NULL DEFAULT 0,
     counts     jsonb NOT NULL DEFAULT '{}',
@@ -499,6 +499,12 @@ CREATE TABLE IF NOT EXISTS source_units (
 ) PARTITION BY LIST (source);
 
 CREATE TABLE IF NOT EXISTS source_units_default PARTITION OF source_units DEFAULT;
+-- Older additive installs created `ingested` as NOT NULL DEFAULT '{}'. That
+-- makes the `unseen` predicate impossible to express: a newly discovered unit
+-- is indistinguishable from one whose legitimate freshness token is `{}`.
+-- Keep this idempotent because schema.sql is the migration mechanism.
+ALTER TABLE source_units ALTER COLUMN ingested DROP NOT NULL;
+ALTER TABLE source_units ALTER COLUMN ingested DROP DEFAULT;
 CREATE INDEX IF NOT EXISTS source_units_status_idx  ON source_units (source, store, status);
 -- The pending claim: exactly the predicate every discover node runs.
 CREATE INDEX IF NOT EXISTS source_units_pending_idx ON source_units (source, store, ord)
@@ -633,12 +639,24 @@ CREATE TABLE IF NOT EXISTS task_units (
     attempts   smallint NOT NULL DEFAULT 0,
     bytes      bigint,
     counts     jsonb NOT NULL DEFAULT '{}',
+    -- Durable typed values emitted by this node, serialized by recipe.wire.
+    -- An array is required because catalog/extract modules may fan one input
+    -- into many outputs. Downstream tasks flatten these arrays; fan-out simply
+    -- means two tasks read the same immutable value. Keeping the value beside
+    -- the unit transition makes resume after a process crash atomic.
+    outputs    jsonb NOT NULL DEFAULT '[]',
     seq        bigint NOT NULL DEFAULT nextval('task_unit_seq'),
     created_at timestamptz NOT NULL DEFAULT now(),
     started_at timestamptz,
     finished_at timestamptz,
     PRIMARY KEY (created_at, id)      -- must include the partition key
 ) PARTITION BY RANGE (created_at);
+
+-- Existing Phase-8 installs predate the durable edge stream. CREATE TABLE IF
+-- NOT EXISTS does not add a column to them, so carry the additive migration
+-- explicitly (and idempotently) as schema.sql does for every deployed upgrade.
+ALTER TABLE task_units
+    ADD COLUMN IF NOT EXISTS outputs jsonb NOT NULL DEFAULT '[]';
 
 CREATE UNIQUE INDEX IF NOT EXISTS task_units_key_uniq  ON task_units (task_id, unit_key, created_at);
 CREATE INDEX IF NOT EXISTS task_units_claim_idx ON task_units (task_id, depth, seq) WHERE state = 'pending';

@@ -4,21 +4,32 @@ Populated in-tree only. A recipe names a key in this dict; it can never name an
 import path, which is what makes "installing a source cannot execute anything" a
 property of the design rather than a rule someone has to remember.
 
-Deliberately EMPTY at this stage. Every module is declared in `registry` — so the
-editor can show it, `validate` can type-check a graph using it, and `compile_tasks`
-can place it in a lane — while the executor refuses to run it with a legible
-message. That ordering is intentional: the declaration is what the client and the
-validator need, and a module whose config schema is wrong is useless however good
-its code is. Implementations land per source as each one is converted.
+Implementations land in-tree, a coherent slice at a time. Declared modules that
+are not yet in this mapping still fail resolution with the explicit
+"declared but not yet implemented" error.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
+from windex.modules.catalog import (
+    list_json_manifest,
+    list_lines,
+    list_path_manifest_gz,
+)
+from windex.modules.collect import store_upsert
+from windex.modules.discover import state_pending, static_once
 from windex.worker.protocol import Runner
 
-RUNNERS: dict[str, Callable[..., Runner]] = {}
+RUNNERS: dict[str, Callable[..., Runner]] = {
+    "state.pending": state_pending,
+    "static.once": static_once,
+    "list.lines": list_lines,
+    "list.json_manifest": list_json_manifest,
+    "list.path_manifest_gz": list_path_manifest_gz,
+    "store.upsert": store_upsert,
+}
 
 
 def register(name: str):
