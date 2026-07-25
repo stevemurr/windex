@@ -16,6 +16,7 @@ DOC = {
     "corpus": {"source": "probe"},
     "config": [
         {"key": "seeds", "kind": "url_list", "required": True},
+        {"key": "label", "kind": "str", "default": "default label"},
     ],
     "state": {"frontier": {"key": "url"}},
     "flows": {
@@ -150,6 +151,7 @@ def test_submit_freezes_values_dedupes_and_cancels(
     assert run is not None
     assert run["state"] == "queued"
     assert run["spec"]["version"] == 1
+    assert run["params"]["label"] == "default label"
     assert run["tasks"][0]["config"]["seeds"] == [
         "https://example.com/docs/"]
     assert run["tasks"][0]["state"] == "ready"

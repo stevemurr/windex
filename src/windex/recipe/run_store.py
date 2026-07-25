@@ -14,6 +14,7 @@ import psycopg
 
 from windex.config import Settings
 from windex.recipe import compile as recipe_compile
+from windex.recipe import parse as recipe_parse
 from windex.recipe import store
 from windex.worker import dag
 
@@ -88,15 +89,22 @@ def submit(conn: psycopg.Connection, *, recipe: str, settings: Settings,
         **persisted,
         **{key: value for key, value in supplied.items() if key in config_keys},
     }
+    parsed = recipe_parse.parse(got["spec"], settings, builtin=True)
+    materialized = recipe_compile.resolve_config(
+        parsed, settings, config_values)
     tasks = recipe_compile.compile_tasks(
-        got["spec"], flow=flow, settings=settings, values=config_values)
+        got["spec"], flow=flow, settings=settings, values=materialized)
     if not tasks:
         raise ValueError(f"recipe {recipe!r} flow has no tasks")
     unavailable = recipe_compile.unavailable_modules(tasks)
     if unavailable:
         raise ModulesUnavailable(unavailable)
 
-    run_params = {**config_values, **supplied}
+    # Runtime helpers also read frozen recipe values from TaskContext.params
+    # (for example Wiki's URL template needs the default dump name). Keeping
+    # only caller-supplied values here makes a default behave differently from
+    # the same explicit value and lets a future default change alter a replay.
+    run_params = {**materialized, **supplied}
     if flow:
         run_params["flow"] = flow
     return dag.submit_run(
