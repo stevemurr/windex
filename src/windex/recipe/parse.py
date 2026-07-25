@@ -183,9 +183,16 @@ def _resolve_value(value, param: Param, cfg_keys: dict[str, Param],
                     f"{where}: @config.{key} is {ref.kind}, but this field is "
                     f"{param.kind}")
             return value                      # resolved at run time, checked now
-        if _SECRET_REF.match(value) and param.kind != "secret_ref":
-            raise ValueError(f"{where}: a secret reference is only allowed on a "
-                             f"secret_ref field")
+        m = _SECRET_REF.match(value)
+        if m:
+            if param.kind != "secret_ref":
+                raise ValueError(f"{where}: a secret reference is only allowed on a "
+                                 f"secret_ref field")
+            # `@secret.github_tokens` is sugar for the bare name. Unwrap it before
+            # coercing, or the allowlist check compares against the decorated form
+            # and every reference fails — which is the one syntax the field type
+            # exists to accept.
+            value = m.group(1)
     try:
         return param.coerce(value, settings)
     except ValueError as exc:

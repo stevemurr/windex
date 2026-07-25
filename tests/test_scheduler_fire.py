@@ -9,6 +9,7 @@ to wait for it.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import time
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -636,7 +637,15 @@ def test_only_one_session_holds_the_scheduler_lock(pg, pg_dsn):
         assert try_scheduler_lock(b) is False
         assert try_scheduler_lock(a) is True      # re-entrant for the holder
         a.close()                                 # holder dies -> lock released
-        assert try_scheduler_lock(b) is True
+        # close() is client-side; the server frees the lock when it PROCESSES the
+        # disconnect. Asserting immediately is a race that only passed because
+        # earlier tests in this file added enough latency to hide it — so poll for
+        # the property rather than for the scheduler's timing.
+        deadline = time.monotonic() + 5.0
+        while not try_scheduler_lock(b):
+            assert time.monotonic() < deadline, \
+                "lock not released within 5s of the holding session ending"
+            time.sleep(0.05)
     finally:
         for c in (a, b):
             try:

@@ -12,5 +12,6 @@ that being remote code execution.
 """
 
 from windex.recipe import ports, registry
+from windex.recipe.compile import compile_tasks, resolve
 
-__all__ = ["ports", "registry"]
+__all__ = ["ports", "registry", "compile_tasks", "resolve"]

@@ -19,6 +19,7 @@ exactly the upstream it was written for.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 from windex.schema.param import Param
@@ -43,6 +44,13 @@ class Module:
     fields: tuple[Param, ...] = ()
     allowed_hosts: tuple[str, ...] = ()      # () = no network; ("*",) = caller-chosen
     capabilities: tuple[str, ...] = ()
+    # Which worker lane this runs in, and what must hold before it may be claimed.
+    # Assigned below rather than inferred from `kind`: the lane is a property of
+    # what a module DOES, and inferring it would put a 333MB shard reader in the
+    # same lane as a status query. cpu_heavy is capped at 1 concurrent because
+    # that cap IS the memory ceiling on this box.
+    lane: str = "io"                         # gpu | net | cpu_heavy | io | maint
+    preconditions: tuple[str, ...] = ()      # worker.preconditions.KNOWN
     version: str = "1.0"
     stability: str = "stable"                # stable | beta | experimental
     # Relaxations of the one-in/one-out contract, each for exactly one real reason.
@@ -58,6 +66,7 @@ class Module:
             "capabilities": list(self.capabilities),
             "allowed_hosts": list(self.allowed_hosts),
             "batched": self.batched, "thread_safe": self.thread_safe,
+            "lane": self.lane, "preconditions": list(self.preconditions),
             "config": {"fields": [f.describe() for f in self.fields]},
         }
 
@@ -452,9 +461,31 @@ _SINKS = (
     ),
 )
 
-MODULES: dict[str, Module] = {
-    m.name: m for m in (_DISCOVER + _FETCH + _CATALOG + _EXTRACT + _TRANSFORM + _SINKS)
+# Lane and precondition assignment, applied after construction so it reads as one
+# table rather than a kwarg buried in forty declarations. Anything not listed is
+# `io` with no preconditions: it waits on Postgres or a small local read.
+_PLACEMENT: dict[str, tuple[str, tuple[str, ...]]] = {
+    # net — bounded by upstream politeness, not by this box, so several may run
+    "http.get":             ("net", ()),
+    "http.download":        ("net", ("storage:downloads",)),
+    "http.paginate":        ("net", ()),
+    "github.graphql_batch": ("net", ("gh_token",)),
+    # cpu_heavy — the two memory-hungry paths, and the extraction that is both
+    # CPU-bound and not thread-safe
+    "warc.datatrove":       ("cpu_heavy", ("storage:downloads", "storage:staging")),
+    "cirrus.articles":      ("cpu_heavy", ("storage:staging",)),
+    "html.trafilatura":     ("cpu_heavy", ()),
+    # io, but they touch the staging tree, so they wait on it being present and
+    # above its free-space reserve
+    "local.parquet_lookup": ("io", ("storage:staging",)),
+    "parquet.rows":         ("io", ("storage:staging",)),
+    "ledger.stage":         ("io", ("storage:staging",)),
 }
+
+MODULES: dict[str, Module] = {}
+for _m in (_DISCOVER + _FETCH + _CATALOG + _EXTRACT + _TRANSFORM + _SINKS):
+    _lane, _pre = _PLACEMENT.get(_m.name, ("io", ()))
+    MODULES[_m.name] = dataclasses.replace(_m, lane=_lane, preconditions=_pre)
 
 # Modules the compiler injects itself, which a recipe may neither name nor skip.
 # Sanitization is not optional: smuggled/invisible code points must be stripped
