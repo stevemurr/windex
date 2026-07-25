@@ -1,0 +1,50 @@
+{
+  "_global": [
+    "crawl_host_interval",
+    "crawl_max_depth",
+    "crawl_max_pages",
+    "embed_concurrency",
+    "embed_global_budget",
+    "embed_order",
+    "embed_throttle_seconds"
+  ],
+  "arxiv": [
+    "arxiv_earliest_year",
+    "arxiv_incremental_days",
+    "arxiv_request_interval"
+  ],
+  "ccnews": [
+    "minhash_window_days",
+    "news_backfill_days",
+    "news_language"
+  ],
+  "docs": [
+    "docs_slugs"
+  ],
+  "gh": [
+    "repo_star_threshold"
+  ],
+  "hf": [
+    "hf_blog_batch",
+    "hf_request_interval",
+    "hf_request_timeout",
+    "hf_roots"
+  ],
+  "hn": [
+    "hn_incremental_days",
+    "hn_request_interval"
+  ],
+  "smallweb": [
+    "smallweb_concurrency",
+    "smallweb_host_interval",
+    "smallweb_max_fail",
+    "smallweb_max_items",
+    "smallweb_min_chars",
+    "smallweb_poll_batch",
+    "smallweb_request_timeout"
+  ],
+  "wiki": [
+    "wiki_chunk_rows",
+    "wiki_dump"
+  ]
+}

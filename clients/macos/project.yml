@@ -1,0 +1,64 @@
+name: Windex
+options:
+  bundleIdPrefix: com.stevemurr
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+packages:
+  WindexKit:
+    path: Packages/WindexKit
+targets:
+  Windex:
+    type: application
+    platform: macOS
+    sources:
+      - path: WindexApp
+        excludes:
+          - Tests
+          - Resources/Info.plist
+    resources:
+      - path: WindexApp/Resources/Fonts
+        type: folder
+      - path: WindexApp/Resources/Licenses
+        type: folder
+    dependencies:
+      - package: WindexKit
+        product: WindexKit
+      - package: WindexKit
+        product: WindexUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.stevemurr.windex
+        PRODUCT_NAME: Windex
+        INFOPLIST_FILE: WindexApp/Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: YES
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+  WindexTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: WindexApp/Tests
+    dependencies:
+      - target: Windex
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.stevemurr.windex.tests
+        GENERATE_INFOPLIST_FILE: YES
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        SWIFT_VERSION: "6.0"
+schemes:
+  Windex:
+    build:
+      targets:
+        Windex: all
+        WindexTests:
+          - test
+    test:
+      targets:
+        - WindexTests
+      gatherCoverageData: true

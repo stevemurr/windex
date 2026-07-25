@@ -1,0 +1,6 @@
+# Types only. The transport, the SSE client and everything touching /v1/search
+# stay hand-written — see Packages/WindexKit/README.md for why.
+generate:
+  - types
+accessModifier: public
+namingStrategy: idiomatic
