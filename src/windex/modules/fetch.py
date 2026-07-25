@@ -214,12 +214,19 @@ def _run_batches(ctx: TaskContext, process, *, limit: int = _INPUT_BATCH) -> Sli
         finish_batch(ctx, batch, outputs=emitted)
         processed.append(batch)
         outputs += len(emitted)
+        # A fetched/downloaded upstream unit is already the resume boundary.
+        # Commit it before starting another potentially long network unit so a
+        # later crash cannot replay work that finished minutes earlier.
+        ctx.conn.commit()
+        ctx.heartbeat(
+            len(processed),
+            0,
+            {"last": batch.key, "outputs": outputs},
+        )
         if ctx.should_yield():
             break
     ctx.conn.commit()
     done = len(processed)
-    if done:
-        ctx.heartbeat(done, 0, {"last": processed[-1].key, "outputs": outputs})
     return SliceResult(
         units_done=done,
         exhausted=not more and done == len(batches),
@@ -1013,12 +1020,16 @@ def http_get(ctx: TaskContext) -> SliceResult:
             finish_batch(ctx, batch, outputs=emitted)
             processed.append(batch)
             count += len(emitted)
+            ctx.conn.commit()
+            ctx.heartbeat(
+                len(processed),
+                0,
+                {"last": batch.key, "outputs": count},
+            )
             if ctx.should_yield():
                 break
     ctx.conn.commit()
     done = len(processed)
-    if done:
-        ctx.heartbeat(done, 0, {"last": processed[-1].key, "outputs": count})
     return SliceResult(
         units_done=done,
         exhausted=not more and done == len(batches),
