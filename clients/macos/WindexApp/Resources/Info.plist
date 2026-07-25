@@ -31,6 +31,8 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Steve Murr</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Connect to your windex server on this local network.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>
