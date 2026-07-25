@@ -86,7 +86,7 @@ the system.
 |---|---|---|
 | Display | **Archivo Condensed** (or Archivo Expanded for the wordmark) | set numbers, screen titles, section mastheads |
 | UI | **SF Pro** | every label, button, menu, body sentence |
-| Data | **IBM Plex Mono** | doc ids, URLs, paths, counts, timestamps, log lines, recipe source |
+| Data | **IBM Plex Mono** | doc ids, URLs, paths, counts, timestamps, log lines, Pipeline definition |
 
 Using SF for UI chrome is deliberate, not a cop-out: a native app that fights the
 platform's UI face feels like a web page in a window. The character comes from
@@ -121,7 +121,7 @@ is the single most common way a live dashboard feels cheap.
   edges are what make it read as printed.
 - **No shadows.** Depth is a value step (`ink` → `plate`) plus a `rule` hairline.
   Shadows on a dark ground produce mud.
-- **Measure:** prose caps at ~68 characters. Description fields in the recipe
+- **Measure:** prose caps at ~68 characters. Description fields in the Pipeline
   inspector are the only long-form text and they must not run the full pane width.
 
 ### 3.4 Motion
@@ -213,8 +213,8 @@ Do not number anything that is not genuinely sequential.
 
 ### 5.1 SchemaForm
 
-The most reused thing in the app: it renders the node inspector, windex settings,
-recipe install params and job dialogs from the same `Param` JSON. Build it once,
+The most reused thing in the app: it renders the Node inspector, Source and
+operator settings, and Run dialogs from the same `Param` JSON. Build it once,
 generically, driven entirely by `GET /admin/v1/registry` and `/admin/v1/settings`.
 **Hardcode no field.**
 
@@ -265,15 +265,17 @@ Zero radius, `rule` hairline between rows, no zebra striping. Header row is
 `eyebrow`. Numeric columns right-aligned and tabular. Row height 28. A table is
 the default way to show a list here — resist turning any of them into cards.
 
-### 5.4 The recipe editor
+### 5.4 The Pipeline composer
 
-Per the plan: read-only auto-laid-out diagram + node list + schema-driven inspector
-+ raw YAML view. **Not** an interactive canvas in v1.
+The Pipeline workspace is an interactive, registry-driven graph canvas. A
+published revision is semantically read-only; “New revision” creates a mutable
+draft. Manual Node positions, groups, and annotations synchronize independently
+and never change the semantic hash.
 
-The diagram uses the same node-box treatment as the Galley, so a recipe and a run
-look like the same object in two states — which they are. Node boxes: `plate`
-ground, `rule` border, radius 0, number in `graphite` mono, name in `label`, module
-id in `data-sm` `graphite`.
+Node boxes use the same treatment as the Galley so a Pipeline and a Run read as
+the same graph in definition and execution states. Node boxes: `plate` ground,
+`rule` border, radius 0, name in `label`, Module id and Port types in `data-sm`
+`graphite`. The Module palette and Node inspector hardcode no Module vocabulary.
 
 Validation surfaces in two registers: local checks annotate the field instantly;
 the debounced server `validate` populates a footer strip — `⚠ 1 warning · 0 errors`
@@ -289,8 +291,9 @@ These are the moments that decide whether an app feels finished.
 screen is for and offer the action:
 
 > **No sources yet.**
-> A source is a recipe: where to fetch, how to extract, what to keep.
-> [ Add a source ]  [ Browse the marketplace ]
+> A Source binds a pinned Pipeline revision to an origin, runtime state, and
+> searchable corpus.
+> [ Choose a Pipeline ]
 
 **Loading never blocks what is already known.** `Loadable<T>` carries `stale`, so a
 refresh dims existing content by ~40% rather than replacing it with a spinner. A
@@ -318,7 +321,7 @@ Specific cases worth designing rather than generalizing:
 ## 7. Words
 
 - **Sentence case everywhere.** No Title Case buttons.
-- **Name things as the person controls them.** "Sources", not "recipes table".
+- **Name things as the person controls them.** "Sources", not "deployment rows".
   "Pause indexing", not "set control flag".
 - **An action keeps its name through the whole flow.** The button says *Run now*,
   the toast says *Run queued*, the row says *running*.
@@ -353,8 +356,8 @@ Not optional, and not to be announced in the UI:
 4. **Runs list → Run Monitor (the Galley).** The hardest screen; do it once the
    language is settled.
 5. **Settings, Logs, Search.** All `SchemaForm` and tables by this point.
-6. **Recipe editor.** Last, because it is the most novel and benefits most from a
-   settled vocabulary.
+6. **Pipeline composer.** Build the registry palette, canvas, and inspector
+   before publication and Source-creation flows are connected.
 
 ---
 

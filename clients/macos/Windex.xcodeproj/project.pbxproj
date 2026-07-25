@@ -8,30 +8,29 @@
 
 /* Begin PBXBuildFile section */
 		07ED7D9F243B8B9F6661F5E2 /* AppModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8CD6F40E351F677B8C3D6AB /* AppModelTests.swift */; };
+		08244774E2CA4DD4288DCFB5 /* OverviewWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A307EF546BCFE808D85D8476 /* OverviewWorkspaceView.swift */; };
 		0DCA6BA9B9E8A7C1050A97B7 /* AppFontRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 726592939ACFF8719C434D74 /* AppFontRegistry.swift */; };
-		1B8A63BD3F9062E49236135B /* OverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D028C60D102524F3E4B71735 /* OverviewView.swift */; };
+		10FF97159CE8DE712FCC98B2 /* CommonStates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 446F0A8F45E8E7A830B9221C /* CommonStates.swift */; };
+		16A4E2AC61FD7004B1D50163 /* RunWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF805395216C7416F4007FD4 /* RunWorkspaceView.swift */; };
+		1C6DCD92505B1F97C0817AC3 /* ConsoleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EE1634EB30941C0E80A0680 /* ConsoleView.swift */; };
 		20752A3365DE23E414A9D6E8 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 222524089FCE901632834233 /* SearchView.swift */; };
 		220C751B1A81323D94E139AF /* OFL-Archivo.txt in Resources */ = {isa = PBXBuildFile; fileRef = 1DD5A2AB210844D2888C19CE /* OFL-Archivo.txt */; };
-		26399E5A1E3B34F8AD931400 /* MarketplaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 756E579BB84FAFDDC0F23EDA /* MarketplaceView.swift */; };
 		29BFB2760DD2A2CDB8B30CE8 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3AB53E17F9753BDABA70607 /* PairingView.swift */; };
+		381848A4E171FC2212C5427A /* PipelinesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7CA0877D2E30629225BA8F7 /* PipelinesView.swift */; };
 		3D4FDC6D2172AA1F6EA5EC3E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 74190244EB5FFBCD65CA3793 /* Assets.xcassets */; };
 		472C67AB4FF54CAED84F4F9F /* WindexKit in Frameworks */ = {isa = PBXBuildFile; productRef = 1E1463297EF1D5184F155E2C /* WindexKit */; };
 		48966DDDE34C2EE434E0554E /* WindexUI in Frameworks */ = {isa = PBXBuildFile; productRef = B69EC3AE87B3E98DA39029F8 /* WindexUI */; };
-		4B0E4CA07037E9FB6EC93BA7 /* RecipesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE4BC7E48EC06F787A6EFBDC /* RecipesView.swift */; };
-		4BDF5A9B77DDC9FF4712912A /* RunsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C5EAD818849B9026E153826 /* RunsView.swift */; };
-		52038EB25916CEBC6CC8014C /* RecipeGraphLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFF41031AB6BD8A8DBD1D75B /* RecipeGraphLayoutTests.swift */; };
 		55FD2D075A3C48F96C4A2F2F /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D463B914F0A0EF2E58B037B /* KeychainTokenStore.swift */; };
 		5D295224C596FDF304F4DB3F /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B88E33AF32C998CEACC5B7C /* SettingsView.swift */; };
-		932DF566F42C7893E9B4AFD0 /* SourcesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBA73346BAD6CC7DC2148F31 /* SourcesView.swift */; };
+		61C72F9ABE656E7E61572A90 /* BackendSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395CE89C2300EDDC1B18D07F /* BackendSession.swift */; };
+		88B923106F1838CCF6F3E0BD /* SourceWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E62C4D0A6DBEF04A5A5E51AB /* SourceWorkspaceView.swift */; };
 		950E907DC6CE9A94CBCDA5E8 /* Archivo-Variable.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 13BCA1A9F02859BDFDEC3C5B /* Archivo-Variable.ttf */; };
-		9CF51AC5107D98A3D4A4A154 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EF8D9B31029CAFE734B2CA5 /* LogsView.swift */; };
 		C118E1614A23450043F7638F /* AppShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1027BD81BFAFD57E5A32C38 /* AppShellView.swift */; };
 		C268344AF1AD26709618E470 /* OFL-IBMPlexMono.txt in Resources */ = {isa = PBXBuildFile; fileRef = 4FD3CCBD1AE5CBAA2535118F /* OFL-IBMPlexMono.txt */; };
 		C436C0D414FAEC91837B20C4 /* WindexApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 885327951FE2AF1DB18312C4 /* WindexApp.swift */; };
 		D3D9E008969D93F8E238C122 /* IBMPlexMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 6EF3E654D873E007B44BC362 /* IBMPlexMono-Regular.ttf */; };
 		E60963CC6B26DB854685C6DB /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 068E543BF1F9ABFF7C50FAE9 /* AppModel.swift */; };
 		F0329E54D81FD141CFD41E46 /* FontBundleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93184813B43791E62E4BF673 /* FontBundleTests.swift */; };
-		FBBC4C934510DE5FACFBC194 /* OverviewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85CD56B38B4C85D363B302A4 /* OverviewModelTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -46,31 +45,30 @@
 
 /* Begin PBXFileReference section */
 		068E543BF1F9ABFF7C50FAE9 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
-		0C5EAD818849B9026E153826 /* RunsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunsView.swift; sourceTree = "<group>"; };
 		13BCA1A9F02859BDFDEC3C5B /* Archivo-Variable.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Archivo-Variable.ttf"; sourceTree = "<group>"; };
 		1DD5A2AB210844D2888C19CE /* OFL-Archivo.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "OFL-Archivo.txt"; sourceTree = "<group>"; };
 		222524089FCE901632834233 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		26626AA53527265B065D34CD /* WindexTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WindexTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		30D14AE3958FA202365A529D /* WindexKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = WindexKit; path = Packages/WindexKit; sourceTree = SOURCE_ROOT; };
+		395CE89C2300EDDC1B18D07F /* BackendSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendSession.swift; sourceTree = "<group>"; };
+		446F0A8F45E8E7A830B9221C /* CommonStates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommonStates.swift; sourceTree = "<group>"; };
 		4D463B914F0A0EF2E58B037B /* KeychainTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainTokenStore.swift; sourceTree = "<group>"; };
-		4EF8D9B31029CAFE734B2CA5 /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		4FD3CCBD1AE5CBAA2535118F /* OFL-IBMPlexMono.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "OFL-IBMPlexMono.txt"; sourceTree = "<group>"; };
 		5B88E33AF32C998CEACC5B7C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		6EF3E654D873E007B44BC362 /* IBMPlexMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "IBMPlexMono-Regular.ttf"; sourceTree = "<group>"; };
 		726592939ACFF8719C434D74 /* AppFontRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppFontRegistry.swift; sourceTree = "<group>"; };
 		74190244EB5FFBCD65CA3793 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		756E579BB84FAFDDC0F23EDA /* MarketplaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketplaceView.swift; sourceTree = "<group>"; };
-		85CD56B38B4C85D363B302A4 /* OverviewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewModelTests.swift; sourceTree = "<group>"; };
 		885327951FE2AF1DB18312C4 /* WindexApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindexApp.swift; sourceTree = "<group>"; };
+		8EE1634EB30941C0E80A0680 /* ConsoleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleView.swift; sourceTree = "<group>"; };
 		93184813B43791E62E4BF673 /* FontBundleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontBundleTests.swift; sourceTree = "<group>"; };
+		A307EF546BCFE808D85D8476 /* OverviewWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWorkspaceView.swift; sourceTree = "<group>"; };
 		B7DC27050ECED7858A069A0E /* Windex.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Windex.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C3AB53E17F9753BDABA70607 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
-		D028C60D102524F3E4B71735 /* OverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewView.swift; sourceTree = "<group>"; };
+		D7CA0877D2E30629225BA8F7 /* PipelinesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelinesView.swift; sourceTree = "<group>"; };
 		D8CD6F40E351F677B8C3D6AB /* AppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelTests.swift; sourceTree = "<group>"; };
-		DE4BC7E48EC06F787A6EFBDC /* RecipesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipesView.swift; sourceTree = "<group>"; };
-		EFF41031AB6BD8A8DBD1D75B /* RecipeGraphLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeGraphLayoutTests.swift; sourceTree = "<group>"; };
+		DF805395216C7416F4007FD4 /* RunWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunWorkspaceView.swift; sourceTree = "<group>"; };
+		E62C4D0A6DBEF04A5A5E51AB /* SourceWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceWorkspaceView.swift; sourceTree = "<group>"; };
 		F1027BD81BFAFD57E5A32C38 /* AppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellView.swift; sourceTree = "<group>"; };
-		FBA73346BAD6CC7DC2148F31 /* SourcesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -165,6 +163,7 @@
 			isa = PBXGroup;
 			children = (
 				068E543BF1F9ABFF7C50FAE9 /* AppModel.swift */,
+				395CE89C2300EDDC1B18D07F /* BackendSession.swift */,
 				885327951FE2AF1DB18312C4 /* WindexApp.swift */,
 			);
 			path = App;
@@ -175,8 +174,6 @@
 			children = (
 				D8CD6F40E351F677B8C3D6AB /* AppModelTests.swift */,
 				93184813B43791E62E4BF673 /* FontBundleTests.swift */,
-				85CD56B38B4C85D363B302A4 /* OverviewModelTests.swift */,
-				EFF41031AB6BD8A8DBD1D75B /* RecipeGraphLayoutTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -185,15 +182,15 @@
 			isa = PBXGroup;
 			children = (
 				F1027BD81BFAFD57E5A32C38 /* AppShellView.swift */,
-				4EF8D9B31029CAFE734B2CA5 /* LogsView.swift */,
-				756E579BB84FAFDDC0F23EDA /* MarketplaceView.swift */,
-				D028C60D102524F3E4B71735 /* OverviewView.swift */,
+				446F0A8F45E8E7A830B9221C /* CommonStates.swift */,
+				8EE1634EB30941C0E80A0680 /* ConsoleView.swift */,
+				A307EF546BCFE808D85D8476 /* OverviewWorkspaceView.swift */,
 				C3AB53E17F9753BDABA70607 /* PairingView.swift */,
-				DE4BC7E48EC06F787A6EFBDC /* RecipesView.swift */,
-				0C5EAD818849B9026E153826 /* RunsView.swift */,
+				D7CA0877D2E30629225BA8F7 /* PipelinesView.swift */,
+				DF805395216C7416F4007FD4 /* RunWorkspaceView.swift */,
 				222524089FCE901632834233 /* SearchView.swift */,
 				5B88E33AF32C998CEACC5B7C /* SettingsView.swift */,
-				FBA73346BAD6CC7DC2148F31 /* SourcesView.swift */,
+				E62C4D0A6DBEF04A5A5E51AB /* SourceWorkspaceView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -300,16 +297,17 @@
 				0DCA6BA9B9E8A7C1050A97B7 /* AppFontRegistry.swift in Sources */,
 				E60963CC6B26DB854685C6DB /* AppModel.swift in Sources */,
 				C118E1614A23450043F7638F /* AppShellView.swift in Sources */,
+				61C72F9ABE656E7E61572A90 /* BackendSession.swift in Sources */,
+				10FF97159CE8DE712FCC98B2 /* CommonStates.swift in Sources */,
+				1C6DCD92505B1F97C0817AC3 /* ConsoleView.swift in Sources */,
 				55FD2D075A3C48F96C4A2F2F /* KeychainTokenStore.swift in Sources */,
-				9CF51AC5107D98A3D4A4A154 /* LogsView.swift in Sources */,
-				26399E5A1E3B34F8AD931400 /* MarketplaceView.swift in Sources */,
-				1B8A63BD3F9062E49236135B /* OverviewView.swift in Sources */,
+				08244774E2CA4DD4288DCFB5 /* OverviewWorkspaceView.swift in Sources */,
 				29BFB2760DD2A2CDB8B30CE8 /* PairingView.swift in Sources */,
-				4B0E4CA07037E9FB6EC93BA7 /* RecipesView.swift in Sources */,
-				4BDF5A9B77DDC9FF4712912A /* RunsView.swift in Sources */,
+				381848A4E171FC2212C5427A /* PipelinesView.swift in Sources */,
+				16A4E2AC61FD7004B1D50163 /* RunWorkspaceView.swift in Sources */,
 				20752A3365DE23E414A9D6E8 /* SearchView.swift in Sources */,
 				5D295224C596FDF304F4DB3F /* SettingsView.swift in Sources */,
-				932DF566F42C7893E9B4AFD0 /* SourcesView.swift in Sources */,
+				88B923106F1838CCF6F3E0BD /* SourceWorkspaceView.swift in Sources */,
 				C436C0D414FAEC91837B20C4 /* WindexApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -320,8 +318,6 @@
 			files = (
 				07ED7D9F243B8B9F6661F5E2 /* AppModelTests.swift in Sources */,
 				F0329E54D81FD141CFD41E46 /* FontBundleTests.swift in Sources */,
-				FBBC4C934510DE5FACFBC194 /* OverviewModelTests.swift in Sources */,
-				52038EB25916CEBC6CC8014C /* RecipeGraphLayoutTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -370,11 +366,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -395,7 +389,6 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
@@ -436,11 +429,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -454,7 +445,6 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
@@ -465,10 +455,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 6237SR7A22;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -487,10 +474,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 6237SR7A22;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -513,8 +497,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 6237SR7A22;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WindexApp/Resources/Info.plist;
@@ -539,8 +521,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 6237SR7A22;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WindexApp/Resources/Info.plist;

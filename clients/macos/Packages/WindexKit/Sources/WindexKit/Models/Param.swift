@@ -5,9 +5,9 @@ import Foundation
 /// This is the Swift mirror of `windex.schema.param.Param.describe()`
 /// (`src/windex/schema/param.py`). It is decoded **generically**: nothing here
 /// names a windex setting. That is the whole point — the same struct backs
-/// editable settings today and job arguments and recipe module config later, so
-/// `SchemaForm` is written once against `Param` and the recipe editor in a later
-/// phase drops straight onto it without a new renderer.
+/// editable settings, Run arguments, and Pipeline Module configuration, so
+/// `SchemaForm` is written once against `Param` and the Pipeline composer drops
+/// straight onto it without a second value renderer.
 ///
 /// Two server rules a client must not paper over:
 ///
@@ -76,9 +76,9 @@ public struct Param: Sendable, Hashable, Codable, Identifiable {
     /// Which UI control renders this param.
     ///
     /// The server's `EDITOR_FOR_KIND` supplies a default per kind, but the set is
-    /// **open**: `recipe/parse.py` passes a module's declared `editor` string
-    /// straight through, so a recipe can ask for a control no built-in setting
-    /// uses. The cases below are the full vocabulary `DESIGN.md` §5.1 specifies a
+    /// **open**: the registry passes a Module's declared `editor` string straight
+    /// through, so a Pipeline can ask for a control no built-in setting uses. The
+    /// cases below are the full vocabulary `DESIGN.md` §5.1 specifies a
     /// control for; anything else lands in `.unknown` and falls back to a text
     /// field, so a newer server adding a control degrades one row rather than
     /// breaking the form.
@@ -144,7 +144,7 @@ public struct Param: Sendable, Hashable, Codable, Identifiable {
     /// How the server handles an out-of-range value.
     public enum Enforce: String, Sendable, Hashable, Codable {
         /// Silently pulled to the bound. The windex default; right for settings
-        /// and recipe config.
+        /// and Pipeline Module configuration.
         case clamp
         /// Refused with a 422. Used where a value is an explicit instruction (a
         /// job argument) and running something else is worse than an error.
@@ -159,7 +159,7 @@ public struct Param: Sendable, Hashable, Codable, Identifiable {
         public var clampsHigh: Bool { self == .ceiling || self == .both }
     }
 
-    /// Install-time vs run-time param (recipes; `"runtime"` for settings).
+    /// Install-time vs run-time parameter (`"runtime"` for settings).
     public enum Stage: String, Sendable, Hashable, Codable {
         case install, runtime
     }

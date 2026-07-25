@@ -36,6 +36,7 @@ struct AppModelTests {
         #expect(model.backendAddress == "http://spark.local:8100")
         #expect(model.connectedBackend?.profile == profile)
         #expect(model.connectedBackend?.hasStoredToken == true)
+        #expect(model.session != nil)
         #expect(tokens.loadedAccounts == [profile.credentialAccount])
         #expect(recorder.tokens == ["secret"])
     }
@@ -60,6 +61,7 @@ struct AppModelTests {
         model.forgetBackend()
         #expect(tokens.values[profile.credentialAccount] == nil)
         #expect(addresses.value == nil)
+        #expect(model.session == nil)
         #expect(model.connectionState == .unconfigured)
     }
 
@@ -76,6 +78,7 @@ struct AppModelTests {
         await model.connect(profile.displayAddress)
 
         #expect(model.connectionState == .tokenRequired(profile))
+        #expect(model.session == nil)
         #expect(tokens.values.isEmpty)
     }
 
@@ -92,6 +95,7 @@ struct AppModelTests {
         await model.restore()
 
         #expect(tokens.values[profile.credentialAccount] == nil)
+        #expect(model.session == nil)
         #expect(model.connectionState == .failed(profile, .unauthorized))
     }
 
