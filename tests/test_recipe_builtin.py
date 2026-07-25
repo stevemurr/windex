@@ -88,6 +88,20 @@ def test_the_hard_shapes_are_actually_present(settings):
     assert len(from_get) == 2
 
 
+def test_ccnews_sync_fetches_monthly_manifests(settings):
+    """CC-News publishes one WARC manifest per YYYY/MM, not a global listing."""
+    recipe = next(
+        item for item in store.load_builtins(settings) if item.name == "ccnews")
+    sync = next(flow for flow in recipe.flows if flow.name == "sync")
+    by_id = {node.id: node for node in sync.nodes}
+
+    assert by_id["months"].uses == "time.calendar"
+    assert by_id["months"].config["unit"] == "month"
+    assert by_id["listing"].config["url_template"].endswith(
+        "/CC-NEWS/{key}/warc.paths.gz")
+    assert not by_id["listing"].config.get("missing_ok")
+
+
 def test_push_sources_have_no_pull_roots(settings):
     """A source is push or pull. Mixing them makes "what does refresh do"
     unanswerable, and the two have opposite rules for absent ids."""
