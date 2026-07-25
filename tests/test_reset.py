@@ -15,10 +15,28 @@ from windex.cli import app as cli
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _never_touch_production_qdrant(monkeypatch):
+    """`reset` DELETES collections, and the `settings` fixture points at the real
+    Qdrant on 127.0.0.1:6333. This test file once deleted all 13 production
+    collections — the corpus survived (extracted text is the source of truth) but
+    every vector had to be rebuilt.
+
+    Two belts, because one was not enough:
+      * `reset` now only deletes collections it owns, for its configured model
+        (see the comment in cli.reset). That is the structural fix.
+      * This fixture pins the model to a name production never uses, so even a
+        regression in that scoping cannot reach a real collection from here.
+    """
+    monkeypatch.setattr("windex.index.qdrant.alias_name",
+                        lambda source: f"{source}_pytest_alias")
+
+
 @pytest.fixture()
 def seeded(pg, settings, monkeypatch):
     """A database that looks lived-in: corpus, watermarks, run history, settings,
     a registered source, and a staged parquet file."""
+    monkeypatch.setattr(settings, "embed_model", "pytest-reset-model")
     monkeypatch.setattr("windex.cli.get_settings", lambda: settings)
     with pg.cursor() as cur:
         # source_config is deliberately absent from conftest's truncate list (it is
@@ -111,3 +129,36 @@ def test_reset_without_yes_aborts_and_changes_nothing(seeded, qclient):
     r = runner.invoke(cli, ["reset"], input="n\n")
     assert r.exit_code != 0
     assert _count(seeded, "documents") == 1
+
+
+def test_reset_only_deletes_collections_it_owns(seeded, settings, qclient, capsys):
+    """The guard that matters. `reset` must never enumerate-and-delete the whole
+    cluster: Qdrant may be shared, and a destructive command that can only reach
+    its own named objects cannot be aimed elsewhere by accident.
+
+    Plants a collection belonging to a different model and a foreign one, and
+    asserts both survive.
+    """
+    from qdrant_client import models as qm
+
+    from conftest import QDRANT_URL
+    from qdrant_client import QdrantClient
+
+    c = QdrantClient(url=QDRANT_URL)
+    mine = f"news__{settings.embed_model}"          # this windex, this model
+    other_model = "news__some-other-model"          # this source, a DIFFERENT model
+    foreign = "someone_elses_app"                   # not windex at all
+    for name in (mine, other_model, foreign):
+        if c.collection_exists(name):
+            c.delete_collection(name)
+        c.create_collection(name, vectors_config={
+            "dense": qm.VectorParams(size=4, distance=qm.Distance.COSINE)})
+    try:
+        assert runner.invoke(cli, ["reset", "--yes"]).exit_code == 0
+        assert not c.collection_exists(mine), "should have dropped its own"
+        assert c.collection_exists(other_model), "another model's is not ours to drop"
+        assert c.collection_exists(foreign), "a foreign collection must be untouched"
+    finally:
+        for name in (mine, other_model, foreign):
+            if c.collection_exists(name):
+                c.delete_collection(name)

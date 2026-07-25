@@ -853,7 +853,27 @@ def reset(
         tables += ["source_config", "recipe_config", "schedule", "triggers"]
 
     client = qidx.client_from_url(settings.qdrant_url)
-    collections = [c.name for c in client.get_collections().collections]
+    # Only collections THIS windex owns, and only for THIS embedding model.
+    #
+    # It used to delete every collection in the cluster. That is wrong even in
+    # production — Qdrant may be shared — and it made the command impossible to
+    # test safely: the test fixtures point at the real Qdrant, so running `reset`
+    # under pytest deleted 13 production collections. Which it duly did.
+    #
+    # Scoping it is the structural fix. A destructive command that can only reach
+    # its own named objects cannot be aimed at anything else by accident, whereas
+    # "remember to isolate the fixture" is a rule someone eventually forgets.
+    suffix = f"__{qidx.slug(settings.embed_model)}"
+    owned = set(qidx.SOURCES)
+    with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT name FROM custom_sources")
+        owned |= {r[0] for r in cur.fetchall()}
+    collections = sorted(
+        c.name for c in client.get_collections().collections
+        if c.name.endswith(suffix) and c.name[: -len(suffix)] in owned)
+    skipped = sorted(
+        c.name for c in client.get_collections().collections
+        if c.name not in collections)
 
     # Say what will be destroyed BEFORE asking. A confirmation prompt that does not
     # show the blast radius is theatre.
@@ -864,6 +884,10 @@ def reset(
     console.print(f"  {docs:,} documents and {len(tables)} tables")
     console.print(f"  {len(collections)} Qdrant collections: "
                   f"{', '.join(collections[:4])}{' …' if len(collections) > 4 else ''}")
+    if skipped:
+        console.print(f"  [dim]leaving {len(skipped)} collection(s) alone — not this "
+                      f"windex's, or not model {settings.embed_model!r}: "
+                      f"{', '.join(skipped[:3])}{' …' if len(skipped) > 3 else ''}[/dim]")
     if not keep_staging:
         console.print(f"  all parquet under {settings.staging_dir}")
     console.print(f"  all downloads under {settings.downloads_dir}")
