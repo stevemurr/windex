@@ -37,7 +37,7 @@
           "error": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "boolean"
               },
               {
                 "type": "null"
@@ -2334,7 +2334,7 @@
           "t": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string"
               },
               {
                 "type": "null"
@@ -2481,7 +2481,7 @@
           "active": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "boolean"
               },
               {
                 "type": "null"

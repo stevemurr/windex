@@ -95,11 +95,16 @@ class ActivityItem(_Loose):
     group: str | None = None           # action | loop | service
     running: bool | None = None
     last_ts: float | None = None
-    error: str | None = None
+    # A FLAG, not a message: service.activity() computes it as
+    # `not running and errored(key)`. Declaring it `str` published a contract the
+    # handler never met, and a generated client typed it `String` and threw on
+    # the first real payload.
+    error: bool | None = None
 
 
 class WorkersState(_Loose):
-    active: int | None = None
+    # Also a flag — get_worker_activity() returns True/False in both branches.
+    active: bool | None = None
     stage: str | None = None
 
 
@@ -166,7 +171,10 @@ class RecentDoc(_Loose):
 
 
 class TimeseriesPoint(_Loose):
-    t: float | None = None
+    # An ISO-8601 minute bucket — get_timeseries() sends `m.isoformat()`. Was
+    # declared float, which is what a unix timestamp would be; a generated client
+    # typed it Double and threw on the first point.
+    t: str | None = None
     docs: int | None = None
     ingested: int | None = None
     mb: float | None = None
