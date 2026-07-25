@@ -178,7 +178,7 @@ def state_pending(ctx: TaskContext) -> SliceResult:
             ]
         elif store == "root":
             keys = sorted({
-                value[len("hf:"):].rsplit("/", 1)[0]
+                "/".join(value[len("hf:"):].split("/")[:2])
                 for value in anchors
                 if value.startswith(("hf:docs/", "hf:learn/"))
             })

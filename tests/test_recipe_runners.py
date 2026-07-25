@@ -303,6 +303,8 @@ def test_state_pending_uses_recipe_not_corpus_source_as_store_namespace(pg):
 def test_state_pending_can_replay_exact_hf_anchors(pg):
     _seed(pg, source="hf", store="post", key="wanted")
     _seed(pg, source="hf", store="post", key="other")
+    _seed(pg, source="hf", store="root", key="docs/diffusers")
+    _seed(pg, source="hf", store="root", key="docs/unrelated")
     ctx, _ = _ctx(
         pg,
         task_id=7106,
@@ -326,6 +328,28 @@ def test_state_pending_can_replay_exact_hf_anchors(pg):
     assert state_pending(ctx).units_done == 1
     [(key, _)] = _outputs(pg, ctx.task_id)
     assert key == "wanted"
+
+    roots, _ = _ctx(
+        pg,
+        task_id=7108,
+        recipe="hf",
+        source="hf",
+        module="state.pending",
+        config={
+            "store": "root",
+            "predicate": "token_moved",
+            "order": "key",
+            "batch": 4,
+        },
+        params={
+            "anchor_ids": [
+                "hf:docs/diffusers/api/models/ltx_video_transformer3d",
+            ],
+        },
+    )
+    assert state_pending(roots).units_done == 1
+    [(key, _)] = _outputs(pg, roots.task_id)
+    assert key == "docs/diffusers"
 
 
 def test_state_pending_yields_after_a_committed_unit_and_resumes(pg):
