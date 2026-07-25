@@ -172,6 +172,50 @@ def test_fire_writes_run_tasks_and_watermark_in_one_transaction(pg):
     assert len(ev) == 1 and ev[0][2]["trigger"] == "nightly" and ev[0][2]["tasks"] == 3
 
 
+def test_fire_materializes_saved_config_and_flow_for_richer_compiler(pg):
+    spec = {
+        "config": [
+            {"key": "batch", "kind": "int", "default": 10},
+            {"key": "host", "kind": "str"},
+        ],
+    }
+    make_recipe(pg, "wiki", spec=spec)
+    make_trigger(pg)
+    with pg.cursor() as cur:
+        cur.execute(
+            """INSERT INTO recipe_config (recipe, values)
+               VALUES ('wiki', '{"batch": 25, "host": "saved.example"}')""")
+    pg.commit()
+    seen = {}
+
+    def richer(document, *, values=None, flow=None):
+        seen.update({"spec": document, "values": values, "flow": flow})
+        return fake_nodes(document)
+
+    fired = fire_trigger(
+        pg,
+        "nightly",
+        compile_tasks=richer,
+        params={
+            "batch": 50,
+            "flow": "refresh",
+            "dedupe_key": "wiki:refresh",
+            "scheduler_note": "not recipe config",
+        },
+    )
+
+    assert fired.run_id is not None
+    assert seen == {
+        "spec": spec,
+        "values": {"batch": 50, "host": "saved.example"},
+        "flow": "refresh",
+    }
+    run_params = q(
+        pg, "SELECT params FROM runs WHERE id = %s", (fired.run_id,))[0][0]
+    assert run_params["scheduler_note"] == "not recipe config"
+    assert run_params["host"] == "saved.example"
+
+
 def test_a_failure_mid_fan_out_persists_nothing(pg):
     """The property the old `dispatch_entry` + `_mark_ran` pair could not have.
 

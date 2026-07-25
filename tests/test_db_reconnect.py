@@ -12,6 +12,19 @@ import pytest
 import windex.db as db
 
 
+def test_recipe_seed_failure_is_logged_without_blocking_init(monkeypatch, caplog):
+    from windex.recipe import store as recipe_store
+
+    def fail_seed(_conn, _settings):
+        raise RuntimeError("broken catalog")
+
+    monkeypatch.setattr(recipe_store, "seed_builtins", fail_seed)
+    with caplog.at_level("WARNING", logger="windex.db"):
+        db._seed_recipes(object())
+
+    assert "recipe seed skipped: broken catalog" in caplog.text
+
+
 def _scalar(conn: psycopg.Connection, sql: str):
     with conn.cursor() as cur:
         cur.execute(sql)

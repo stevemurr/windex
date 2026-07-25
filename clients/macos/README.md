@@ -6,9 +6,7 @@ The native control plane. Build this on a Mac — it does not compile on the Spa
 
 1. **`DESIGN.md`** (here) — the visual language. Tokens, the two signature screens,
    component specs, empty/error states, copy rules. Read before writing UI code.
-2. **`~/.claude/plans/i-want-to-look-cheeky-muffin.md` §F** — app architecture:
-   target structure, navigation, the model layer, the SSE client, the graph-editor
-   recommendation, distribution. §D covers the API contract it talks to.
+2. **`HANDOFF.md`** — current implementation state and external release gates.
 3. **`Packages/WindexKit/openapi-admin.json`** — the control-plane schema, checked
    in so the build needs no Python environment. `openapi.json` is the agent-facing
    `/v1` contract (search + docs), which is deliberately a separate document.
@@ -56,10 +54,14 @@ an output type connects to an input type iff they are equal. Read it off `kinds[
 
 ## Status
 
-Server-side, ready to build against today: pairing, search, system/ops, logs,
-settings (`SchemaForm` from `/admin/v1/settings`), the module registry, and recipe
-validation.
+The app target and both packages are implemented. Pairing, Keychain storage,
+overview, sources, runs/Galley, settings, logs, search, the recipe editor, and the
+marketplace are wired to typed contracts.
 
-Not built yet: recipe CRUD, runs, and the marketplace. The schemas for those will
-appear in `openapi-admin.json` as they land — regenerate and the client picks
-them up.
+```sh
+cd Packages/WindexKit && swift test
+cd ../.. && xcodebuild -project Windex.xcodeproj -scheme Windex \
+  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test
+```
+
+See `RELEASING.md` for Developer ID archive and notarization.

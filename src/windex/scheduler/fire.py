@@ -42,6 +42,7 @@ cannot cover: a human clicking "Run now" at the same second the timer fires.
 from __future__ import annotations
 
 import logging
+import inspect
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -371,15 +372,50 @@ def _fan_out(cur: psycopg.Cursor, run_id: int, source: str, priority: int,
     return len(rows)
 
 
-def _load_recipe(cur: psycopg.Cursor, name: str) -> tuple[str, int, dict, str]:
+def _load_recipe(
+    cur: psycopg.Cursor,
+    name: str,
+) -> tuple[str, int, dict, str, dict]:
     cur.execute(
-        "SELECT source, version, spec, spec_hash FROM recipes WHERE name = %s AND enabled",
+        """SELECT r.source, r.version, r.spec, r.spec_hash,
+                  coalesce(c.values, '{}'::jsonb)
+             FROM recipes r
+             LEFT JOIN recipe_config c ON c.recipe = r.name
+            WHERE r.name = %s AND r.enabled""",
         (name,))
     row = cur.fetchone()
     if row is None:
         raise RecipeMissing(name)
-    source, version, spec, spec_hash = row
-    return source, version, spec or {}, spec_hash or ""
+    source, version, spec, spec_hash, values = row
+    return source, version, spec or {}, spec_hash or "", values or {}
+
+
+def _compile(
+    compile_tasks: CompileTasks,
+    spec: dict,
+    *,
+    values: dict,
+    flow: str | None,
+) -> list[dict]:
+    """Pass materialized config to compilers that implement the richer seam.
+
+    The scheduler remains independently testable with the original one-argument
+    callable. The recipe compiler advertises ``values`` and ``flow`` as keyword
+    parameters, so signature inspection is explicit and cannot mask a TypeError
+    raised *inside* a compiler.
+    """
+    parameters = inspect.signature(compile_tasks).parameters
+    kwargs = {}
+    if "values" in parameters:
+        keys = {
+            field.get("key") for field in spec.get("config", [])
+            if isinstance(field, dict) and isinstance(field.get("key"), str)
+        }
+        kwargs["values"] = {key: value for key, value in values.items()
+                            if key in keys}
+    if "flow" in parameters and flow:
+        kwargs["flow"] = flow
+    return compile_tasks(spec, **kwargs)
 
 
 # --- the primitive ----------------------------------------------------------
@@ -410,16 +446,29 @@ def fire_trigger(conn: psycopg.Connection, name: str, *, compile_tasks: CompileT
         with conn.cursor() as cur:
             trig = load_trigger(cur, name, lock=True)
             tg.validate(trig)
-            source, version, spec, spec_hash = _load_recipe(cur, trig.recipe)
+            source, version, spec, spec_hash, saved_config = _load_recipe(
+                cur, trig.recipe)
+            merged = {**saved_config, **trig.params, **params}
+            flow = merged.get("flow")
+            if flow is not None and not isinstance(flow, str):
+                raise ValueError("flow must be a string")
 
             # compile_tasks runs INSIDE the transaction on purpose. It is pure and
             # fast (it walks a spec dict), and having it here means a compiler that
             # raises on a malformed spec aborts the fire rather than leaving a
             # `runs` row with no tasks — a run that can never start, never fail,
             # and holds the dedupe key against every future fire.
-            nodes = [_normalize_node(n, i) for i, n in enumerate(compile_tasks(spec))]
-
-            merged = {**trig.params, **params}
+            nodes = [
+                _normalize_node(n, i)
+                for i, n in enumerate(
+                    _compile(
+                        compile_tasks,
+                        spec,
+                        values=merged,
+                        flow=flow,
+                    )
+                )
+            ]
             dedupe_key = str(merged.get("dedupe_key") or trig.recipe)
             run_trigger = run_trigger or _runs_trigger_for(trig)
 

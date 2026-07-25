@@ -14,6 +14,8 @@ recipe author has no business choosing which lane their work competes in.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from windex.config import Settings
 from windex.recipe import parse as recipe_parse
 from windex.recipe import ports, registry
@@ -43,8 +45,36 @@ KIND_WEIGHT = {
 }
 
 
+def resolve_config(recipe: recipe_parse.Recipe, settings: Settings,
+                   values: Mapping[str, object]) -> dict[str, object]:
+    """Coerce a complete recipe config and materialize declared defaults."""
+    fields = {field.key: field for field in recipe.config}
+    unknown = set(values) - set(fields)
+    if unknown:
+        raise ValueError(
+            f"unknown recipe config field(s): {', '.join(sorted(unknown))}")
+    resolved: dict[str, object] = {}
+    for key, field in fields.items():
+        if key in values:
+            try:
+                resolved[key] = field.coerce(values[key], settings)
+            except ValueError as exc:
+                raise ValueError(f"config.{key}: {exc}") from exc
+        elif field.default is not None:
+            resolved[key] = field.default
+        elif field.required:
+            raise ValueError(f"config.{key} is required")
+        else:
+            # Optional recipe fields can still be referenced by a node. Preserve
+            # the distinction between "unset" and an explicit empty string by
+            # materializing JSON null into the frozen task config.
+            resolved[key] = None
+    return resolved
+
+
 def compile_tasks(spec: dict, *, flow: str | None = None,
-                  settings: Settings | None = None) -> list[dict]:
+                  settings: Settings | None = None,
+                  values: Mapping[str, object] | None = None) -> list[dict]:
     """A recipe spec -> the `run_tasks` rows for one flow.
 
     `flow` selects which sub-DAG to run; omitted, the recipe's first `refresh`
@@ -56,7 +86,11 @@ def compile_tasks(spec: dict, *, flow: str | None = None,
     # recipes table or from a run's frozen copy. The reserved-name guard governs
     # ADMISSION (install), not compilation, and applying it here would make a
     # built-in source uncompilable by its own name.
-    recipe = recipe_parse.parse(spec, settings or Settings(), builtin=True)
+    active_settings = settings or Settings()
+    recipe = recipe_parse.parse(spec, active_settings, builtin=True)
+    resolved: dict[str, object] | None = None
+    if values is not None:
+        resolved = resolve_config(recipe, active_settings, values)
     name = flow or (recipe.refresh[0] if recipe.refresh else recipe.flows[0].name)
     chosen = next((f for f in recipe.flows if f.name == name), None)
     if chosen is None:
@@ -80,12 +114,20 @@ def compile_tasks(spec: dict, *, flow: str | None = None,
         for field in mod.fields:
             if field.kind == "secret_ref" and node.config.get(field.key):
                 pre.update(field.allow or ())
+        config = dict(node.config)
+        if resolved is not None:
+            for key, value in config.items():
+                if isinstance(value, str) and value.startswith("@config."):
+                    ref = value.removeprefix("@config.")
+                    if ref not in resolved:
+                        raise ValueError(f"config.{ref} is required")
+                    config[key] = resolved[ref]
         tasks.append({
             "node": node.id,
             "kind": node.kind,
             "module": node.uses,
             "lane": mod.lane,
-            "config": dict(node.config),
+            "config": config,
             "depends_on": sorted(upstream[node.id]),
             "preconditions": sorted(pre),
             "weight": KIND_WEIGHT.get(node.kind, 0.5),
@@ -122,6 +164,16 @@ def resolve(module: str):
     return fn
 
 
+def unavailable_modules(tasks: list[dict]) -> list[str]:
+    """Declared modules in ``tasks`` that have no in-tree executor yet."""
+    from windex.recipe import runners
+
+    return sorted({
+        str(task["module"]) for task in tasks
+        if str(task["module"]) not in runners.RUNNERS
+    })
+
+
 def describe_placement() -> list[dict]:
     """Lane and precondition per module — what the editor shows so an author can
     see WHERE their node will run and what it waits on, without reading source."""
@@ -132,5 +184,6 @@ def describe_placement() -> list[dict]:
             for m in registry.MODULES.values()]
 
 
-__all__ = ["compile_tasks", "resolve", "describe_placement",
+__all__ = ["compile_tasks", "resolve_config", "resolve", "unavailable_modules",
+           "describe_placement",
            "TASK_KEYS", "LEASE_SECONDS", "KIND_WEIGHT", "ports"]

@@ -1,0 +1,49 @@
+schema: windex.recipe/1
+name: web_docs
+version: 1
+title: Documentation website
+description: >
+  Crawl a documentation section politely, discover in-scope links, extract the
+  readable text, and stage a guarded corpus delta.
+corpus: {source: web_docs, id_prefix: "web_docs:", collection: web_docs}
+config:
+  - {key: seeds, kind: url_list, max_items: 25, required: true, stage: install,
+     label: Seed URLs,
+     help: Scope defaults to each seed's directory.}
+  - {key: same_host, kind: bool, default: true, stage: install}
+  - {key: path_prefix, kind: str, stage: install,
+     help: "Unset means the seed's directory; an empty string means the whole host."}
+  - {key: exclude, kind: regex_list, max_items: 25, max_len: 500, stage: install}
+  - {key: max_pages, kind: int, lo: 1, hi: 20000, default: 500,
+     ceiling: crawl_max_pages_ceiling, label: Page budget}
+  - {key: max_depth, kind: int, lo: 0, hi: 8, default: 2,
+     ceiling: crawl_max_depth_ceiling}
+  - {key: host_interval, kind: float, lo: 1.0, hi: 300, default: 2.0, unit: s,
+     floor: crawl_host_interval_min}
+state:
+  frontier: {key: url, order: "depth, seq"}
+flows:
+  crawl:
+    nodes:
+      seed: {kind: discover, uses: crawl.frontier,
+             with: {store: frontier, seeds: "@config.seeds",
+                    max_pages: "@config.max_pages", batch: 50}}
+      get: {kind: fetch, uses: http.get,
+            with: {host_interval: "@config.host_interval"}}
+      links: {kind: catalog, uses: crawl.links,
+              with: {into: frontier, max_depth: "@config.max_depth",
+                     same_host: "@config.same_host",
+                     path_prefix: "@config.path_prefix",
+                     exclude: "@config.exclude"}}
+      front: {kind: collect, uses: store.upsert,
+              with: {store: frontier, on_conflict: skip}}
+      text: {kind: extract, uses: html.trafilatura,
+             with: {min_chars: 200, structural_fallback: true,
+                    honor_canonical: in_scope}}
+      boiler: {kind: transform, uses: dedup.boilerplate,
+               with: {repeat_cap: 2}}
+      stage: {kind: load, uses: ledger.stage,
+              with: {replace: false}}
+    edges: [[seed, get], [get, links], [links, front],
+            [get, text], [text, boiler], [boiler, stage]]
+refresh: [crawl]

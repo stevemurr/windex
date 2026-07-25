@@ -72,15 +72,19 @@ def seed_builtins(conn: psycopg.Connection, settings: Settings,
         spec = recipe.to_dict()
         digest = spec_hash(spec)
         with conn.cursor() as cur:
-            cur.execute("SELECT spec_hash, version, builtin FROM recipes WHERE name = %s",
+            cur.execute(
+                "SELECT spec_hash, version, builtin, base_spec "
+                "FROM recipes WHERE name = %s",
                         (recipe.name,))
             row = cur.fetchone()
             if row is not None:
-                existing_hash, _version, is_builtin = row
+                existing_hash, _version, is_builtin, base_spec = row
                 if existing_hash == digest:
                     out.append({"name": recipe.name, "action": "unchanged"})
                     continue
-                if not force and not is_builtin:
+                base_hash = spec_hash(base_spec) if base_spec else existing_hash
+                locally_edited = is_builtin and existing_hash != base_hash
+                if not force and (not is_builtin or locally_edited):
                     out.append({"name": recipe.name, "action": "kept (locally edited)"})
                     continue
             cur.execute(
@@ -152,3 +156,212 @@ def get_recipe(conn: psycopg.Connection, name: str) -> dict | None:
         for fname, f in spec.get("flows", {}).items()
     }
     return out
+
+
+# --- writing ----------------------------------------------------------------
+
+def _normalized(body: dict, settings: Settings, *, builtin: bool,
+                version: int) -> tuple[recipe_parse.Recipe, dict, str]:
+    candidate = dict(body)
+    candidate["version"] = version
+    recipe = recipe_parse.parse(candidate, settings, builtin=builtin)
+    spec = recipe.to_dict()
+    return recipe, spec, spec_hash(spec)
+
+
+def create_recipe(conn: psycopg.Connection, body: dict, settings: Settings,
+                  *, author: str = "admin API", note: str = "",
+                  origin: dict | None = None,
+                  config: dict | None = None) -> dict:
+    """Validate and install one inert recipe document.
+
+    The database version is authoritative: callers cannot create revision 400 to
+    make a later three-way diff ambiguous. The normalized document is stored, not
+    the caller's spelling, so defaults and clamps are frozen from revision one.
+    """
+    recipe, spec, digest = _normalized(
+        body, settings, builtin=False, version=1)
+    if config is not None:
+        from windex.recipe import compile as recipe_compile
+
+        materialized = recipe_compile.resolve_config(recipe, settings, config)
+    else:
+        materialized = None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO recipes
+                       (name, source, kind, spec, spec_hash, base_spec, version,
+                        origin, builtin, title, description)
+                   VALUES (%s, %s, 'ingest', %s, %s, %s, 1, %s, false, %s, %s)
+                   ON CONFLICT (name) DO NOTHING
+                   RETURNING name""",
+                (recipe.name, recipe.corpus.source, Jsonb(spec), digest,
+                 Jsonb(spec), Jsonb(origin) if origin else None,
+                 recipe.title, recipe.description),
+            )
+            if cur.fetchone() is None:
+                conn.rollback()
+                raise KeyError(recipe.name)
+            cur.execute(
+                """INSERT INTO recipe_revisions
+                       (name, version, spec, spec_hash, note, author)
+                   VALUES (%s, 1, %s, %s, %s, %s)""",
+                (recipe.name, Jsonb(spec), digest, note, author),
+            )
+            if materialized is not None:
+                cur.execute(
+                    """INSERT INTO recipe_config (recipe, values)
+                       VALUES (%s, %s)""",
+                    (recipe.name, Jsonb(materialized)),
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return get_recipe(conn, recipe.name)  # type: ignore[return-value]
+
+
+def update_recipe(conn: psycopg.Connection, name: str, body: dict,
+                  settings: Settings, *, author: str = "admin API",
+                  note: str = "") -> dict | None:
+    """Replace a recipe with a validated next revision.
+
+    Built-ins remain built-ins and retain their shipped ``base_spec``. That makes
+    them editable without making the next deploy overwrite the edit, while still
+    preserving the baseline a future Restore/marketplace diff needs.
+    """
+    if body.get("name") not in (None, name):
+        raise ValueError(
+            f"document name {body.get('name')!r} does not match path {name!r}")
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT version, builtin, spec, spec_hash, base_spec
+                 FROM recipes WHERE name = %s FOR UPDATE""",
+            (name,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            conn.rollback()
+            return None
+        version, builtin, old_spec, old_hash, base_spec = row
+        candidate = dict(body)
+        candidate["name"] = name
+        recipe, spec, digest = _normalized(
+            candidate, settings, builtin=bool(builtin), version=version + 1)
+        if digest == old_hash:
+            conn.rollback()
+            return get_recipe(conn, name)
+
+        # Older seeded rows may predate revision history. Bank the version we are
+        # replacing before inserting the new one so history is continuous.
+        cur.execute(
+            """INSERT INTO recipe_revisions
+                   (name, version, spec, spec_hash, note, author)
+               VALUES (%s, %s, %s, %s, 'Revision banked before first API edit',
+                       'windex')
+               ON CONFLICT (name, version) DO NOTHING""",
+            (name, version, Jsonb(old_spec), old_hash),
+        )
+        cur.execute(
+            """UPDATE recipes SET
+                   source = %s, spec = %s, spec_hash = %s, version = %s,
+                   base_spec = coalesce(base_spec, %s),
+                   title = %s, description = %s, updated_at = now()
+               WHERE name = %s""",
+            (recipe.corpus.source, Jsonb(spec), digest, version + 1,
+             Jsonb(base_spec or old_spec), recipe.title, recipe.description, name),
+        )
+        cur.execute(
+            """INSERT INTO recipe_revisions
+                   (name, version, spec, spec_hash, note, author)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (name, version + 1, Jsonb(spec), digest, note, author),
+        )
+    conn.commit()
+    return get_recipe(conn, name)
+
+
+def get_recipe_config(conn: psycopg.Connection, name: str) -> dict:
+    with conn.cursor() as cur:
+        cur.execute("SELECT values FROM recipe_config WHERE recipe = %s", (name,))
+        row = cur.fetchone()
+    return dict(row[0]) if row else {}
+
+
+def get_recipe_installation(conn: psycopg.Connection, name: str) -> dict | None:
+    """Marketplace bookkeeping omitted from the ordinary recipe response."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT spec, spec_hash, base_spec, origin, version, builtin
+                 FROM recipes WHERE name = %s""",
+            (name,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    spec, digest, base_spec, origin, version, builtin = row
+    return {
+        "spec": spec,
+        "spec_hash": digest,
+        "base_spec": base_spec,
+        "origin": origin,
+        "version": version,
+        "builtin": builtin,
+    }
+
+
+def update_from_catalog(conn: psycopg.Connection, name: str, body: dict,
+                        settings: Settings, *, origin: dict,
+                        author: str = "marketplace") -> dict | None:
+    """Advance an unmodified installed recipe to a new catalog baseline.
+
+    A locally edited recipe is a conflict, never an implicit overwrite. The
+    caller can still copy changes into the editor deliberately; marketplace
+    update itself stays lossless.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT version, builtin, spec, spec_hash, base_spec
+                 FROM recipes WHERE name = %s FOR UPDATE""",
+            (name,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            conn.rollback()
+            return None
+        version, builtin, old_spec, old_hash, base_spec = row
+        if builtin:
+            conn.rollback()
+            raise ValueError("built-in recipes are updated by windex releases")
+        if base_spec is None or old_hash != spec_hash(base_spec):
+            conn.rollback()
+            raise RuntimeError("recipe has local edits")
+
+        candidate = dict(body)
+        candidate["name"] = name
+        recipe, spec, digest = _normalized(
+            candidate, settings, builtin=False, version=version + 1)
+        if digest == old_hash:
+            conn.rollback()
+            return get_recipe(conn, name)
+        cur.execute(
+            """INSERT INTO recipe_revisions
+                   (name, version, spec, spec_hash, note, author)
+               VALUES (%s, %s, %s, %s, 'Catalog update', %s)""",
+            (name, version + 1, Jsonb(spec), digest, author),
+        )
+        cur.execute(
+            """UPDATE recipes SET
+                   source = %s, spec = %s, spec_hash = %s, base_spec = %s,
+                   origin = %s, version = %s, title = %s, description = %s,
+                   updated_at = now()
+               WHERE name = %s""",
+            (
+                recipe.corpus.source, Jsonb(spec), digest, Jsonb(spec),
+                Jsonb(origin), version + 1, recipe.title,
+                recipe.description, name,
+            ),
+        )
+    conn.commit()
+    return get_recipe(conn, name)

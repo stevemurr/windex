@@ -1,9 +1,7 @@
 # Source recipes — status
 
-Plan: `~/.claude/plans/i-want-to-look-cheeky-muffin.md`. Last updated 2026-07-24.
-Integrated with frontend `main` through `a0037f8`; 961 tests passing. Production image
-`3ebd60f3abd6` is live across all 13 app containers; the full 15-container stack
-is healthy with zero restarts.
+Last updated 2026-07-24.
+Integrated with the backend runner/eval work through `8923812`.
 
 ## Done
 
@@ -18,12 +16,16 @@ is healthy with zero restarts.
 | 7b | Runner foundation — durable typed edge stream; 6 generic discover/catalog/collect modules | ✅ first slice |
 | 8 | Worker pool — claim/lease/slice, lanes, WFQ, slot recycling, memory ceiling | ✅ merged |
 | 9 | Trigger scheduler — croniter-backed cron in IANA tz, pause-aware, atomic fire | ✅ merged |
+| 10 | Recipe CRUD, revision history, config materialization | ✅ |
+| 11 | Generic runs list/detail/cancel/events + typed SSE | ✅ |
+| 12 | Inert marketplace catalogs, install forms, lossless updates | ✅ |
+| 13 | Native macOS control plane, recipe editor, Galley, marketplace | ✅ |
 | ~~2, 4, 5~~ | Watermark migration | **removed** — superseded by the reset decision |
 | eval | Fixed 50-query docs+hf 8B baseline, five repeats and exact anchor/query hashes | ✅ |
 
-Response schemas cover 39 of 41 admin operations; the two exceptions are SSE
-streams, which declare `text/event-stream`. Guarded by tests so the untyped
-surface cannot regrow.
+The generated admin schema and Swift types cover the JSON API surface. Run
+events are also available as a typed JSON endpoint and an SSE stream declaring
+`text/event-stream`.
 
 ## Not done
 
@@ -36,9 +38,13 @@ resolve to the explicit "declared but not yet implemented" error. This is still
 the bulk of the remaining work: moving each source's fetch/extract/load behaviour
 out of its package and behind a module.
 
-Then, in order: recipe CRUD writes (`PUT`/`POST`) · runs API + SSE · **reset +
-clean ingest** (the reproducibility proof) · marketplace · Swift client (on a Mac)
-· delete the web console.
+The run API refuses a graph before queueing if any module is unavailable.
+Registry and placement responses expose that state, so clients distinguish a
+valid inert recipe from an executable one without manufacturing a failed run.
+
+What remains is the module migration, then **reset + clean ingest** (the
+reproducibility proof). Keep the web console until the signed native app has been
+deployed and direct-LAN pairing has been verified.
 
 ## Live now for the Swift client
 
@@ -54,6 +60,9 @@ everything under `/admin`.
 | `GET /admin/v1/recipes/{name}` | one recipe with its flows/nodes/edges — what the editor opens |
 | `GET /admin/v1/recipes/{name}/tasks` | placement per node: lane, deps, preconditions, weight |
 | `POST /admin/v1/recipes/validate` | pure, no IO — safe to call per keystroke |
+| `POST/PUT /admin/v1/recipes` | validated writes with revision history |
+| `/admin/v1/runs` | generic runs, history, cancel, JSON events + SSE |
+| `/admin/v1/marketplace` | inert bundled/operator-mounted catalogs |
 | `GET /admin/v1/settings` | drives `SchemaForm`; real data |
 | `/admin/v1/{loops,freshness,activity,jobs,schedule,logs,stats,timeseries}` | real data |
 | `GET /v1/search`, `/v1/docs/{id}` | docs + hf are searchable; other source collections await rebuild |
@@ -64,16 +73,23 @@ The corpus survived intact (17.49M documents, 31 G of parquet), but the remainin
 source vectors are still deferred to the planned rebuild. `reset` now only
 deletes collections it owns, proven by test.
 
-Not built yet: recipe writes, runs, marketplace.
-
 ## Open decisions
 
-1. **4B comparison** — the 8B side is now banked in
+1. **Module implementations** — six generic discover/catalog/collect modules
+   execute through the durable edge stream. The remaining 36 declarations must
+   migrate before every built-in recipe is executable.
+2. **Clean ingest** — reset and rebuild only after the complete runner set lands.
+3. **4B comparison** — the 8B side is now banked in
    `docs/eval-baseline-qwen3-8b-docs-hf.json`: 50 fixed anchors, five repeats,
    mean NDCG@10 `0.90872` and MRR `0.8913`. The identical anchors/query hash must
    be used after a 4B subset reindex.
-2. **Indexing is paused.** Deliberate — the loops were embedding a backlog that the
+4. **Indexing is paused.** Deliberate — the loops were embedding a backlog that the
    reset discards. Resume with `POST /v1/control/start`.
-3. **4B/NVFP4 timing** — the rebuild is the moment to switch, so the corpus is
+5. **4B/NVFP4 timing** — the rebuild is the moment to switch, so the corpus is
    embedded once. NVFP4 has already caused one measured regression on the rerank
-   path, hence (1).
+   path, hence (3).
+6. **Signed macOS validation** — this checkout has no Apple signing identity.
+   Archive/notarization tooling is checked in, but direct-LAN TCC validation needs
+   a Developer ID build.
+7. **Production credential rotation** — rotate the previously shared write token
+   on the server after deploying this API/client revision.

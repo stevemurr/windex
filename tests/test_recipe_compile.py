@@ -78,6 +78,24 @@ def test_tasks_come_out_in_execution_order():
     assert nodes.index("seed") < nodes.index("get") < nodes.index("text")
 
 
+def test_run_compilation_materializes_config_references():
+    tasks = by_node(C.compile_tasks(
+        BASE,
+        values={"seeds": ["https://example.com/docs/"]},
+    ))
+    assert tasks["seed"]["config"]["seeds"] == ["https://example.com/docs/"]
+    # Module defaults are frozen alongside recipe-config values.
+    assert tasks["seed"]["config"]["max_pages"] == 500
+
+
+def test_run_compilation_requires_values_and_rejects_unknown_config():
+    with pytest.raises(ValueError, match=r"config\.seeds is required"):
+        C.compile_tasks(BASE, values={})
+    with pytest.raises(ValueError, match="unknown recipe config"):
+        C.compile_tasks(BASE, values={
+            "seeds": ["https://example.com/"], "surprise": True})
+
+
 def test_preconditions_are_declared_and_include_referenced_secrets():
     """A module naming a secret must wait for it, not burn an attempt discovering
     the token is missing."""
@@ -159,6 +177,18 @@ def test_resolve_says_declared_but_unimplemented_distinctly():
     unimplemented module looks like a typo."""
     with pytest.raises(LookupError, match="declared but not yet implemented"):
         C.resolve("http.get")
+
+
+def test_unavailable_modules_is_unique_and_sorted(monkeypatch):
+    from windex.recipe import runners
+
+    monkeypatch.setitem(runners.RUNNERS, "http.get", lambda ctx: None)
+    tasks = [
+        {"module": "ledger.stage"},
+        {"module": "http.get"},
+        {"module": "ledger.stage"},
+    ]
+    assert C.unavailable_modules(tasks) == ["ledger.stage"]
 
 
 def test_the_scheduler_default_compiler_path_resolves():

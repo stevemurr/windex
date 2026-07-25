@@ -12,9 +12,13 @@
 		1B8A63BD3F9062E49236135B /* OverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D028C60D102524F3E4B71735 /* OverviewView.swift */; };
 		20752A3365DE23E414A9D6E8 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 222524089FCE901632834233 /* SearchView.swift */; };
 		220C751B1A81323D94E139AF /* OFL-Archivo.txt in Resources */ = {isa = PBXBuildFile; fileRef = 1DD5A2AB210844D2888C19CE /* OFL-Archivo.txt */; };
+		26399E5A1E3B34F8AD931400 /* MarketplaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 756E579BB84FAFDDC0F23EDA /* MarketplaceView.swift */; };
 		29BFB2760DD2A2CDB8B30CE8 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3AB53E17F9753BDABA70607 /* PairingView.swift */; };
+		3D4FDC6D2172AA1F6EA5EC3E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 74190244EB5FFBCD65CA3793 /* Assets.xcassets */; };
 		472C67AB4FF54CAED84F4F9F /* WindexKit in Frameworks */ = {isa = PBXBuildFile; productRef = 1E1463297EF1D5184F155E2C /* WindexKit */; };
 		48966DDDE34C2EE434E0554E /* WindexUI in Frameworks */ = {isa = PBXBuildFile; productRef = B69EC3AE87B3E98DA39029F8 /* WindexUI */; };
+		4B0E4CA07037E9FB6EC93BA7 /* RecipesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE4BC7E48EC06F787A6EFBDC /* RecipesView.swift */; };
+		4BDF5A9B77DDC9FF4712912A /* RunsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C5EAD818849B9026E153826 /* RunsView.swift */; };
 		52038EB25916CEBC6CC8014C /* RecipeGraphLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFF41031AB6BD8A8DBD1D75B /* RecipeGraphLayoutTests.swift */; };
 		55FD2D075A3C48F96C4A2F2F /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D463B914F0A0EF2E58B037B /* KeychainTokenStore.swift */; };
 		5D295224C596FDF304F4DB3F /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B88E33AF32C998CEACC5B7C /* SettingsView.swift */; };
@@ -42,6 +46,7 @@
 
 /* Begin PBXFileReference section */
 		068E543BF1F9ABFF7C50FAE9 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		0C5EAD818849B9026E153826 /* RunsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunsView.swift; sourceTree = "<group>"; };
 		13BCA1A9F02859BDFDEC3C5B /* Archivo-Variable.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Archivo-Variable.ttf"; sourceTree = "<group>"; };
 		1DD5A2AB210844D2888C19CE /* OFL-Archivo.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "OFL-Archivo.txt"; sourceTree = "<group>"; };
 		222524089FCE901632834233 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
@@ -53,6 +58,8 @@
 		5B88E33AF32C998CEACC5B7C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		6EF3E654D873E007B44BC362 /* IBMPlexMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "IBMPlexMono-Regular.ttf"; sourceTree = "<group>"; };
 		726592939ACFF8719C434D74 /* AppFontRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppFontRegistry.swift; sourceTree = "<group>"; };
+		74190244EB5FFBCD65CA3793 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		756E579BB84FAFDDC0F23EDA /* MarketplaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketplaceView.swift; sourceTree = "<group>"; };
 		85CD56B38B4C85D363B302A4 /* OverviewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewModelTests.swift; sourceTree = "<group>"; };
 		885327951FE2AF1DB18312C4 /* WindexApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindexApp.swift; sourceTree = "<group>"; };
 		93184813B43791E62E4BF673 /* FontBundleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontBundleTests.swift; sourceTree = "<group>"; };
@@ -60,6 +67,7 @@
 		C3AB53E17F9753BDABA70607 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
 		D028C60D102524F3E4B71735 /* OverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewView.swift; sourceTree = "<group>"; };
 		D8CD6F40E351F677B8C3D6AB /* AppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelTests.swift; sourceTree = "<group>"; };
+		DE4BC7E48EC06F787A6EFBDC /* RecipesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipesView.swift; sourceTree = "<group>"; };
 		EFF41031AB6BD8A8DBD1D75B /* RecipeGraphLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeGraphLayoutTests.swift; sourceTree = "<group>"; };
 		F1027BD81BFAFD57E5A32C38 /* AppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellView.swift; sourceTree = "<group>"; };
 		FBA73346BAD6CC7DC2148F31 /* SourcesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesView.swift; sourceTree = "<group>"; };
@@ -139,6 +147,7 @@
 			children = (
 				464DE80241BDF482BBBEE5DC /* Fonts */,
 				02A91E5EA494ADE52EE75997 /* Licenses */,
+				74190244EB5FFBCD65CA3793 /* Assets.xcassets */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -177,8 +186,11 @@
 			children = (
 				F1027BD81BFAFD57E5A32C38 /* AppShellView.swift */,
 				4EF8D9B31029CAFE734B2CA5 /* LogsView.swift */,
+				756E579BB84FAFDDC0F23EDA /* MarketplaceView.swift */,
 				D028C60D102524F3E4B71735 /* OverviewView.swift */,
 				C3AB53E17F9753BDABA70607 /* PairingView.swift */,
+				DE4BC7E48EC06F787A6EFBDC /* RecipesView.swift */,
+				0C5EAD818849B9026E153826 /* RunsView.swift */,
 				222524089FCE901632834233 /* SearchView.swift */,
 				5B88E33AF32C998CEACC5B7C /* SettingsView.swift */,
 				FBA73346BAD6CC7DC2148F31 /* SourcesView.swift */,
@@ -271,6 +283,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				950E907DC6CE9A94CBCDA5E8 /* Archivo-Variable.ttf in Resources */,
+				3D4FDC6D2172AA1F6EA5EC3E /* Assets.xcassets in Resources */,
 				D3D9E008969D93F8E238C122 /* IBMPlexMono-Regular.ttf in Resources */,
 				220C751B1A81323D94E139AF /* OFL-Archivo.txt in Resources */,
 				C268344AF1AD26709618E470 /* OFL-IBMPlexMono.txt in Resources */,
@@ -289,8 +302,11 @@
 				C118E1614A23450043F7638F /* AppShellView.swift in Sources */,
 				55FD2D075A3C48F96C4A2F2F /* KeychainTokenStore.swift in Sources */,
 				9CF51AC5107D98A3D4A4A154 /* LogsView.swift in Sources */,
+				26399E5A1E3B34F8AD931400 /* MarketplaceView.swift in Sources */,
 				1B8A63BD3F9062E49236135B /* OverviewView.swift in Sources */,
 				29BFB2760DD2A2CDB8B30CE8 /* PairingView.swift in Sources */,
+				4B0E4CA07037E9FB6EC93BA7 /* RecipesView.swift in Sources */,
+				4BDF5A9B77DDC9FF4712912A /* RunsView.swift in Sources */,
 				20752A3365DE23E414A9D6E8 /* SearchView.swift in Sources */,
 				5D295224C596FDF304F4DB3F /* SettingsView.swift in Sources */,
 				932DF566F42C7893E9B4AFD0 /* SourcesView.swift in Sources */,
@@ -484,6 +500,7 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WindexApp/Resources/Info.plist;
@@ -492,6 +509,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.stevemurr.windex;
 				PRODUCT_NAME = Windex;
 				SDKROOT = macosx;
@@ -506,6 +524,7 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WindexApp/Resources/Info.plist;
@@ -514,6 +533,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.stevemurr.windex;
 				PRODUCT_NAME = Windex;
 				SDKROOT = macosx;

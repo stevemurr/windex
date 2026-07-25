@@ -68,20 +68,11 @@ struct AppShellView: View {
         case .search:
             SearchView(appModel: model, client: client, backend: backend)
         case .runs:
-            CapabilityGateView(
-                title: "Runs",
-                summary: "Run history and the live Galley need the generic runs API.",
-                detail: "The backend can compile recipe tasks today, but it cannot create or list recipe runs yet. Showing legacy job activity here would imply those are the same execution model.",
-                prerequisite: "Waiting for recipe run creation, history, and event streaming.")
+            RunsView(appModel: model, client: client, backend: backend)
         case .recipes:
-            CapabilityGateView(
-                title: "Recipe editor",
-                summary: "The module palette and validator are ready; recipe writes are not.",
-                detail: "Source definitions can be opened in Sources now. Editing stays disabled until the backend can persist a validated recipe without inventing a client-only format.",
-                prerequisite: "Waiting for recipe create and update endpoints.",
-                actionTitle: "Open Sources") {
-                    model.selection = .sources
-                }
+            RecipesView(appModel: model, client: client, backend: backend)
+        case .marketplace:
+            MarketplaceView(appModel: model, client: client, backend: backend)
         }
     }
 }
@@ -118,42 +109,5 @@ private struct ConnectionFooter: View {
         .padding(.horizontal, .md)
         .padding(.vertical, .sm)
         .background(theme.palette.plate)
-    }
-}
-
-private struct CapabilityGateView: View {
-    let title: String
-    let summary: String
-    let detail: String
-    let prerequisite: String
-    var actionTitle: String?
-    var action: (() -> Void)?
-    @Environment(\.windexTheme) private var theme
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: .lg) {
-            StyledText(title, Typography.setLG)
-            Hairline()
-            StatusBadge(.attention, word: "backend capability unavailable")
-            Text(summary)
-                .windexStyle(Typography.label)
-                .frame(maxWidth: Layout.proseMeasure, alignment: .leading)
-            Text(detail)
-                .windexStyle(Typography.body)
-                .foregroundStyle(theme.palette.graphite)
-                .frame(maxWidth: Layout.proseMeasure, alignment: .leading)
-            Text(prerequisite)
-                .windexStyle(Typography.dataSM)
-                .foregroundStyle(theme.palette.amber)
-                .frame(maxWidth: Layout.proseMeasure, alignment: .leading)
-            if let actionTitle, let action {
-                Button(actionTitle, action: action)
-                    .buttonStyle(.bordered)
-            }
-            Spacer()
-        }
-        .padding(.xl)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(theme.palette.ink)
     }
 }

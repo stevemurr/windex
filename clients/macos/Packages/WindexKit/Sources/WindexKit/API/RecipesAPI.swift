@@ -59,6 +59,20 @@ extension WindexClient {
         try await send("POST", "/v1/recipes/validate", surface: .admin,
                        body: document, as: ValidationReport.self)
     }
+
+    /// Validate and install one inert recipe document.
+    public func createRecipe(_ document: JSONValue) async throws -> Recipe {
+        try await send("POST", "/v1/recipes", surface: .admin,
+                       body: document, as: Recipe.self)
+    }
+
+    /// Persist a validated next revision. The path owns identity; the server
+    /// rejects a document whose `name` disagrees.
+    public func updateRecipe(named name: String,
+                             document: JSONValue) async throws -> Recipe {
+        try await send("PUT", "/v1/recipes/\(escape(name))", surface: .admin,
+                       body: document, as: Recipe.self)
+    }
 }
 
 /// A locally cached copy of the module registry, revalidated against its ETag.

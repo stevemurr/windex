@@ -26,15 +26,16 @@ struct RecipesAPITests {
                "flows":{"discover":{"nodes":{},"edges":[]}}}}
             """)
         server.on("GET /admin/v1/recipes/gh/tasks", json: """
-            {"recipe":"gh","flow":"discover","tasks":[
+            {"recipe":"gh","flow":"discover","executable":false,
+             "unavailable_modules":["documents.upsert"],"tasks":[
               {"node":"events","kind":"discover","module":"github.events",
                "lane":"net","config":{"days":7},"depends_on":[],
                "preconditions":["network"],"weight":0.1,
-               "max_attempts":3,"lease_seconds":900},
+               "max_attempts":3,"lease_seconds":900,"executable":true},
               {"node":"store","kind":"load","module":"documents.upsert",
                "lane":"io","config":{},"depends_on":["events","repos"],
                "preconditions":["postgres"],"weight":0.5,
-               "max_attempts":3,"lease_seconds":300}
+               "max_attempts":3,"lease_seconds":300,"executable":false}
             ]}
             """)
         return server
@@ -98,12 +99,16 @@ struct RecipesAPITests {
         let tasks = try response.placements()
 
         #expect(response.recipe == "gh")
+        #expect(response.executable == false)
+        #expect(response.unavailableModules == ["documents.upsert"])
         #expect(tasks.count == 2)
         #expect(tasks[0].module == "github.events")
         #expect(tasks[0].lane == "net")
         #expect(tasks[0].config["days"] == .int(7))
         #expect(tasks[1].dependsOn == ["events", "repos"])
         #expect(tasks[1].leaseSeconds == 300)
+        #expect(tasks[0].executable == true)
+        #expect(tasks[1].executable == false)
         #expect(server.lastRequest?.query["flow"] == "discover")
     }
 
@@ -127,5 +132,44 @@ struct RecipesAPITests {
             }
             #expect(message == "unknown recipe: missing")
         }
+    }
+
+    @Test("create and update send the normalized document as JSON")
+    func writes() async throws {
+        let server = try MockWindexServer()
+        server.on("POST /admin/v1/recipes") { request in
+            #expect(request.body.contains("\"name\":\"probe\""))
+            return .json("""
+                {"name":"probe","source":"probe","version":1,
+                 "title":"Probe","builtin":false,"enabled":true}
+                """, status: 201)
+        }
+        server.on("PUT /admin/v1/recipes/probe") { request in
+            #expect(request.body.contains("\"title\":\"Edited\""))
+            return .json("""
+                {"name":"probe","source":"probe","version":2,
+                 "title":"Edited","builtin":false,"enabled":true}
+                """)
+        }
+        try await server.start()
+        defer { server.stop() }
+
+        let client = WindexClient(baseURL: server.baseURL, token: "secret")
+        let created = try await client.createRecipe(.object([
+            "name": .string("probe"),
+            "title": .string("Probe"),
+        ]))
+        let updated = try await client.updateRecipe(
+            named: "probe",
+            document: .object([
+                "name": .string("probe"),
+                "title": .string("Edited"),
+            ]))
+
+        #expect(created.version == 1)
+        #expect(updated.version == 2)
+        #expect(server.requests.map(\.path) == [
+            "/admin/v1/recipes", "/admin/v1/recipes/probe",
+        ])
     }
 }

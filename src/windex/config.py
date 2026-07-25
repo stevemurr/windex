@@ -235,6 +235,11 @@ class Settings(BaseSettings):
 
     github_tokens: str = ""  # comma-separated PATs for hydration
 
+    # Additional inert recipe catalogs. Each entry is a server-local directory
+    # of *.yaml files, typically maintained by a read-only git sync. The admin
+    # API never fetches catalog URLs supplied by a client.
+    recipe_catalog_dirs: str = ""
+
     # Threads draining Qdrant upserts in the embed pass. The embed workers hand
     # finished points off to these instead of blocking a GPU slot on PUT /points
     # (avg 355ms, worst case 36s observed). Upserts stay wait=True — the pass
@@ -344,6 +349,12 @@ class Settings(BaseSettings):
     def hf_root_list(self) -> list[str]:
         """Configured HF doc roots; [] means "every root the sitemap lists"."""
         return [s.strip() for s in self.hf_roots.split(",") if s.strip()]
+
+    def recipe_catalog_dir_list(self) -> list[str]:
+        return [
+            path.strip() for path in self.recipe_catalog_dirs.split(",")
+            if path.strip()
+        ]
 
 
 # The source this process is working on, if it is a single-source job. Set once

@@ -10,6 +10,7 @@ enum SidebarDestination: String, CaseIterable, Hashable, Identifiable, Sendable 
     case logs
     case search
     case recipes
+    case marketplace
 
     var id: Self { self }
 
@@ -22,6 +23,7 @@ enum SidebarDestination: String, CaseIterable, Hashable, Identifiable, Sendable 
         case .logs: "Logs"
         case .search: "Search"
         case .recipes: "Recipes"
+        case .marketplace: "Marketplace"
         }
     }
 
@@ -34,6 +36,7 @@ enum SidebarDestination: String, CaseIterable, Hashable, Identifiable, Sendable 
         case .logs: "text.alignleft"
         case .search: "magnifyingglass"
         case .recipes: "point.3.connected.trianglepath.dotted"
+        case .marketplace: "shippingbox"
         }
     }
 }

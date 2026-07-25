@@ -1,0 +1,47 @@
+name: macOS
+
+on:
+  pull_request:
+    paths:
+      - "clients/macos/**"
+      - "src/windex/api/**"
+      - "src/windex/recipe/**"
+      - "scripts/dump-openapi.py"
+      - ".github/workflows/macos.yml"
+  push:
+    branches: [main]
+    paths:
+      - "clients/macos/**"
+      - "src/windex/api/**"
+      - "src/windex/recipe/**"
+      - "scripts/dump-openapi.py"
+      - ".github/workflows/macos.yml"
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Swift package tests
+        run: swift test --package-path clients/macos/Packages/WindexKit
+
+      - name: App tests
+        working-directory: clients/macos
+        run: |
+          xcodebuild \
+            -project Windex.xcodeproj \
+            -scheme Windex \
+            -destination "platform=macOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            test

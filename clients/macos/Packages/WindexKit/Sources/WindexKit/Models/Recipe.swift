@@ -31,6 +31,7 @@ public struct RecipeTask: Codable, Hashable, Sendable {
     public let weight: Double
     public let maxAttempts: Int
     public let leaseSeconds: Int
+    public let executable: Bool?
 
     public init(
         node: String,
@@ -42,7 +43,8 @@ public struct RecipeTask: Codable, Hashable, Sendable {
         preconditions: [String],
         weight: Double,
         maxAttempts: Int,
-        leaseSeconds: Int
+        leaseSeconds: Int,
+        executable: Bool? = nil
     ) {
         self.node = node
         self.kind = kind
@@ -54,10 +56,11 @@ public struct RecipeTask: Codable, Hashable, Sendable {
         self.weight = weight
         self.maxAttempts = maxAttempts
         self.leaseSeconds = leaseSeconds
+        self.executable = executable
     }
 
     enum CodingKeys: String, CodingKey {
-        case node, kind, module, lane, config, preconditions, weight
+        case node, kind, module, lane, config, preconditions, weight, executable
         case dependsOn = "depends_on"
         case maxAttempts = "max_attempts"
         case leaseSeconds = "lease_seconds"
@@ -87,6 +90,36 @@ extension RecipeTasks {
     public func placements() throws -> [RecipeTask] {
         try tasks?.map {
             try $0.additionalProperties.decode(RecipeTask.self)
+        } ?? []
+    }
+}
+
+extension ValidationReport {
+    public func errorMessages() throws -> [String] {
+        try errors?.compactMap {
+            try $0.additionalProperties.decode([String: JSONValue].self)["message"]?
+                .stringValue
+        } ?? []
+    }
+
+    public func warningMessages() throws -> [String] {
+        try warnings?.compactMap {
+            try $0.additionalProperties.decode([String: JSONValue].self)["message"]?
+                .stringValue
+        } ?? []
+    }
+
+    public func normalizedDocument() throws -> JSONValue? {
+        guard let normalized else { return nil }
+        return try normalized.additionalProperties.decode(JSONValue.self)
+    }
+}
+
+extension MarketplaceEntry {
+    /// The install-time schema rendered by ``SchemaForm``.
+    public func installParameters() throws -> [Param] {
+        try config?.map {
+            try $0.additionalProperties.decode(Param.self)
         } ?? []
     }
 }

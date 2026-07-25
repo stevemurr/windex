@@ -158,6 +158,28 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /v1/loops/{source}`.
     /// - Remark: Generated from `#/paths//v1/loops/{source}/post(loop_set)`.
     func loopSet(_ input: Operations.LoopSet.Input) async throws -> Operations.LoopSet.Output
+    /// Admin Marketplace
+    ///
+    /// Browse inert recipes from bundled and operator-mounted catalogs.
+    ///
+    /// - Remark: HTTP `GET /v1/marketplace`.
+    /// - Remark: Generated from `#/paths//v1/marketplace/get(admin_marketplace)`.
+    func adminMarketplace(_ input: Operations.AdminMarketplace.Input) async throws -> Operations.AdminMarketplace.Output
+    /// Admin Marketplace Entry
+    ///
+    /// - Remark: HTTP `GET /v1/marketplace/{entry_id}`.
+    /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/get(admin_marketplace_entry)`.
+    func adminMarketplaceEntry(_ input: Operations.AdminMarketplaceEntry.Input) async throws -> Operations.AdminMarketplaceEntry.Output
+    /// Admin Marketplace Install
+    ///
+    /// - Remark: HTTP `POST /v1/marketplace/{entry_id}/install`.
+    /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/install/post(admin_marketplace_install)`.
+    func adminMarketplaceInstall(_ input: Operations.AdminMarketplaceInstall.Input) async throws -> Operations.AdminMarketplaceInstall.Output
+    /// Admin Marketplace Update
+    ///
+    /// - Remark: HTTP `POST /v1/marketplace/{entry_id}/update`.
+    /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/update/post(admin_marketplace_update)`.
+    func adminMarketplaceUpdate(_ input: Operations.AdminMarketplaceUpdate.Input) async throws -> Operations.AdminMarketplaceUpdate.Output
     /// Metrics
     ///
     /// Search-performance rollup: latency percentiles + hybrid→keyword
@@ -196,6 +218,13 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /v1/recipes`.
     /// - Remark: Generated from `#/paths//v1/recipes/get(admin_recipes)`.
     func adminRecipes(_ input: Operations.AdminRecipes.Input) async throws -> Operations.AdminRecipes.Output
+    /// Admin Recipe Create
+    ///
+    /// Validate and install an inert recipe document.
+    ///
+    /// - Remark: HTTP `POST /v1/recipes`.
+    /// - Remark: Generated from `#/paths//v1/recipes/post(admin_recipe_create)`.
+    func adminRecipeCreate(_ input: Operations.AdminRecipeCreate.Input) async throws -> Operations.AdminRecipeCreate.Output
     /// Admin Recipe Validate
     ///
     /// Parse + type-check a recipe. Pure: no network, no database, no filesystem.
@@ -214,6 +243,13 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /v1/recipes/{name}`.
     /// - Remark: Generated from `#/paths//v1/recipes/{name}/get(admin_recipe)`.
     func adminRecipe(_ input: Operations.AdminRecipe.Input) async throws -> Operations.AdminRecipe.Output
+    /// Admin Recipe Update
+    ///
+    /// Persist a validated next revision of a recipe.
+    ///
+    /// - Remark: HTTP `PUT /v1/recipes/{name}`.
+    /// - Remark: Generated from `#/paths//v1/recipes/{name}/put(admin_recipe_update)`.
+    func adminRecipeUpdate(_ input: Operations.AdminRecipeUpdate.Input) async throws -> Operations.AdminRecipeUpdate.Output
     /// Admin Recipe Tasks
     ///
     /// The tasks a run of this recipe would fan out to — lane, dependencies,
@@ -237,6 +273,40 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /v1/registry`.
     /// - Remark: Generated from `#/paths//v1/registry/get(admin_registry)`.
     func adminRegistry(_ input: Operations.AdminRegistry.Input) async throws -> Operations.AdminRegistry.Output
+    /// Admin Runs
+    ///
+    /// - Remark: HTTP `GET /v1/runs`.
+    /// - Remark: Generated from `#/paths//v1/runs/get(admin_runs)`.
+    func adminRuns(_ input: Operations.AdminRuns.Input) async throws -> Operations.AdminRuns.Output
+    /// Admin Run Create
+    ///
+    /// Queue a manual recipe run after freezing its resolved task config.
+    ///
+    /// - Remark: HTTP `POST /v1/runs`.
+    /// - Remark: Generated from `#/paths//v1/runs/post(admin_run_create)`.
+    func adminRunCreate(_ input: Operations.AdminRunCreate.Input) async throws -> Operations.AdminRunCreate.Output
+    /// Admin Run
+    ///
+    /// - Remark: HTTP `GET /v1/runs/{run_id}`.
+    /// - Remark: Generated from `#/paths//v1/runs/{run_id}/get(admin_run)`.
+    func adminRun(_ input: Operations.AdminRun.Input) async throws -> Operations.AdminRun.Output
+    /// Admin Run Cancel
+    ///
+    /// - Remark: HTTP `POST /v1/runs/{run_id}/cancel`.
+    /// - Remark: Generated from `#/paths//v1/runs/{run_id}/cancel/post(admin_run_cancel)`.
+    func adminRunCancel(_ input: Operations.AdminRunCancel.Input) async throws -> Operations.AdminRunCancel.Output
+    /// Admin Run Events
+    ///
+    /// - Remark: HTTP `GET /v1/runs/{run_id}/events`.
+    /// - Remark: Generated from `#/paths//v1/runs/{run_id}/events/get(admin_run_events)`.
+    func adminRunEvents(_ input: Operations.AdminRunEvents.Input) async throws -> Operations.AdminRunEvents.Output
+    /// Admin Run Event Stream
+    ///
+    /// Stream run snapshots plus monotonic event batches until terminal.
+    ///
+    /// - Remark: HTTP `GET /v1/runs/{run_id}/events/stream`.
+    /// - Remark: Generated from `#/paths//v1/runs/{run_id}/events/stream/get(admin_run_event_stream)`.
+    func adminRunEventStream(_ input: Operations.AdminRunEventStream.Input) async throws -> Operations.AdminRunEventStream.Output
     /// Schedule State
     ///
     /// The editable schedule entries with running + last-run — what the console
@@ -646,6 +716,56 @@ extension APIProtocol {
             body: body
         ))
     }
+    /// Admin Marketplace
+    ///
+    /// Browse inert recipes from bundled and operator-mounted catalogs.
+    ///
+    /// - Remark: HTTP `GET /v1/marketplace`.
+    /// - Remark: Generated from `#/paths//v1/marketplace/get(admin_marketplace)`.
+    public func adminMarketplace(headers: Operations.AdminMarketplace.Input.Headers = .init()) async throws -> Operations.AdminMarketplace.Output {
+        try await adminMarketplace(Operations.AdminMarketplace.Input(headers: headers))
+    }
+    /// Admin Marketplace Entry
+    ///
+    /// - Remark: HTTP `GET /v1/marketplace/{entry_id}`.
+    /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/get(admin_marketplace_entry)`.
+    public func adminMarketplaceEntry(
+        path: Operations.AdminMarketplaceEntry.Input.Path,
+        headers: Operations.AdminMarketplaceEntry.Input.Headers = .init()
+    ) async throws -> Operations.AdminMarketplaceEntry.Output {
+        try await adminMarketplaceEntry(Operations.AdminMarketplaceEntry.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Admin Marketplace Install
+    ///
+    /// - Remark: HTTP `POST /v1/marketplace/{entry_id}/install`.
+    /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/install/post(admin_marketplace_install)`.
+    public func adminMarketplaceInstall(
+        path: Operations.AdminMarketplaceInstall.Input.Path,
+        headers: Operations.AdminMarketplaceInstall.Input.Headers = .init(),
+        body: Operations.AdminMarketplaceInstall.Input.Body
+    ) async throws -> Operations.AdminMarketplaceInstall.Output {
+        try await adminMarketplaceInstall(Operations.AdminMarketplaceInstall.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// Admin Marketplace Update
+    ///
+    /// - Remark: HTTP `POST /v1/marketplace/{entry_id}/update`.
+    /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/update/post(admin_marketplace_update)`.
+    public func adminMarketplaceUpdate(
+        path: Operations.AdminMarketplaceUpdate.Input.Path,
+        headers: Operations.AdminMarketplaceUpdate.Input.Headers = .init()
+    ) async throws -> Operations.AdminMarketplaceUpdate.Output {
+        try await adminMarketplaceUpdate(Operations.AdminMarketplaceUpdate.Input(
+            path: path,
+            headers: headers
+        ))
+    }
     /// Metrics
     ///
     /// Search-performance rollup: latency percentiles + hybrid→keyword
@@ -724,6 +844,21 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// Admin Recipe Create
+    ///
+    /// Validate and install an inert recipe document.
+    ///
+    /// - Remark: HTTP `POST /v1/recipes`.
+    /// - Remark: Generated from `#/paths//v1/recipes/post(admin_recipe_create)`.
+    public func adminRecipeCreate(
+        headers: Operations.AdminRecipeCreate.Input.Headers = .init(),
+        body: Operations.AdminRecipeCreate.Input.Body
+    ) async throws -> Operations.AdminRecipeCreate.Output {
+        try await adminRecipeCreate(Operations.AdminRecipeCreate.Input(
+            headers: headers,
+            body: body
+        ))
+    }
     /// Admin Recipe Validate
     ///
     /// Parse + type-check a recipe. Pure: no network, no database, no filesystem.
@@ -756,6 +891,23 @@ extension APIProtocol {
         try await adminRecipe(Operations.AdminRecipe.Input(
             path: path,
             headers: headers
+        ))
+    }
+    /// Admin Recipe Update
+    ///
+    /// Persist a validated next revision of a recipe.
+    ///
+    /// - Remark: HTTP `PUT /v1/recipes/{name}`.
+    /// - Remark: Generated from `#/paths//v1/recipes/{name}/put(admin_recipe_update)`.
+    public func adminRecipeUpdate(
+        path: Operations.AdminRecipeUpdate.Input.Path,
+        headers: Operations.AdminRecipeUpdate.Input.Headers = .init(),
+        body: Operations.AdminRecipeUpdate.Input.Body
+    ) async throws -> Operations.AdminRecipeUpdate.Output {
+        try await adminRecipeUpdate(Operations.AdminRecipeUpdate.Input(
+            path: path,
+            headers: headers,
+            body: body
         ))
     }
     /// Admin Recipe Tasks
@@ -792,6 +944,94 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//v1/registry/get(admin_registry)`.
     public func adminRegistry(headers: Operations.AdminRegistry.Input.Headers = .init()) async throws -> Operations.AdminRegistry.Output {
         try await adminRegistry(Operations.AdminRegistry.Input(headers: headers))
+    }
+    /// Admin Runs
+    ///
+    /// - Remark: HTTP `GET /v1/runs`.
+    /// - Remark: Generated from `#/paths//v1/runs/get(admin_runs)`.
+    public func adminRuns(
+        query: Operations.AdminRuns.Input.Query = .init(),
+        headers: Operations.AdminRuns.Input.Headers = .init()
+    ) async throws -> Operations.AdminRuns.Output {
+        try await adminRuns(Operations.AdminRuns.Input(
+            query: query,
+            headers: headers
+        ))
+    }
+    /// Admin Run Create
+    ///
+    /// Queue a manual recipe run after freezing its resolved task config.
+    ///
+    /// - Remark: HTTP `POST /v1/runs`.
+    /// - Remark: Generated from `#/paths//v1/runs/post(admin_run_create)`.
+    public func adminRunCreate(
+        headers: Operations.AdminRunCreate.Input.Headers = .init(),
+        body: Operations.AdminRunCreate.Input.Body
+    ) async throws -> Operations.AdminRunCreate.Output {
+        try await adminRunCreate(Operations.AdminRunCreate.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// Admin Run
+    ///
+    /// - Remark: HTTP `GET /v1/runs/{run_id}`.
+    /// - Remark: Generated from `#/paths//v1/runs/{run_id}/get(admin_run)`.
+    public func adminRun(
+        path: Operations.AdminRun.Input.Path,
+        query: Operations.AdminRun.Input.Query = .init(),
+        headers: Operations.AdminRun.Input.Headers = .init()
+    ) async throws -> Operations.AdminRun.Output {
+        try await adminRun(Operations.AdminRun.Input(
+            path: path,
+            query: query,
+            headers: headers
+        ))
+    }
+    /// Admin Run Cancel
+    ///
+    /// - Remark: HTTP `POST /v1/runs/{run_id}/cancel`.
+    /// - Remark: Generated from `#/paths//v1/runs/{run_id}/cancel/post(admin_run_cancel)`.
+    public func adminRunCancel(
+        path: Operations.AdminRunCancel.Input.Path,
+        headers: Operations.AdminRunCancel.Input.Headers = .init()
+    ) async throws -> Operations.AdminRunCancel.Output {
+        try await adminRunCancel(Operations.AdminRunCancel.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Admin Run Events
+    ///
+    /// - Remark: HTTP `GET /v1/runs/{run_id}/events`.
+    /// - Remark: Generated from `#/paths//v1/runs/{run_id}/events/get(admin_run_events)`.
+    public func adminRunEvents(
+        path: Operations.AdminRunEvents.Input.Path,
+        query: Operations.AdminRunEvents.Input.Query = .init(),
+        headers: Operations.AdminRunEvents.Input.Headers = .init()
+    ) async throws -> Operations.AdminRunEvents.Output {
+        try await adminRunEvents(Operations.AdminRunEvents.Input(
+            path: path,
+            query: query,
+            headers: headers
+        ))
+    }
+    /// Admin Run Event Stream
+    ///
+    /// Stream run snapshots plus monotonic event batches until terminal.
+    ///
+    /// - Remark: HTTP `GET /v1/runs/{run_id}/events/stream`.
+    /// - Remark: Generated from `#/paths//v1/runs/{run_id}/events/stream/get(admin_run_event_stream)`.
+    public func adminRunEventStream(
+        path: Operations.AdminRunEventStream.Input.Path,
+        query: Operations.AdminRunEventStream.Input.Query = .init(),
+        headers: Operations.AdminRunEventStream.Input.Headers = .init()
+    ) async throws -> Operations.AdminRunEventStream.Output {
+        try await adminRunEventStream(Operations.AdminRunEventStream.Input(
+            path: path,
+            query: query,
+            headers: headers
+        ))
     }
     /// Schedule State
     ///
@@ -3370,6 +3610,390 @@ public enum Components {
                 try encoder.encodeAdditionalProperties(additionalProperties)
             }
         }
+        /// - Remark: Generated from `#/components/schemas/MarketplaceEntry`.
+        public struct MarketplaceEntry: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/catalog`.
+            public var catalog: Swift.String
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/ConfigPayload`.
+            public struct ConfigPayloadPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `ConfigPayloadPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/config`.
+            public typealias ConfigPayload = [Components.Schemas.MarketplaceEntry.ConfigPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/config`.
+            public var config: Components.Schemas.MarketplaceEntry.ConfigPayload?
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/description`.
+            public var description: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/document`.
+            public struct DocumentPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `DocumentPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/document`.
+            public var document: Components.Schemas.MarketplaceEntry.DocumentPayload
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/executable`.
+            public var executable: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/installed`.
+            public var installed: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/installed_name`.
+            public var installedName: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/installed_version`.
+            public var installedVersion: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/locally_edited`.
+            public var locallyEdited: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/title`.
+            public var title: Swift.String
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/unavailable_modules`.
+            public var unavailableModules: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/update_available`.
+            public var updateAvailable: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/MarketplaceEntry/version`.
+            public var version: Swift.Int
+            /// A container of undocumented properties.
+            public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+            /// Creates a new `MarketplaceEntry`.
+            ///
+            /// - Parameters:
+            ///   - catalog:
+            ///   - config:
+            ///   - description:
+            ///   - document:
+            ///   - executable:
+            ///   - id:
+            ///   - installed:
+            ///   - installedName:
+            ///   - installedVersion:
+            ///   - locallyEdited:
+            ///   - name:
+            ///   - title:
+            ///   - unavailableModules:
+            ///   - updateAvailable:
+            ///   - version:
+            ///   - additionalProperties: A container of undocumented properties.
+            public init(
+                catalog: Swift.String,
+                config: Components.Schemas.MarketplaceEntry.ConfigPayload? = nil,
+                description: Swift.String? = nil,
+                document: Components.Schemas.MarketplaceEntry.DocumentPayload,
+                executable: Swift.Bool? = nil,
+                id: Swift.String,
+                installed: Swift.Bool? = nil,
+                installedName: Swift.String? = nil,
+                installedVersion: Swift.Int? = nil,
+                locallyEdited: Swift.Bool? = nil,
+                name: Swift.String,
+                title: Swift.String,
+                unavailableModules: [Swift.String]? = nil,
+                updateAvailable: Swift.Bool? = nil,
+                version: Swift.Int,
+                additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()
+            ) {
+                self.catalog = catalog
+                self.config = config
+                self.description = description
+                self.document = document
+                self.executable = executable
+                self.id = id
+                self.installed = installed
+                self.installedName = installedName
+                self.installedVersion = installedVersion
+                self.locallyEdited = locallyEdited
+                self.name = name
+                self.title = title
+                self.unavailableModules = unavailableModules
+                self.updateAvailable = updateAvailable
+                self.version = version
+                self.additionalProperties = additionalProperties
+            }
+            public enum CodingKeys: String, CodingKey {
+                case catalog
+                case config
+                case description
+                case document
+                case executable
+                case id
+                case installed
+                case installedName = "installed_name"
+                case installedVersion = "installed_version"
+                case locallyEdited = "locally_edited"
+                case name
+                case title
+                case unavailableModules = "unavailable_modules"
+                case updateAvailable = "update_available"
+                case version
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.catalog = try container.decode(
+                    Swift.String.self,
+                    forKey: .catalog
+                )
+                self.config = try container.decodeIfPresent(
+                    Components.Schemas.MarketplaceEntry.ConfigPayload.self,
+                    forKey: .config
+                )
+                self.description = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .description
+                )
+                self.document = try container.decode(
+                    Components.Schemas.MarketplaceEntry.DocumentPayload.self,
+                    forKey: .document
+                )
+                self.executable = try container.decodeIfPresent(
+                    Swift.Bool.self,
+                    forKey: .executable
+                )
+                self.id = try container.decode(
+                    Swift.String.self,
+                    forKey: .id
+                )
+                self.installed = try container.decodeIfPresent(
+                    Swift.Bool.self,
+                    forKey: .installed
+                )
+                self.installedName = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .installedName
+                )
+                self.installedVersion = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .installedVersion
+                )
+                self.locallyEdited = try container.decodeIfPresent(
+                    Swift.Bool.self,
+                    forKey: .locallyEdited
+                )
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.title = try container.decode(
+                    Swift.String.self,
+                    forKey: .title
+                )
+                self.unavailableModules = try container.decodeIfPresent(
+                    [Swift.String].self,
+                    forKey: .unavailableModules
+                )
+                self.updateAvailable = try container.decodeIfPresent(
+                    Swift.Bool.self,
+                    forKey: .updateAvailable
+                )
+                self.version = try container.decode(
+                    Swift.Int.self,
+                    forKey: .version
+                )
+                additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [
+                    "catalog",
+                    "config",
+                    "description",
+                    "document",
+                    "executable",
+                    "id",
+                    "installed",
+                    "installed_name",
+                    "installed_version",
+                    "locally_edited",
+                    "name",
+                    "title",
+                    "unavailable_modules",
+                    "update_available",
+                    "version"
+                ])
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(
+                    self.catalog,
+                    forKey: .catalog
+                )
+                try container.encodeIfPresent(
+                    self.config,
+                    forKey: .config
+                )
+                try container.encodeIfPresent(
+                    self.description,
+                    forKey: .description
+                )
+                try container.encode(
+                    self.document,
+                    forKey: .document
+                )
+                try container.encodeIfPresent(
+                    self.executable,
+                    forKey: .executable
+                )
+                try container.encode(
+                    self.id,
+                    forKey: .id
+                )
+                try container.encodeIfPresent(
+                    self.installed,
+                    forKey: .installed
+                )
+                try container.encodeIfPresent(
+                    self.installedName,
+                    forKey: .installedName
+                )
+                try container.encodeIfPresent(
+                    self.installedVersion,
+                    forKey: .installedVersion
+                )
+                try container.encodeIfPresent(
+                    self.locallyEdited,
+                    forKey: .locallyEdited
+                )
+                try container.encode(
+                    self.name,
+                    forKey: .name
+                )
+                try container.encode(
+                    self.title,
+                    forKey: .title
+                )
+                try container.encodeIfPresent(
+                    self.unavailableModules,
+                    forKey: .unavailableModules
+                )
+                try container.encodeIfPresent(
+                    self.updateAvailable,
+                    forKey: .updateAvailable
+                )
+                try container.encode(
+                    self.version,
+                    forKey: .version
+                )
+                try encoder.encodeAdditionalProperties(additionalProperties)
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/MarketplaceInstall`.
+        public struct MarketplaceInstall: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/MarketplaceInstall/name`.
+            public var name: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/MarketplaceInstall/values`.
+            public struct ValuesPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `ValuesPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/MarketplaceInstall/values`.
+            public var values: Components.Schemas.MarketplaceInstall.ValuesPayload?
+            /// Creates a new `MarketplaceInstall`.
+            ///
+            /// - Parameters:
+            ///   - name:
+            ///   - values:
+            public init(
+                name: Swift.String? = nil,
+                values: Components.Schemas.MarketplaceInstall.ValuesPayload? = nil
+            ) {
+                self.name = name
+                self.values = values
+            }
+            public enum CodingKeys: String, CodingKey {
+                case name
+                case values
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.name = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.values = try container.decodeIfPresent(
+                    Components.Schemas.MarketplaceInstall.ValuesPayload.self,
+                    forKey: .values
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "name",
+                    "values"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/MarketplaceList`.
+        public struct MarketplaceList: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/MarketplaceList/entries`.
+            public var entries: [Components.Schemas.MarketplaceEntry]?
+            /// A container of undocumented properties.
+            public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+            /// Creates a new `MarketplaceList`.
+            ///
+            /// - Parameters:
+            ///   - entries:
+            ///   - additionalProperties: A container of undocumented properties.
+            public init(
+                entries: [Components.Schemas.MarketplaceEntry]? = nil,
+                additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()
+            ) {
+                self.entries = entries
+                self.additionalProperties = additionalProperties
+            }
+            public enum CodingKeys: String, CodingKey {
+                case entries
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.entries = try container.decodeIfPresent(
+                    [Components.Schemas.MarketplaceEntry].self,
+                    forKey: .entries
+                )
+                additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [
+                    "entries"
+                ])
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encodeIfPresent(
+                    self.entries,
+                    forKey: .entries
+                )
+                try encoder.encodeAdditionalProperties(additionalProperties)
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/RecentDoc`.
         public struct RecentDoc: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/RecentDoc/id`.
@@ -3844,10 +4468,856 @@ public enum Components {
                 try encoder.encodeAdditionalProperties(additionalProperties)
             }
         }
+        /// - Remark: Generated from `#/components/schemas/RecipeRun`.
+        public struct RecipeRun: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/cancel_requested`.
+            public var cancelRequested: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/error`.
+            public var error: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/finished_at`.
+            public var finishedAt: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/id`.
+            public var id: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/mode`.
+            public var mode: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/params`.
+            public struct ParamsPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `ParamsPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/params`.
+            public var params: Components.Schemas.RecipeRun.ParamsPayload?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/priority`.
+            public var priority: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/progress`.
+            public struct ProgressPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `ProgressPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/progress`.
+            public var progress: Components.Schemas.RecipeRun.ProgressPayload?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/queued_at`.
+            public var queuedAt: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/recipe`.
+            public var recipe: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/recipe_version`.
+            public var recipeVersion: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/source`.
+            public var source: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/started_at`.
+            public var startedAt: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/state`.
+            public var state: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/stats`.
+            public struct StatsPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `StatsPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/stats`.
+            public var stats: Components.Schemas.RecipeRun.StatsPayload?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/tasks`.
+            public var tasks: [Components.Schemas.RecipeRunTask]?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/trigger`.
+            public var trigger: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/trigger_by`.
+            public var triggerBy: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RecipeRun/updated_at`.
+            public var updatedAt: Swift.String?
+            /// A container of undocumented properties.
+            public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+            /// Creates a new `RecipeRun`.
+            ///
+            /// - Parameters:
+            ///   - cancelRequested:
+            ///   - error:
+            ///   - finishedAt:
+            ///   - id:
+            ///   - mode:
+            ///   - params:
+            ///   - priority:
+            ///   - progress:
+            ///   - queuedAt:
+            ///   - recipe:
+            ///   - recipeVersion:
+            ///   - source:
+            ///   - startedAt:
+            ///   - state:
+            ///   - stats:
+            ///   - tasks:
+            ///   - trigger:
+            ///   - triggerBy:
+            ///   - updatedAt:
+            ///   - additionalProperties: A container of undocumented properties.
+            public init(
+                cancelRequested: Swift.Bool? = nil,
+                error: Swift.String? = nil,
+                finishedAt: Swift.String? = nil,
+                id: Swift.Int,
+                mode: Swift.String? = nil,
+                params: Components.Schemas.RecipeRun.ParamsPayload? = nil,
+                priority: Swift.Int? = nil,
+                progress: Components.Schemas.RecipeRun.ProgressPayload? = nil,
+                queuedAt: Swift.String? = nil,
+                recipe: Swift.String,
+                recipeVersion: Swift.Int? = nil,
+                source: Swift.String,
+                startedAt: Swift.String? = nil,
+                state: Swift.String,
+                stats: Components.Schemas.RecipeRun.StatsPayload? = nil,
+                tasks: [Components.Schemas.RecipeRunTask]? = nil,
+                trigger: Swift.String? = nil,
+                triggerBy: Swift.String? = nil,
+                updatedAt: Swift.String? = nil,
+                additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()
+            ) {
+                self.cancelRequested = cancelRequested
+                self.error = error
+                self.finishedAt = finishedAt
+                self.id = id
+                self.mode = mode
+                self.params = params
+                self.priority = priority
+                self.progress = progress
+                self.queuedAt = queuedAt
+                self.recipe = recipe
+                self.recipeVersion = recipeVersion
+                self.source = source
+                self.startedAt = startedAt
+                self.state = state
+                self.stats = stats
+                self.tasks = tasks
+                self.trigger = trigger
+                self.triggerBy = triggerBy
+                self.updatedAt = updatedAt
+                self.additionalProperties = additionalProperties
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cancelRequested = "cancel_requested"
+                case error
+                case finishedAt = "finished_at"
+                case id
+                case mode
+                case params
+                case priority
+                case progress
+                case queuedAt = "queued_at"
+                case recipe
+                case recipeVersion = "recipe_version"
+                case source
+                case startedAt = "started_at"
+                case state
+                case stats
+                case tasks
+                case trigger
+                case triggerBy = "trigger_by"
+                case updatedAt = "updated_at"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.cancelRequested = try container.decodeIfPresent(
+                    Swift.Bool.self,
+                    forKey: .cancelRequested
+                )
+                self.error = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .error
+                )
+                self.finishedAt = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .finishedAt
+                )
+                self.id = try container.decode(
+                    Swift.Int.self,
+                    forKey: .id
+                )
+                self.mode = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .mode
+                )
+                self.params = try container.decodeIfPresent(
+                    Components.Schemas.RecipeRun.ParamsPayload.self,
+                    forKey: .params
+                )
+                self.priority = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .priority
+                )
+                self.progress = try container.decodeIfPresent(
+                    Components.Schemas.RecipeRun.ProgressPayload.self,
+                    forKey: .progress
+                )
+                self.queuedAt = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .queuedAt
+                )
+                self.recipe = try container.decode(
+                    Swift.String.self,
+                    forKey: .recipe
+                )
+                self.recipeVersion = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .recipeVersion
+                )
+                self.source = try container.decode(
+                    Swift.String.self,
+                    forKey: .source
+                )
+                self.startedAt = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .startedAt
+                )
+                self.state = try container.decode(
+                    Swift.String.self,
+                    forKey: .state
+                )
+                self.stats = try container.decodeIfPresent(
+                    Components.Schemas.RecipeRun.StatsPayload.self,
+                    forKey: .stats
+                )
+                self.tasks = try container.decodeIfPresent(
+                    [Components.Schemas.RecipeRunTask].self,
+                    forKey: .tasks
+                )
+                self.trigger = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .trigger
+                )
+                self.triggerBy = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .triggerBy
+                )
+                self.updatedAt = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .updatedAt
+                )
+                additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [
+                    "cancel_requested",
+                    "error",
+                    "finished_at",
+                    "id",
+                    "mode",
+                    "params",
+                    "priority",
+                    "progress",
+                    "queued_at",
+                    "recipe",
+                    "recipe_version",
+                    "source",
+                    "started_at",
+                    "state",
+                    "stats",
+                    "tasks",
+                    "trigger",
+                    "trigger_by",
+                    "updated_at"
+                ])
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encodeIfPresent(
+                    self.cancelRequested,
+                    forKey: .cancelRequested
+                )
+                try container.encodeIfPresent(
+                    self.error,
+                    forKey: .error
+                )
+                try container.encodeIfPresent(
+                    self.finishedAt,
+                    forKey: .finishedAt
+                )
+                try container.encode(
+                    self.id,
+                    forKey: .id
+                )
+                try container.encodeIfPresent(
+                    self.mode,
+                    forKey: .mode
+                )
+                try container.encodeIfPresent(
+                    self.params,
+                    forKey: .params
+                )
+                try container.encodeIfPresent(
+                    self.priority,
+                    forKey: .priority
+                )
+                try container.encodeIfPresent(
+                    self.progress,
+                    forKey: .progress
+                )
+                try container.encodeIfPresent(
+                    self.queuedAt,
+                    forKey: .queuedAt
+                )
+                try container.encode(
+                    self.recipe,
+                    forKey: .recipe
+                )
+                try container.encodeIfPresent(
+                    self.recipeVersion,
+                    forKey: .recipeVersion
+                )
+                try container.encode(
+                    self.source,
+                    forKey: .source
+                )
+                try container.encodeIfPresent(
+                    self.startedAt,
+                    forKey: .startedAt
+                )
+                try container.encode(
+                    self.state,
+                    forKey: .state
+                )
+                try container.encodeIfPresent(
+                    self.stats,
+                    forKey: .stats
+                )
+                try container.encodeIfPresent(
+                    self.tasks,
+                    forKey: .tasks
+                )
+                try container.encodeIfPresent(
+                    self.trigger,
+                    forKey: .trigger
+                )
+                try container.encodeIfPresent(
+                    self.triggerBy,
+                    forKey: .triggerBy
+                )
+                try container.encodeIfPresent(
+                    self.updatedAt,
+                    forKey: .updatedAt
+                )
+                try encoder.encodeAdditionalProperties(additionalProperties)
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/RecipeRunCreate`.
+        public struct RecipeRunCreate: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RecipeRunCreate/dedupe_key`.
+            public var dedupeKey: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RecipeRunCreate/flow`.
+            public var flow: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RecipeRunCreate/mode`.
+            @frozen public enum ModePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case run = "run"
+                case dryRun = "dry_run"
+            }
+            /// - Remark: Generated from `#/components/schemas/RecipeRunCreate/mode`.
+            public var mode: Components.Schemas.RecipeRunCreate.ModePayload?
+            /// - Remark: Generated from `#/components/schemas/RecipeRunCreate/params`.
+            public struct ParamsPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `ParamsPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RecipeRunCreate/params`.
+            public var params: Components.Schemas.RecipeRunCreate.ParamsPayload?
+            /// - Remark: Generated from `#/components/schemas/RecipeRunCreate/priority`.
+            public var priority: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/RecipeRunCreate/recipe`.
+            public var recipe: Swift.String
+            /// Creates a new `RecipeRunCreate`.
+            ///
+            /// - Parameters:
+            ///   - dedupeKey:
+            ///   - flow:
+            ///   - mode:
+            ///   - params:
+            ///   - priority:
+            ///   - recipe:
+            public init(
+                dedupeKey: Swift.String? = nil,
+                flow: Swift.String? = nil,
+                mode: Components.Schemas.RecipeRunCreate.ModePayload? = nil,
+                params: Components.Schemas.RecipeRunCreate.ParamsPayload? = nil,
+                priority: Swift.Int? = nil,
+                recipe: Swift.String
+            ) {
+                self.dedupeKey = dedupeKey
+                self.flow = flow
+                self.mode = mode
+                self.params = params
+                self.priority = priority
+                self.recipe = recipe
+            }
+            public enum CodingKeys: String, CodingKey {
+                case dedupeKey = "dedupe_key"
+                case flow
+                case mode
+                case params
+                case priority
+                case recipe
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.dedupeKey = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .dedupeKey
+                )
+                self.flow = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .flow
+                )
+                self.mode = try container.decodeIfPresent(
+                    Components.Schemas.RecipeRunCreate.ModePayload.self,
+                    forKey: .mode
+                )
+                self.params = try container.decodeIfPresent(
+                    Components.Schemas.RecipeRunCreate.ParamsPayload.self,
+                    forKey: .params
+                )
+                self.priority = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .priority
+                )
+                self.recipe = try container.decode(
+                    Swift.String.self,
+                    forKey: .recipe
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "dedupe_key",
+                    "flow",
+                    "mode",
+                    "params",
+                    "priority",
+                    "recipe"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/RecipeRunEvents`.
+        public struct RecipeRunEvents: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RecipeRunEvents/EventsPayload`.
+            public struct EventsPayloadPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `EventsPayloadPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RecipeRunEvents/events`.
+            public typealias EventsPayload = [Components.Schemas.RecipeRunEvents.EventsPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/RecipeRunEvents/events`.
+            public var events: Components.Schemas.RecipeRunEvents.EventsPayload?
+            /// - Remark: Generated from `#/components/schemas/RecipeRunEvents/next_cursor`.
+            public var nextCursor: Swift.Int?
+            /// A container of undocumented properties.
+            public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+            /// Creates a new `RecipeRunEvents`.
+            ///
+            /// - Parameters:
+            ///   - events:
+            ///   - nextCursor:
+            ///   - additionalProperties: A container of undocumented properties.
+            public init(
+                events: Components.Schemas.RecipeRunEvents.EventsPayload? = nil,
+                nextCursor: Swift.Int? = nil,
+                additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()
+            ) {
+                self.events = events
+                self.nextCursor = nextCursor
+                self.additionalProperties = additionalProperties
+            }
+            public enum CodingKeys: String, CodingKey {
+                case events
+                case nextCursor = "next_cursor"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.events = try container.decodeIfPresent(
+                    Components.Schemas.RecipeRunEvents.EventsPayload.self,
+                    forKey: .events
+                )
+                self.nextCursor = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .nextCursor
+                )
+                additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [
+                    "events",
+                    "next_cursor"
+                ])
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encodeIfPresent(
+                    self.events,
+                    forKey: .events
+                )
+                try container.encodeIfPresent(
+                    self.nextCursor,
+                    forKey: .nextCursor
+                )
+                try encoder.encodeAdditionalProperties(additionalProperties)
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/RecipeRunList`.
+        public struct RecipeRunList: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RecipeRunList/runs`.
+            public var runs: [Components.Schemas.RecipeRun]?
+            /// A container of undocumented properties.
+            public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+            /// Creates a new `RecipeRunList`.
+            ///
+            /// - Parameters:
+            ///   - runs:
+            ///   - additionalProperties: A container of undocumented properties.
+            public init(
+                runs: [Components.Schemas.RecipeRun]? = nil,
+                additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()
+            ) {
+                self.runs = runs
+                self.additionalProperties = additionalProperties
+            }
+            public enum CodingKeys: String, CodingKey {
+                case runs
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.runs = try container.decodeIfPresent(
+                    [Components.Schemas.RecipeRun].self,
+                    forKey: .runs
+                )
+                additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [
+                    "runs"
+                ])
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encodeIfPresent(
+                    self.runs,
+                    forKey: .runs
+                )
+                try encoder.encodeAdditionalProperties(additionalProperties)
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/RecipeRunQueued`.
+        public struct RecipeRunQueued: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RecipeRunQueued/coalesced`.
+            public var coalesced: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/RecipeRunQueued/queued`.
+            public var queued: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/RecipeRunQueued/run_id`.
+            public var runId: Swift.Int?
+            /// A container of undocumented properties.
+            public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+            /// Creates a new `RecipeRunQueued`.
+            ///
+            /// - Parameters:
+            ///   - coalesced:
+            ///   - queued:
+            ///   - runId:
+            ///   - additionalProperties: A container of undocumented properties.
+            public init(
+                coalesced: Swift.Bool? = nil,
+                queued: Swift.Bool,
+                runId: Swift.Int? = nil,
+                additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()
+            ) {
+                self.coalesced = coalesced
+                self.queued = queued
+                self.runId = runId
+                self.additionalProperties = additionalProperties
+            }
+            public enum CodingKeys: String, CodingKey {
+                case coalesced
+                case queued
+                case runId = "run_id"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.coalesced = try container.decodeIfPresent(
+                    Swift.Bool.self,
+                    forKey: .coalesced
+                )
+                self.queued = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .queued
+                )
+                self.runId = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .runId
+                )
+                additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [
+                    "coalesced",
+                    "queued",
+                    "run_id"
+                ])
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encodeIfPresent(
+                    self.coalesced,
+                    forKey: .coalesced
+                )
+                try container.encode(
+                    self.queued,
+                    forKey: .queued
+                )
+                try container.encodeIfPresent(
+                    self.runId,
+                    forKey: .runId
+                )
+                try encoder.encodeAdditionalProperties(additionalProperties)
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/RecipeRunTask`.
+        public struct RecipeRunTask: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RecipeRunTask/error`.
+            public var error: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RecipeRunTask/id`.
+            public var id: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/RecipeRunTask/kind`.
+            public var kind: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RecipeRunTask/lane`.
+            public var lane: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RecipeRunTask/module`.
+            public var module: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RecipeRunTask/node`.
+            public var node: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RecipeRunTask/run_id`.
+            public var runId: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/RecipeRunTask/state`.
+            public var state: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RecipeRunTask/units_done`.
+            public var unitsDone: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/RecipeRunTask/units_failed`.
+            public var unitsFailed: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/RecipeRunTask/units_total`.
+            public var unitsTotal: Swift.Int?
+            /// A container of undocumented properties.
+            public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+            /// Creates a new `RecipeRunTask`.
+            ///
+            /// - Parameters:
+            ///   - error:
+            ///   - id:
+            ///   - kind:
+            ///   - lane:
+            ///   - module:
+            ///   - node:
+            ///   - runId:
+            ///   - state:
+            ///   - unitsDone:
+            ///   - unitsFailed:
+            ///   - unitsTotal:
+            ///   - additionalProperties: A container of undocumented properties.
+            public init(
+                error: Swift.String? = nil,
+                id: Swift.Int,
+                kind: Swift.String? = nil,
+                lane: Swift.String? = nil,
+                module: Swift.String,
+                node: Swift.String,
+                runId: Swift.Int,
+                state: Swift.String,
+                unitsDone: Swift.Int? = nil,
+                unitsFailed: Swift.Int? = nil,
+                unitsTotal: Swift.Int? = nil,
+                additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()
+            ) {
+                self.error = error
+                self.id = id
+                self.kind = kind
+                self.lane = lane
+                self.module = module
+                self.node = node
+                self.runId = runId
+                self.state = state
+                self.unitsDone = unitsDone
+                self.unitsFailed = unitsFailed
+                self.unitsTotal = unitsTotal
+                self.additionalProperties = additionalProperties
+            }
+            public enum CodingKeys: String, CodingKey {
+                case error
+                case id
+                case kind
+                case lane
+                case module
+                case node
+                case runId = "run_id"
+                case state
+                case unitsDone = "units_done"
+                case unitsFailed = "units_failed"
+                case unitsTotal = "units_total"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.error = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .error
+                )
+                self.id = try container.decode(
+                    Swift.Int.self,
+                    forKey: .id
+                )
+                self.kind = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .kind
+                )
+                self.lane = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .lane
+                )
+                self.module = try container.decode(
+                    Swift.String.self,
+                    forKey: .module
+                )
+                self.node = try container.decode(
+                    Swift.String.self,
+                    forKey: .node
+                )
+                self.runId = try container.decode(
+                    Swift.Int.self,
+                    forKey: .runId
+                )
+                self.state = try container.decode(
+                    Swift.String.self,
+                    forKey: .state
+                )
+                self.unitsDone = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .unitsDone
+                )
+                self.unitsFailed = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .unitsFailed
+                )
+                self.unitsTotal = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .unitsTotal
+                )
+                additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [
+                    "error",
+                    "id",
+                    "kind",
+                    "lane",
+                    "module",
+                    "node",
+                    "run_id",
+                    "state",
+                    "units_done",
+                    "units_failed",
+                    "units_total"
+                ])
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encodeIfPresent(
+                    self.error,
+                    forKey: .error
+                )
+                try container.encode(
+                    self.id,
+                    forKey: .id
+                )
+                try container.encodeIfPresent(
+                    self.kind,
+                    forKey: .kind
+                )
+                try container.encodeIfPresent(
+                    self.lane,
+                    forKey: .lane
+                )
+                try container.encode(
+                    self.module,
+                    forKey: .module
+                )
+                try container.encode(
+                    self.node,
+                    forKey: .node
+                )
+                try container.encode(
+                    self.runId,
+                    forKey: .runId
+                )
+                try container.encode(
+                    self.state,
+                    forKey: .state
+                )
+                try container.encodeIfPresent(
+                    self.unitsDone,
+                    forKey: .unitsDone
+                )
+                try container.encodeIfPresent(
+                    self.unitsFailed,
+                    forKey: .unitsFailed
+                )
+                try container.encodeIfPresent(
+                    self.unitsTotal,
+                    forKey: .unitsTotal
+                )
+                try encoder.encodeAdditionalProperties(additionalProperties)
+            }
+        }
         /// What a run would fan out to. Placement, without queueing anything.
         ///
         /// - Remark: Generated from `#/components/schemas/RecipeTasks`.
         public struct RecipeTasks: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RecipeTasks/executable`.
+            public var executable: Swift.Bool?
             /// - Remark: Generated from `#/components/schemas/RecipeTasks/flow`.
             public var flow: Swift.String?
             /// - Remark: Generated from `#/components/schemas/RecipeTasks/recipe`.
@@ -3874,33 +5344,47 @@ public enum Components {
             public typealias TasksPayload = [Components.Schemas.RecipeTasks.TasksPayloadPayload]
             /// - Remark: Generated from `#/components/schemas/RecipeTasks/tasks`.
             public var tasks: Components.Schemas.RecipeTasks.TasksPayload?
+            /// - Remark: Generated from `#/components/schemas/RecipeTasks/unavailable_modules`.
+            public var unavailableModules: [Swift.String]?
             /// A container of undocumented properties.
             public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
             /// Creates a new `RecipeTasks`.
             ///
             /// - Parameters:
+            ///   - executable:
             ///   - flow:
             ///   - recipe:
             ///   - tasks:
+            ///   - unavailableModules:
             ///   - additionalProperties: A container of undocumented properties.
             public init(
+                executable: Swift.Bool? = nil,
                 flow: Swift.String? = nil,
                 recipe: Swift.String,
                 tasks: Components.Schemas.RecipeTasks.TasksPayload? = nil,
+                unavailableModules: [Swift.String]? = nil,
                 additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()
             ) {
+                self.executable = executable
                 self.flow = flow
                 self.recipe = recipe
                 self.tasks = tasks
+                self.unavailableModules = unavailableModules
                 self.additionalProperties = additionalProperties
             }
             public enum CodingKeys: String, CodingKey {
+                case executable
                 case flow
                 case recipe
                 case tasks
+                case unavailableModules = "unavailable_modules"
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.executable = try container.decodeIfPresent(
+                    Swift.Bool.self,
+                    forKey: .executable
+                )
                 self.flow = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .flow
@@ -3913,14 +5397,24 @@ public enum Components {
                     Components.Schemas.RecipeTasks.TasksPayload.self,
                     forKey: .tasks
                 )
+                self.unavailableModules = try container.decodeIfPresent(
+                    [Swift.String].self,
+                    forKey: .unavailableModules
+                )
                 additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [
+                    "executable",
                     "flow",
                     "recipe",
-                    "tasks"
+                    "tasks",
+                    "unavailable_modules"
                 ])
             }
             public func encode(to encoder: any Swift.Encoder) throws {
                 var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encodeIfPresent(
+                    self.executable,
+                    forKey: .executable
+                )
                 try container.encodeIfPresent(
                     self.flow,
                     forKey: .flow
@@ -3932,6 +5426,10 @@ public enum Components {
                 try container.encodeIfPresent(
                     self.tasks,
                     forKey: .tasks
+                )
+                try container.encodeIfPresent(
+                    self.unavailableModules,
+                    forKey: .unavailableModules
                 )
                 try encoder.encodeAdditionalProperties(additionalProperties)
             }
@@ -8866,6 +10364,715 @@ public enum Operations {
             }
         }
     }
+    /// Admin Marketplace
+    ///
+    /// Browse inert recipes from bundled and operator-mounted catalogs.
+    ///
+    /// - Remark: HTTP `GET /v1/marketplace`.
+    /// - Remark: Generated from `#/paths//v1/marketplace/get(admin_marketplace)`.
+    public enum AdminMarketplace {
+        public static let id: Swift.String = "admin_marketplace"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/marketplace/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminMarketplace.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminMarketplace.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.AdminMarketplace.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            public init(headers: Operations.AdminMarketplace.Input.Headers = .init()) {
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/marketplace/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/marketplace/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.MarketplaceList)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.MarketplaceList {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminMarketplace.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminMarketplace.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/marketplace/get(admin_marketplace)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.AdminMarketplace.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.AdminMarketplace.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/marketplace/GET/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/marketplace/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminMarketplace.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminMarketplace.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/marketplace/get(admin_marketplace)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.AdminMarketplace.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.AdminMarketplace.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Admin Marketplace Entry
+    ///
+    /// - Remark: HTTP `GET /v1/marketplace/{entry_id}`.
+    /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/get(admin_marketplace_entry)`.
+    public enum AdminMarketplaceEntry {
+        public static let id: Swift.String = "admin_marketplace_entry"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/GET/path`.
+            public struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/GET/path/entry_id`.
+                public var entryId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - entryId:
+                public init(entryId: Swift.String) {
+                    self.entryId = entryId
+                }
+            }
+            public var path: Operations.AdminMarketplaceEntry.Input.Path
+            /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminMarketplaceEntry.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminMarketplaceEntry.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.AdminMarketplaceEntry.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.AdminMarketplaceEntry.Input.Path,
+                headers: Operations.AdminMarketplaceEntry.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.MarketplaceEntry)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.MarketplaceEntry {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminMarketplaceEntry.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminMarketplaceEntry.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/get(admin_marketplace_entry)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.AdminMarketplaceEntry.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.AdminMarketplaceEntry.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/GET/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminMarketplaceEntry.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminMarketplaceEntry.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/get(admin_marketplace_entry)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.AdminMarketplaceEntry.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.AdminMarketplaceEntry.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Admin Marketplace Install
+    ///
+    /// - Remark: HTTP `POST /v1/marketplace/{entry_id}/install`.
+    /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/install/post(admin_marketplace_install)`.
+    public enum AdminMarketplaceInstall {
+        public static let id: Swift.String = "admin_marketplace_install"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/install/POST/path`.
+            public struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/install/POST/path/entry_id`.
+                public var entryId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - entryId:
+                public init(entryId: Swift.String) {
+                    self.entryId = entryId
+                }
+            }
+            public var path: Operations.AdminMarketplaceInstall.Input.Path
+            /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/install/POST/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminMarketplaceInstall.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminMarketplaceInstall.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.AdminMarketplaceInstall.Input.Headers
+            /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/install/POST/requestBody`.
+            @frozen public enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/install/POST/requestBody/content/application\/json`.
+                case json(Components.Schemas.MarketplaceInstall)
+            }
+            public var body: Operations.AdminMarketplaceInstall.Input.Body
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            ///   - body:
+            public init(
+                path: Operations.AdminMarketplaceInstall.Input.Path,
+                headers: Operations.AdminMarketplaceInstall.Input.Headers = .init(),
+                body: Operations.AdminMarketplaceInstall.Input.Body
+            ) {
+                self.path = path
+                self.headers = headers
+                self.body = body
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Created: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/install/POST/responses/201/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/install/POST/responses/201/content/application\/json`.
+                    case json(Components.Schemas.Recipe)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.Recipe {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminMarketplaceInstall.Output.Created.Body
+                /// Creates a new `Created`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminMarketplaceInstall.Output.Created.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/install/post(admin_marketplace_install)/responses/201`.
+            ///
+            /// HTTP response code: `201 created`.
+            case created(Operations.AdminMarketplaceInstall.Output.Created)
+            /// The associated value of the enum case if `self` is `.created`.
+            ///
+            /// - Throws: An error if `self` is not `.created`.
+            /// - SeeAlso: `.created`.
+            public var created: Operations.AdminMarketplaceInstall.Output.Created {
+                get throws {
+                    switch self {
+                    case let .created(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "created",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/install/POST/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/install/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminMarketplaceInstall.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminMarketplaceInstall.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/install/post(admin_marketplace_install)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.AdminMarketplaceInstall.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.AdminMarketplaceInstall.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Admin Marketplace Update
+    ///
+    /// - Remark: HTTP `POST /v1/marketplace/{entry_id}/update`.
+    /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/update/post(admin_marketplace_update)`.
+    public enum AdminMarketplaceUpdate {
+        public static let id: Swift.String = "admin_marketplace_update"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/update/POST/path`.
+            public struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/update/POST/path/entry_id`.
+                public var entryId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - entryId:
+                public init(entryId: Swift.String) {
+                    self.entryId = entryId
+                }
+            }
+            public var path: Operations.AdminMarketplaceUpdate.Input.Path
+            /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/update/POST/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminMarketplaceUpdate.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminMarketplaceUpdate.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.AdminMarketplaceUpdate.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.AdminMarketplaceUpdate.Input.Path,
+                headers: Operations.AdminMarketplaceUpdate.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/update/POST/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/update/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.Recipe)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.Recipe {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminMarketplaceUpdate.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminMarketplaceUpdate.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/update/post(admin_marketplace_update)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.AdminMarketplaceUpdate.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.AdminMarketplaceUpdate.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/update/POST/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/marketplace/{entry_id}/update/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminMarketplaceUpdate.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminMarketplaceUpdate.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/marketplace/{entry_id}/update/post(admin_marketplace_update)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.AdminMarketplaceUpdate.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.AdminMarketplaceUpdate.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
     /// Metrics
     ///
     /// Search-performance rollup: latency percentiles + hybrid→keyword
@@ -9774,6 +11981,198 @@ public enum Operations {
             }
         }
     }
+    /// Admin Recipe Create
+    ///
+    /// Validate and install an inert recipe document.
+    ///
+    /// - Remark: HTTP `POST /v1/recipes`.
+    /// - Remark: Generated from `#/paths//v1/recipes/post(admin_recipe_create)`.
+    public enum AdminRecipeCreate {
+        public static let id: Swift.String = "admin_recipe_create"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/recipes/POST/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRecipeCreate.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRecipeCreate.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.AdminRecipeCreate.Input.Headers
+            /// - Remark: Generated from `#/paths/v1/recipes/POST/requestBody`.
+            @frozen public enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/recipes/POST/requestBody/json`.
+                public struct JsonPayload: Codable, Hashable, Sendable {
+                    /// A container of undocumented properties.
+                    public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                    /// Creates a new `JsonPayload`.
+                    ///
+                    /// - Parameters:
+                    ///   - additionalProperties: A container of undocumented properties.
+                    public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                        self.additionalProperties = additionalProperties
+                    }
+                    public init(from decoder: any Swift.Decoder) throws {
+                        additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                    }
+                    public func encode(to encoder: any Swift.Encoder) throws {
+                        try encoder.encodeAdditionalProperties(additionalProperties)
+                    }
+                }
+                /// - Remark: Generated from `#/paths/v1/recipes/POST/requestBody/content/application\/json`.
+                case json(Operations.AdminRecipeCreate.Input.Body.JsonPayload)
+            }
+            public var body: Operations.AdminRecipeCreate.Input.Body
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            ///   - body:
+            public init(
+                headers: Operations.AdminRecipeCreate.Input.Headers = .init(),
+                body: Operations.AdminRecipeCreate.Input.Body
+            ) {
+                self.headers = headers
+                self.body = body
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Created: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/recipes/POST/responses/201/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/recipes/POST/responses/201/content/application\/json`.
+                    case json(Components.Schemas.Recipe)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.Recipe {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRecipeCreate.Output.Created.Body
+                /// Creates a new `Created`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRecipeCreate.Output.Created.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/recipes/post(admin_recipe_create)/responses/201`.
+            ///
+            /// HTTP response code: `201 created`.
+            case created(Operations.AdminRecipeCreate.Output.Created)
+            /// The associated value of the enum case if `self` is `.created`.
+            ///
+            /// - Throws: An error if `self` is not `.created`.
+            /// - SeeAlso: `.created`.
+            public var created: Operations.AdminRecipeCreate.Output.Created {
+                get throws {
+                    switch self {
+                    case let .created(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "created",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/recipes/POST/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/recipes/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRecipeCreate.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRecipeCreate.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/recipes/post(admin_recipe_create)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.AdminRecipeCreate.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.AdminRecipeCreate.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
     /// Admin Recipe Validate
     ///
     /// Parse + type-check a recipe. Pure: no network, no database, no filesystem.
@@ -10108,6 +12507,214 @@ public enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             public var unprocessableContent: Operations.AdminRecipe.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Admin Recipe Update
+    ///
+    /// Persist a validated next revision of a recipe.
+    ///
+    /// - Remark: HTTP `PUT /v1/recipes/{name}`.
+    /// - Remark: Generated from `#/paths//v1/recipes/{name}/put(admin_recipe_update)`.
+    public enum AdminRecipeUpdate {
+        public static let id: Swift.String = "admin_recipe_update"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/recipes/{name}/PUT/path`.
+            public struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/recipes/{name}/PUT/path/name`.
+                public var name: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - name:
+                public init(name: Swift.String) {
+                    self.name = name
+                }
+            }
+            public var path: Operations.AdminRecipeUpdate.Input.Path
+            /// - Remark: Generated from `#/paths/v1/recipes/{name}/PUT/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRecipeUpdate.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRecipeUpdate.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.AdminRecipeUpdate.Input.Headers
+            /// - Remark: Generated from `#/paths/v1/recipes/{name}/PUT/requestBody`.
+            @frozen public enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/recipes/{name}/PUT/requestBody/json`.
+                public struct JsonPayload: Codable, Hashable, Sendable {
+                    /// A container of undocumented properties.
+                    public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                    /// Creates a new `JsonPayload`.
+                    ///
+                    /// - Parameters:
+                    ///   - additionalProperties: A container of undocumented properties.
+                    public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                        self.additionalProperties = additionalProperties
+                    }
+                    public init(from decoder: any Swift.Decoder) throws {
+                        additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                    }
+                    public func encode(to encoder: any Swift.Encoder) throws {
+                        try encoder.encodeAdditionalProperties(additionalProperties)
+                    }
+                }
+                /// - Remark: Generated from `#/paths/v1/recipes/{name}/PUT/requestBody/content/application\/json`.
+                case json(Operations.AdminRecipeUpdate.Input.Body.JsonPayload)
+            }
+            public var body: Operations.AdminRecipeUpdate.Input.Body
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            ///   - body:
+            public init(
+                path: Operations.AdminRecipeUpdate.Input.Path,
+                headers: Operations.AdminRecipeUpdate.Input.Headers = .init(),
+                body: Operations.AdminRecipeUpdate.Input.Body
+            ) {
+                self.path = path
+                self.headers = headers
+                self.body = body
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/recipes/{name}/PUT/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/recipes/{name}/PUT/responses/200/content/application\/json`.
+                    case json(Components.Schemas.Recipe)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.Recipe {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRecipeUpdate.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRecipeUpdate.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/recipes/{name}/put(admin_recipe_update)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.AdminRecipeUpdate.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.AdminRecipeUpdate.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/recipes/{name}/PUT/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/recipes/{name}/PUT/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRecipeUpdate.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRecipeUpdate.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/recipes/{name}/put(admin_recipe_update)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.AdminRecipeUpdate.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.AdminRecipeUpdate.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):
@@ -10516,6 +13123,1191 @@ public enum Operations {
             public static var allCases: [Self] {
                 [
                     .json
+                ]
+            }
+        }
+    }
+    /// Admin Runs
+    ///
+    /// - Remark: HTTP `GET /v1/runs`.
+    /// - Remark: Generated from `#/paths//v1/runs/get(admin_runs)`.
+    public enum AdminRuns {
+        public static let id: Swift.String = "admin_runs"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/runs/GET/query`.
+            public struct Query: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/GET/query/recipe`.
+                public var recipe: Swift.String?
+                /// - Remark: Generated from `#/paths/v1/runs/GET/query/source`.
+                public var source: Swift.String?
+                /// - Remark: Generated from `#/paths/v1/runs/GET/query/state`.
+                public var state: Swift.String?
+                /// - Remark: Generated from `#/paths/v1/runs/GET/query/before_id`.
+                public var beforeId: Swift.Int?
+                /// - Remark: Generated from `#/paths/v1/runs/GET/query/limit`.
+                public var limit: Swift.Int?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - recipe:
+                ///   - source:
+                ///   - state:
+                ///   - beforeId:
+                ///   - limit:
+                public init(
+                    recipe: Swift.String? = nil,
+                    source: Swift.String? = nil,
+                    state: Swift.String? = nil,
+                    beforeId: Swift.Int? = nil,
+                    limit: Swift.Int? = nil
+                ) {
+                    self.recipe = recipe
+                    self.source = source
+                    self.state = state
+                    self.beforeId = beforeId
+                    self.limit = limit
+                }
+            }
+            public var query: Operations.AdminRuns.Input.Query
+            /// - Remark: Generated from `#/paths/v1/runs/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRuns.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRuns.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.AdminRuns.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - query:
+            ///   - headers:
+            public init(
+                query: Operations.AdminRuns.Input.Query = .init(),
+                headers: Operations.AdminRuns.Input.Headers = .init()
+            ) {
+                self.query = query
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/runs/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.RecipeRunList)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.RecipeRunList {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRuns.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRuns.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/runs/get(admin_runs)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.AdminRuns.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.AdminRuns.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/GET/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/runs/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRuns.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRuns.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/runs/get(admin_runs)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.AdminRuns.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.AdminRuns.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Admin Run Create
+    ///
+    /// Queue a manual recipe run after freezing its resolved task config.
+    ///
+    /// - Remark: HTTP `POST /v1/runs`.
+    /// - Remark: Generated from `#/paths//v1/runs/post(admin_run_create)`.
+    public enum AdminRunCreate {
+        public static let id: Swift.String = "admin_run_create"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/runs/POST/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRunCreate.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRunCreate.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.AdminRunCreate.Input.Headers
+            /// - Remark: Generated from `#/paths/v1/runs/POST/requestBody`.
+            @frozen public enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/POST/requestBody/content/application\/json`.
+                case json(Components.Schemas.RecipeRunCreate)
+            }
+            public var body: Operations.AdminRunCreate.Input.Body
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            ///   - body:
+            public init(
+                headers: Operations.AdminRunCreate.Input.Headers = .init(),
+                body: Operations.AdminRunCreate.Input.Body
+            ) {
+                self.headers = headers
+                self.body = body
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Accepted: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/POST/responses/202/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/runs/POST/responses/202/content/application\/json`.
+                    case json(Components.Schemas.RecipeRunQueued)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.RecipeRunQueued {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRunCreate.Output.Accepted.Body
+                /// Creates a new `Accepted`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRunCreate.Output.Accepted.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/runs/post(admin_run_create)/responses/202`.
+            ///
+            /// HTTP response code: `202 accepted`.
+            case accepted(Operations.AdminRunCreate.Output.Accepted)
+            /// The associated value of the enum case if `self` is `.accepted`.
+            ///
+            /// - Throws: An error if `self` is not `.accepted`.
+            /// - SeeAlso: `.accepted`.
+            public var accepted: Operations.AdminRunCreate.Output.Accepted {
+                get throws {
+                    switch self {
+                    case let .accepted(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "accepted",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/POST/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/runs/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRunCreate.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRunCreate.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/runs/post(admin_run_create)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.AdminRunCreate.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.AdminRunCreate.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Admin Run
+    ///
+    /// - Remark: HTTP `GET /v1/runs/{run_id}`.
+    /// - Remark: Generated from `#/paths//v1/runs/{run_id}/get(admin_run)`.
+    public enum AdminRun {
+        public static let id: Swift.String = "admin_run"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/runs/{run_id}/GET/path`.
+            public struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/GET/path/run_id`.
+                public var runId: Swift.Int
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - runId:
+                public init(runId: Swift.Int) {
+                    self.runId = runId
+                }
+            }
+            public var path: Operations.AdminRun.Input.Path
+            /// - Remark: Generated from `#/paths/v1/runs/{run_id}/GET/query`.
+            public struct Query: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/GET/query/include_spec`.
+                public var includeSpec: Swift.Bool?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - includeSpec:
+                public init(includeSpec: Swift.Bool? = nil) {
+                    self.includeSpec = includeSpec
+                }
+            }
+            public var query: Operations.AdminRun.Input.Query
+            /// - Remark: Generated from `#/paths/v1/runs/{run_id}/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRun.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRun.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.AdminRun.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - query:
+            ///   - headers:
+            public init(
+                path: Operations.AdminRun.Input.Path,
+                query: Operations.AdminRun.Input.Query = .init(),
+                headers: Operations.AdminRun.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.query = query
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/runs/{run_id}/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.RecipeRun)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.RecipeRun {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRun.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRun.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/runs/{run_id}/get(admin_run)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.AdminRun.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.AdminRun.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/GET/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/runs/{run_id}/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRun.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRun.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/runs/{run_id}/get(admin_run)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.AdminRun.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.AdminRun.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Admin Run Cancel
+    ///
+    /// - Remark: HTTP `POST /v1/runs/{run_id}/cancel`.
+    /// - Remark: Generated from `#/paths//v1/runs/{run_id}/cancel/post(admin_run_cancel)`.
+    public enum AdminRunCancel {
+        public static let id: Swift.String = "admin_run_cancel"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/runs/{run_id}/cancel/POST/path`.
+            public struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/cancel/POST/path/run_id`.
+                public var runId: Swift.Int
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - runId:
+                public init(runId: Swift.Int) {
+                    self.runId = runId
+                }
+            }
+            public var path: Operations.AdminRunCancel.Input.Path
+            /// - Remark: Generated from `#/paths/v1/runs/{run_id}/cancel/POST/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRunCancel.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRunCancel.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.AdminRunCancel.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.AdminRunCancel.Input.Path,
+                headers: Operations.AdminRunCancel.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/cancel/POST/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/runs/{run_id}/cancel/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.ActionResult)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ActionResult {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRunCancel.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRunCancel.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/runs/{run_id}/cancel/post(admin_run_cancel)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.AdminRunCancel.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.AdminRunCancel.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/cancel/POST/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/runs/{run_id}/cancel/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRunCancel.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRunCancel.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/runs/{run_id}/cancel/post(admin_run_cancel)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.AdminRunCancel.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.AdminRunCancel.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Admin Run Events
+    ///
+    /// - Remark: HTTP `GET /v1/runs/{run_id}/events`.
+    /// - Remark: Generated from `#/paths//v1/runs/{run_id}/events/get(admin_run_events)`.
+    public enum AdminRunEvents {
+        public static let id: Swift.String = "admin_run_events"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/GET/path`.
+            public struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/GET/path/run_id`.
+                public var runId: Swift.Int
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - runId:
+                public init(runId: Swift.Int) {
+                    self.runId = runId
+                }
+            }
+            public var path: Operations.AdminRunEvents.Input.Path
+            /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/GET/query`.
+            public struct Query: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/GET/query/after`.
+                public var after: Swift.Int?
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/GET/query/limit`.
+                public var limit: Swift.Int?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - after:
+                ///   - limit:
+                public init(
+                    after: Swift.Int? = nil,
+                    limit: Swift.Int? = nil
+                ) {
+                    self.after = after
+                    self.limit = limit
+                }
+            }
+            public var query: Operations.AdminRunEvents.Input.Query
+            /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRunEvents.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRunEvents.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.AdminRunEvents.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - query:
+            ///   - headers:
+            public init(
+                path: Operations.AdminRunEvents.Input.Path,
+                query: Operations.AdminRunEvents.Input.Query = .init(),
+                headers: Operations.AdminRunEvents.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.query = query
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.RecipeRunEvents)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.RecipeRunEvents {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRunEvents.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRunEvents.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/runs/{run_id}/events/get(admin_run_events)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.AdminRunEvents.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.AdminRunEvents.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/GET/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRunEvents.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRunEvents.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/runs/{run_id}/events/get(admin_run_events)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.AdminRunEvents.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.AdminRunEvents.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Admin Run Event Stream
+    ///
+    /// Stream run snapshots plus monotonic event batches until terminal.
+    ///
+    /// - Remark: HTTP `GET /v1/runs/{run_id}/events/stream`.
+    /// - Remark: Generated from `#/paths//v1/runs/{run_id}/events/stream/get(admin_run_event_stream)`.
+    public enum AdminRunEventStream {
+        public static let id: Swift.String = "admin_run_event_stream"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/stream/GET/path`.
+            public struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/stream/GET/path/run_id`.
+                public var runId: Swift.Int
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - runId:
+                public init(runId: Swift.Int) {
+                    self.runId = runId
+                }
+            }
+            public var path: Operations.AdminRunEventStream.Input.Path
+            /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/stream/GET/query`.
+            public struct Query: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/stream/GET/query/after`.
+                public var after: Swift.Int?
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/stream/GET/query/ticks`.
+                public var ticks: Swift.Int?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - after:
+                ///   - ticks:
+                public init(
+                    after: Swift.Int? = nil,
+                    ticks: Swift.Int? = nil
+                ) {
+                    self.after = after
+                    self.ticks = ticks
+                }
+            }
+            public var query: Operations.AdminRunEventStream.Input.Query
+            /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/stream/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRunEventStream.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AdminRunEventStream.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.AdminRunEventStream.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - query:
+            ///   - headers:
+            public init(
+                path: Operations.AdminRunEventStream.Input.Path,
+                query: Operations.AdminRunEventStream.Input.Query = .init(),
+                headers: Operations.AdminRunEventStream.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.query = query
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/stream/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/stream/GET/responses/200/content/application\/json`.
+                    case json(OpenAPIRuntime.OpenAPIValueContainer)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: OpenAPIRuntime.OpenAPIValueContainer {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            default:
+                                try throwUnexpectedResponseBody(
+                                    expectedContent: "application/json",
+                                    body: self
+                                )
+                            }
+                        }
+                    }
+                    /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/stream/GET/responses/200/content/text\/event-stream`.
+                    case textEventStream(OpenAPIRuntime.HTTPBody)
+                    /// The associated value of the enum case if `self` is `.textEventStream`.
+                    ///
+                    /// - Throws: An error if `self` is not `.textEventStream`.
+                    /// - SeeAlso: `.textEventStream`.
+                    public var textEventStream: OpenAPIRuntime.HTTPBody {
+                        get throws {
+                            switch self {
+                            case let .textEventStream(body):
+                                return body
+                            default:
+                                try throwUnexpectedResponseBody(
+                                    expectedContent: "text/event-stream",
+                                    body: self
+                                )
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRunEventStream.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRunEventStream.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Server-sent run and event updates.
+            ///
+            /// - Remark: Generated from `#/paths//v1/runs/{run_id}/events/stream/get(admin_run_event_stream)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.AdminRunEventStream.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.AdminRunEventStream.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/stream/GET/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/runs/{run_id}/events/stream/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AdminRunEventStream.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AdminRunEventStream.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/runs/{run_id}/events/stream/get(admin_run_event_stream)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.AdminRunEventStream.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.AdminRunEventStream.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case textEventStream
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                case "text/event-stream":
+                    self = .textEventStream
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                case .textEventStream:
+                    return "text/event-stream"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json,
+                    .textEventStream
                 ]
             }
         }

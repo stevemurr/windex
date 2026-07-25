@@ -519,12 +519,15 @@ def get(name: str) -> Module | None:
 def describe() -> dict:
     """The whole palette. What `GET /admin/v1/registry` serves and the graph editor
     renders from — no vocabulary is hardcoded client-side."""
-    from windex.recipe import ports
+    from windex.recipe import ports, runners
 
     return {
-        "registry_version": 1,
+        "registry_version": 2,
         "port_types": ports.PORT_TYPES,
         "kinds": ports.describe_kinds(),
-        "modules": [m.describe() for m in MODULES.values()],
+        "modules": [
+            {**m.describe(), "implemented": m.name in runners.RUNNERS}
+            for m in MODULES.values()
+        ],
         "always_before_load": list(ALWAYS_BEFORE_LOAD),
     }

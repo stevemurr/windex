@@ -269,6 +269,87 @@ class RecipeDoc(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class MarketplaceInstall(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    values: dict = Field(default_factory=dict)
+
+
+@admin.get("/v1/marketplace", responses={200: {"model": m.MarketplaceList}})
+def admin_marketplace() -> dict:
+    """Browse inert recipes from bundled and operator-mounted catalogs."""
+    from windex import db
+    from windex.recipe import marketplace
+
+    with db.pooled(get_settings().pg_dsn) as conn:
+        return {"entries": marketplace.list_entries(conn, get_settings())}
+
+
+@admin.get(
+    "/v1/marketplace/{entry_id}",
+    responses={200: {"model": m.MarketplaceEntry}},
+)
+def admin_marketplace_entry(entry_id: str) -> dict:
+    from windex import db
+    from windex.recipe import marketplace
+
+    with db.pooled(get_settings().pg_dsn) as conn:
+        got = marketplace.get_entry(conn, get_settings(), entry_id)
+    if got is None:
+        raise HTTPException(404, f"unknown marketplace entry: {entry_id}")
+    return got
+
+
+@admin.post(
+    "/v1/marketplace/{entry_id}/install",
+    responses={201: {"model": m.Recipe}},
+    status_code=201,
+)
+def admin_marketplace_install(
+    entry_id: str,
+    body: MarketplaceInstall,
+) -> dict:
+    from windex import db
+    from windex.recipe import marketplace
+
+    try:
+        with db.pooled(get_settings().pg_dsn) as conn:
+            return marketplace.install(
+                conn,
+                get_settings(),
+                entry_id,
+                name=body.name,
+                values=body.values,
+            )
+    except KeyError:
+        raise HTTPException(404, f"unknown marketplace entry: {entry_id}")
+    except marketplace.CatalogConflict as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@admin.post(
+    "/v1/marketplace/{entry_id}/update",
+    responses={200: {"model": m.Recipe}},
+)
+def admin_marketplace_update(entry_id: str) -> dict:
+    from windex import db
+    from windex.recipe import marketplace
+
+    try:
+        with db.pooled(get_settings().pg_dsn) as conn:
+            return marketplace.update(conn, get_settings(), entry_id)
+    except KeyError:
+        raise HTTPException(
+            404, f"marketplace entry is unknown or not installed: {entry_id}")
+    except marketplace.CatalogConflict as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
 @admin.post("/v1/recipes/validate", responses={200: {"model": m.ValidationReport}})
 def admin_recipe_validate(body: dict) -> dict:
     """Parse + type-check a recipe. Pure: no network, no database, no filesystem.
@@ -280,6 +361,22 @@ def admin_recipe_validate(body: dict) -> dict:
     from windex.recipe import parse as recipe_parse
 
     return recipe_parse.validate(body, get_settings())
+
+
+@admin.post("/v1/recipes", responses={201: {"model": m.Recipe}},
+            status_code=201)
+def admin_recipe_create(body: dict) -> dict:
+    """Validate and install an inert recipe document."""
+    from windex import db
+    from windex.recipe import store
+
+    try:
+        with db.pooled(get_settings().pg_dsn) as conn:
+            return store.create_recipe(conn, body, get_settings())
+    except KeyError:
+        raise HTTPException(409, f"recipe already exists: {body.get('name', '')}")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @admin.get("/v1/recipes", responses={200: {"model": m.RecipeList}})
@@ -295,6 +392,22 @@ def admin_recipes(include_spec: bool = Query(False)) -> dict:
 
     with db.pooled(get_settings().pg_dsn) as conn:
         return {"recipes": store.list_recipes(conn, include_spec=include_spec)}
+
+
+@admin.put("/v1/recipes/{name}", responses={200: {"model": m.Recipe}})
+def admin_recipe_update(name: str, body: dict) -> dict:
+    """Persist a validated next revision of a recipe."""
+    from windex import db
+    from windex.recipe import store
+
+    try:
+        with db.pooled(get_settings().pg_dsn) as conn:
+            got = store.update_recipe(conn, name, body, get_settings())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    if got is None:
+        raise HTTPException(404, f"unknown recipe: {name}")
+    return got
 
 
 @admin.get("/v1/recipes/{name}", responses={200: {"model": m.Recipe}})
@@ -331,7 +444,164 @@ def admin_recipe_tasks(name: str, flow: str | None = Query(None)) -> dict:
                                             settings=get_settings())
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    return {"recipe": name, "flow": flow, "tasks": tasks}
+    unavailable = recipe_compile.unavailable_modules(tasks)
+    for task in tasks:
+        task["executable"] = task["module"] not in unavailable
+    return {
+        "recipe": name,
+        "flow": flow,
+        "executable": not unavailable,
+        "unavailable_modules": unavailable,
+        "tasks": tasks,
+    }
+
+
+class RecipeRunCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    recipe: str
+    flow: str | None = None
+    params: dict = Field(default_factory=dict)
+    mode: Literal["run", "dry_run"] = "run"
+    priority: int = Field(default=50, ge=0, le=100)
+    dedupe_key: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+@admin.post("/v1/runs", responses={202: {"model": m.RecipeRunQueued}},
+            status_code=202)
+def admin_run_create(body: RecipeRunCreate) -> dict:
+    """Queue a manual recipe run after freezing its resolved task config."""
+    from windex import db
+    from windex.recipe import run_store
+
+    try:
+        with db.pooled(get_settings().pg_dsn) as conn:
+            run_id = run_store.submit(
+                conn, recipe=body.recipe, flow=body.flow,
+                params=body.params, mode=body.mode, priority=body.priority,
+                dedupe_key=body.dedupe_key, settings=get_settings())
+    except KeyError:
+        raise HTTPException(404, f"unknown recipe: {body.recipe}")
+    except run_store.ModulesUnavailable as exc:
+        raise HTTPException(
+            409,
+            {
+                "message": str(exc),
+                "unavailable_modules": exc.modules,
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"run_id": run_id, "queued": run_id is not None,
+            "coalesced": run_id is None}
+
+
+@admin.get("/v1/runs", responses={200: {"model": m.RecipeRunList}})
+def admin_runs(recipe: str | None = None, source: str | None = None,
+               state: str | None = None, before_id: int | None = Query(None, ge=1),
+               limit: int = Query(50, ge=1, le=200)) -> dict:
+    from windex import db
+    from windex.recipe import run_store
+
+    try:
+        with db.pooled(get_settings().pg_dsn) as conn:
+            runs = run_store.list_runs(
+                conn, recipe=recipe, source=source, state=state,
+                before_id=before_id, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"runs": runs}
+
+
+@admin.get("/v1/runs/{run_id}", responses={200: {"model": m.RecipeRun}})
+def admin_run(run_id: int, include_spec: bool = Query(False)) -> dict:
+    from windex import db
+    from windex.recipe import run_store
+
+    with db.pooled(get_settings().pg_dsn) as conn:
+        got = run_store.get_run(conn, run_id, include_spec=include_spec)
+    if got is None:
+        raise HTTPException(404, f"unknown run: {run_id}")
+    return got
+
+
+@admin.post("/v1/runs/{run_id}/cancel",
+            responses={200: {"model": m.ActionResult}})
+def admin_run_cancel(run_id: int) -> dict:
+    from windex import db
+    from windex.worker import dag
+
+    with db.pooled(get_settings().pg_dsn) as conn:
+        ok = dag.request_cancel(conn, run_id, by="admin API")
+    if not ok:
+        raise HTTPException(409, "run is not queued, running, or blocked")
+    return {"ok": True, "run_id": run_id}
+
+
+@admin.get("/v1/runs/{run_id}/events",
+           responses={200: {"model": m.RecipeRunEvents}})
+def admin_run_events(run_id: int, after: int = Query(0, ge=0),
+                     limit: int = Query(200, ge=1, le=1000)) -> dict:
+    from windex import db
+    from windex.recipe import run_store
+
+    with db.pooled(get_settings().pg_dsn) as conn:
+        if run_store.get_run(conn, run_id) is None:
+            raise HTTPException(404, f"unknown run: {run_id}")
+        events = run_store.list_events(conn, run_id, after=after, limit=limit)
+    return {"events": events,
+            "next_cursor": events[-1]["seq"] if events else after}
+
+
+@admin.get(
+    "/v1/runs/{run_id}/events/stream",
+    responses={200: {"content": {"text/event-stream": {}},
+                     "description": "Server-sent run and event updates."}},
+)
+async def admin_run_event_stream(
+    run_id: int,
+    after: int = Query(0, ge=0),
+    ticks: int | None = Query(None, ge=1, le=10_000),
+) -> StreamingResponse:
+    """Stream run snapshots plus monotonic event batches until terminal."""
+    from windex import db
+    from windex.recipe import run_store
+
+    settings = get_settings()
+
+    async def gen():
+        cursor, n = after, 0
+        while True:
+            def read_tick():
+                with db.pooled(settings.pg_dsn) as conn:
+                    run = run_store.get_run(conn, run_id)
+                    events = (run_store.list_events(
+                        conn, run_id, after=cursor, limit=500) if run else [])
+                    return run, events
+
+            run, events = await run_in_threadpool(read_tick)
+            if run is None:
+                yield (
+                    "event: error\ndata: "
+                    f"{orjson.dumps({'error': 'unknown run'}).decode()}\n\n")
+                return
+            yield f"event: run\ndata: {orjson.dumps(run).decode()}\n\n"
+            if events:
+                cursor = events[-1]["seq"]
+                yield f"event: events\ndata: {orjson.dumps(events).decode()}\n\n"
+            n += 1
+            if ticks is not None and n >= ticks:
+                return
+            if run["state"] in ("succeeded", "failed", "cancelled"):
+                yield (
+                    "event: end\ndata: "
+                    f"{orjson.dumps({'cursor': cursor}).decode()}\n\n")
+                return
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @admin.get("/v1/whoami", responses={200: {"model": m.WhoAmI}})

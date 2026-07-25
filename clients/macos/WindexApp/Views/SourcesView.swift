@@ -10,8 +10,11 @@ final class SourcesModel {
     private(set) var detail: Recipe?
     private(set) var flows: [String: RecipeFlowSummary] = [:]
     private(set) var tasks: [RecipeTask] = []
+    private(set) var executable = false
+    private(set) var unavailableModules: [String] = []
     private(set) var isLoading = false
     private(set) var isLoadingDetail = false
+    private(set) var isActing = false
     private(set) var errorMessage: String?
     var selectedName: String?
     var selectedFlow: String?
@@ -51,6 +54,8 @@ final class SourcesModel {
         detail = nil
         flows = [:]
         tasks = []
+        executable = false
+        unavailableModules = []
         selectedFlow = nil
         isLoadingDetail = true
 
@@ -67,6 +72,8 @@ final class SourcesModel {
                 let response = try await client.recipeTasks(named: name, flow: flow)
                 guard selectedName == name, selectedFlow == flow else { return }
                 tasks = try response.placements()
+                executable = response.executable ?? false
+                unavailableModules = response.unavailableModules ?? []
             }
             isLoadingDetail = false
             errorMessage = nil
@@ -90,11 +97,31 @@ final class SourcesModel {
             let response = try await client.recipeTasks(named: name, flow: flow)
             guard selectedName == name, selectedFlow == flow else { return }
             tasks = try response.placements()
+            executable = response.executable ?? false
+            unavailableModules = response.unavailableModules ?? []
             isLoadingDetail = false
             errorMessage = nil
         } catch {
             guard selectedName == name, selectedFlow == flow else { return }
             isLoadingDetail = false
+            present(error, appModel: appModel)
+        }
+    }
+
+    func run(client: WindexClient, appModel: AppModel) async {
+        guard executable, let selectedName else { return }
+        isActing = true
+        defer { isActing = false }
+        do {
+            let queued = try await client.createRun(
+                recipe: selectedName,
+                flow: selectedFlow)
+            if queued.runId != nil {
+                appModel.selection = .runs
+            } else {
+                errorMessage = "A live run already holds this recipe’s queue key."
+            }
+        } catch {
             present(error, appModel: appModel)
         }
     }
@@ -212,10 +239,13 @@ struct SourcesView: View {
                 .windexStyle(Typography.body)
                 .foregroundStyle(theme.palette.graphite)
             HStack(spacing: .sm) {
-                Button("Add a source") {}
-                Button("Browse the marketplace") {}
+                Button("Add a source") {
+                    appModel.selection = .recipes
+                }
+                Button("Browse the marketplace") {
+                    appModel.selection = .marketplace
+                }
             }
-            .disabled(true)
             Spacer()
         }
         .padding(.lg)
@@ -244,7 +274,16 @@ struct SourcesView: View {
                         }
                     }),
                 tasks: model.tasks,
-                isRefreshing: model.isLoadingDetail)
+                executable: model.executable,
+                unavailableModules: model.unavailableModules,
+                errorMessage: model.errorMessage,
+                isRefreshing: model.isLoadingDetail,
+                isActing: model.isActing,
+                run: {
+                    Task {
+                        await model.run(client: client, appModel: appModel)
+                    }
+                })
         } else if let error = model.errorMessage {
             SourceFailureView(message: error) {
                 Task {
@@ -295,7 +334,12 @@ private struct SourceDetailView: View {
     let flows: [String: RecipeFlowSummary]
     @Binding var selectedFlow: String?
     let tasks: [RecipeTask]
+    let executable: Bool
+    let unavailableModules: [String]
+    let errorMessage: String?
     let isRefreshing: Bool
+    let isActing: Bool
+    let run: () -> Void
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -313,9 +357,7 @@ private struct SourceDetailView: View {
                         .foregroundStyle(theme.palette.graphite)
                 }
                 Hairline()
-                Text("Source definitions are read-only until recipe write and run APIs are available.")
-                    .windexStyle(Typography.body)
-                    .foregroundStyle(theme.palette.graphite)
+                executionStatus
             }
             .padding(.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -324,11 +366,40 @@ private struct SourceDetailView: View {
         .background(theme.palette.ink)
     }
 
+    private var executionStatus: some View {
+        VStack(alignment: .leading, spacing: .xs) {
+            StyledText("Execution", Typography.eyebrow)
+                .foregroundStyle(theme.palette.graphite)
+            if executable {
+                Text("This flow is available to run.")
+                    .windexStyle(Typography.body)
+            } else {
+                StatusBadge(.attention, word: "executor migration in progress")
+                Text(
+                    unavailableModules.isEmpty
+                        ? "This server has not published execution availability."
+                        : "Unavailable modules: \(unavailableModules.joined(separator: ", "))."
+                )
+                .windexStyle(Typography.dataSM)
+                .foregroundStyle(theme.palette.graphite)
+                .textSelection(.enabled)
+            }
+            if let errorMessage {
+                Text(errorMessage)
+                    .windexStyle(Typography.body)
+                    .foregroundStyle(theme.palette.rust)
+            }
+        }
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: .sm) {
             HStack(alignment: .firstTextBaseline) {
                 StyledText(recipe.displayTitle, Typography.setLG)
                 Spacer()
+                Button("Run now", action: run)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!executable || isActing || recipe.enabled == false)
                 if recipe.enabled == false {
                     StatusBadge(.attention, word: "disabled")
                 } else {
@@ -393,15 +464,17 @@ private struct SourceDetailView: View {
                         tableHeader("Lane", width: 70)
                         tableHeader("Depends on", width: 160)
                         tableHeader("Preconditions", width: 160)
+                        tableHeader("Available", width: 80)
                     }
                     ForEach(tasks, id: \.node) { task in
-                        Hairline().gridCellColumns(5)
+                        Hairline().gridCellColumns(6)
                         GridRow {
                             cell(task.node, width: 130)
                             cell(task.module, width: 190)
                             cell(task.lane, width: 70)
                             cell(task.dependsOn.joined(separator: ", "), width: 160)
                             cell(task.preconditions.joined(separator: ", "), width: 160)
+                            cell(task.executable == false ? "no" : "yes", width: 80)
                         }
                         .padding(.vertical, .xs)
                     }

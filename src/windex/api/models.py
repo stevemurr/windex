@@ -337,12 +337,87 @@ class RecipeList(_Loose):
     recipes: list[Recipe] = []
 
 
+class MarketplaceEntry(_Loose):
+    id: str
+    catalog: str
+    name: str
+    title: str
+    description: str | None = None
+    version: int
+    config: list[dict[str, Any]] = []
+    document: dict[str, Any]
+    executable: bool = False
+    unavailable_modules: list[str] = []
+    installed: bool = False
+    installed_name: str | None = None
+    installed_version: int | None = None
+    locally_edited: bool = False
+    update_available: bool = False
+
+
+class MarketplaceList(_Loose):
+    entries: list[MarketplaceEntry] = []
+
+
 class RecipeTasks(_Loose):
     """What a run would fan out to. Placement, without queueing anything."""
 
     recipe: str
     flow: str | None = None
+    executable: bool = False
+    unavailable_modules: list[str] = []
     tasks: list[dict[str, Any]] = []
+
+
+class RecipeRunTask(_Loose):
+    id: int
+    run_id: int
+    node: str
+    module: str
+    state: str
+    kind: str | None = None
+    lane: str | None = None
+    units_total: int | None = None
+    units_done: int | None = None
+    units_failed: int | None = None
+    error: str | None = None
+
+
+class RecipeRun(_Loose):
+    id: int
+    recipe: str
+    source: str
+    state: str
+    recipe_version: int | None = None
+    trigger: str | None = None
+    trigger_by: str | None = None
+    params: dict[str, Any] = {}
+    mode: str | None = None
+    priority: int | None = None
+    cancel_requested: bool | None = None
+    queued_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    updated_at: str | None = None
+    progress: dict[str, Any] = {}
+    stats: dict[str, Any] = {}
+    error: str | None = None
+    tasks: list[RecipeRunTask] = []
+
+
+class RecipeRunList(_Loose):
+    runs: list[RecipeRun] = []
+
+
+class RecipeRunQueued(_Loose):
+    run_id: int | None = None
+    queued: bool
+    coalesced: bool = False
+
+
+class RecipeRunEvents(_Loose):
+    events: list[dict[str, Any]] = []
+    next_cursor: int = 0
 
 
 class Health(_Loose):

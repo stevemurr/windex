@@ -154,7 +154,7 @@ def _seed_recipes(conn) -> None:
 
         recipe_store.seed_builtins(conn, get_settings())
     except Exception as exc:  # noqa: BLE001 — never let this block schema init
-        console.print(f"[yellow]recipe seed skipped: {exc}[/yellow]")
+        log.warning("recipe seed skipped: %s", exc)
 
 
 def _seed_schedule(conn: psycopg.Connection) -> None:

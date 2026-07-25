@@ -18,6 +18,7 @@ targets:
           - Tests
           - Resources/Info.plist
     resources:
+      - path: WindexApp/Resources/Assets.xcassets
       - path: WindexApp/Resources/Fonts
         type: folder
       - path: WindexApp/Resources/Licenses
@@ -35,6 +36,8 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         SWIFT_VERSION: "6.0"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: YES
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
