@@ -171,18 +171,16 @@ def test_resolve_refuses_an_unknown_module():
         C.resolve("evil.exfiltrate")
 
 
-def test_resolve_says_declared_but_unimplemented_distinctly():
-    """The registry describes modules the executor cannot yet run — that ordering
-    is deliberate, so the message has to distinguish the two cases or every
-    unimplemented module looks like a typo."""
-    with pytest.raises(LookupError, match="declared but not yet implemented"):
-        C.resolve("http.get")
+def test_every_declared_module_resolves():
+    from windex.recipe import registry
+
+    assert all(callable(C.resolve(name)) for name in registry.MODULES)
 
 
 def test_unavailable_modules_is_unique_and_sorted(monkeypatch):
     from windex.recipe import runners
 
-    monkeypatch.setitem(runners.RUNNERS, "http.get", lambda ctx: None)
+    monkeypatch.delitem(runners.RUNNERS, "ledger.stage")
     tasks = [
         {"module": "ledger.stage"},
         {"module": "http.get"},

@@ -155,3 +155,20 @@ services:
 
     # --- App: editable job scheduler (fires due schedule-table entries: ingest/daily/maintain) ---
     windex-scheduler:     { <<: *windex-loop, command: ["scheduler"] }
+
+    # --- Generic recipe worker pool ----------------------------------------
+    # Executes run_tasks for every installed recipe. Four recyclable subprocess
+    # slots share fleet-wide lane caps; cpu_heavy stays capped at one so a wiki
+    # shard and datatrove extraction can never peak together.
+    windex-worker:
+        <<: *windex-loop
+        command: ["worker", "--slots", "4", "--name", "production"]
+        mem_limit: 40g
+        stop_grace_period: 40s
+
+    # Recipe-native trigger dispatcher. The legacy scheduler remains alongside
+    # it until the clean reset proves every migrated trigger against the new
+    # runners; trigger migration is idempotent.
+    windex-recipe-scheduler:
+        <<: *windex-loop
+        command: ["scheduler2", "--migrate"]

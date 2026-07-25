@@ -108,7 +108,11 @@ def evaluate(settings: object, *, names: Iterable[str] = KNOWN,
             Path(settings.downloads_dir),          # type: ignore[attr-defined]
             int(getattr(settings, "storage_min_free_bytes", 0))),
         "gateway": lambda: _gateway_ok(settings),
-        "gh_token": lambda: bool(getattr(settings, "github_token_list", [])),
+        "gh_token": lambda: bool(
+            settings.github_token_list()
+            if callable(getattr(settings, "github_token_list", None))
+            else getattr(settings, "github_token_list", [])
+        ),
     }
     checks.update(extra or {})
     out: set[str] = set()

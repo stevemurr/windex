@@ -75,6 +75,7 @@ class PartitionRecord:
 
     store: str
     key: str
+    ref: PartitionRef | None = None
     upstream: dict = field(default_factory=dict)
     stage: str | None = None
     payload: dict = field(default_factory=dict)
@@ -170,7 +171,8 @@ PORT_TYPES: dict[str, dict] = {
     "RawBlob": {"title": "Fetched bytes",
                 "fields": ["ref", "uri", "media_type", "path", "body", "meta"]},
     "PartitionRecord": {"title": "Work assertion",
-                        "fields": ["store", "key", "upstream", "stage", "payload", "delta"]},
+                        "fields": ["store", "key", "ref", "upstream", "stage",
+                                   "payload", "delta"]},
     "ExtractedDoc": {"title": "Document",
                      "fields": ["ref", "suffix", "url", "title", "text",
                                 "published_at", "lang", "fields", "payload"]},

@@ -32,7 +32,6 @@ flows:
                 with: {url_template: "https://dumps.wikimedia.org/other/cirrussearch/current/{key}",
                        allowed_hosts: "dumps.wikimedia.org", keep: false}}
       pages:   {kind: extract, uses: cirrus.articles, with: {chunk_rows: "@config.chunk_rows"}}
-      stage:   {kind: load, uses: ledger.stage,
-                with: {replace: true, replace_scope: partition, replace_guard: census}}
+      stage:   {kind: load, uses: ledger.stage, with: {replace: false}}
     edges: [[pending, shard], [shard, pages], [pages, stage]]
 refresh: [sync, ingest]

@@ -8,17 +8,26 @@ import json
 from psycopg.types.json import Jsonb
 
 from windex.modules.catalog import list_json_manifest, list_lines, list_path_manifest_gz
-from windex.modules.collect import store_upsert
+from windex.modules.collect import store_repos, store_upsert
 from windex.modules.discover import state_pending, static_once
+from windex.modules.load import ledger_stage
+from windex.modules.receive import push_docs
+from windex.modules.transform import dedup_exact
 from windex.recipe import wire
-from windex.recipe.ports import PartitionRecord, PartitionRef, RawBlob, WorkUnit
+from windex.recipe.ports import (
+    ExtractedDoc,
+    PartitionRecord,
+    PartitionRef,
+    RawBlob,
+    WorkUnit,
+)
 from windex.recipe.wire import decode_many
 from windex.worker.protocol import TaskContext
 
 
 def _ctx(pg, *, task_id: int, config: dict, module: str, run_id: int = 71,
          recipe: str = "demo", source: str = "demo", node: str = "root",
-         should_yield=lambda: False):
+         should_yield=lambda: False, spec=None, params=None):
     beats = []
     ctx = TaskContext(
         run_id=run_id,
@@ -27,12 +36,13 @@ def _ctx(pg, *, task_id: int, config: dict, module: str, run_id: int = 71,
         node=node,
         module=module,
         config=config,
-        spec={},
+        spec=spec or {},
         cursor={},
         conn=pg,
         should_yield=should_yield,
         heartbeat=lambda done, failed, stats: beats.append((done, failed, stats)),
         recipe=recipe,
+        params=params or {},
     )
     return ctx, beats
 
@@ -257,6 +267,286 @@ def test_durable_stream_fans_in_and_store_upsert_consumes_it(pg):
             "SELECT unit_key, attrs->>'branch' FROM source_units "
             "WHERE source = 'demo' ORDER BY unit_key")
         assert cur.fetchall() == [("a", "left"), ("b", "right")]
+
+
+def test_large_edge_batch_uses_artifact_and_remains_consumable(
+        pg, tmp_path, monkeypatch):
+    from windex.modules import common
+    from windex.worker import dag
+
+    monkeypatch.setattr(common, "_INLINE_BYTES", 1)
+    monkeypatch.setattr(common, "_artifact_root", lambda: tmp_path)
+    run_id = dag.submit_run(
+        pg,
+        recipe="demo",
+        source="corpus",
+        spec={},
+        dedupe_key="recipe-runner-artifact",
+        tasks=[
+            {"node": "parse", "module": "test.parse", "kind": "catalog"},
+            {"node": "sink", "module": "store.upsert", "kind": "collect",
+             "config": {"store": "items"}, "depends_on": ["parse"]},
+        ],
+    )
+    assert run_id is not None
+    with pg.cursor() as cur:
+        cur.execute("SELECT node, id FROM run_tasks WHERE run_id = %s", (run_id,))
+        tasks = dict(cur.fetchall())
+    parse, _ = _ctx(
+        pg,
+        run_id=run_id,
+        task_id=tasks["parse"],
+        node="parse",
+        module="test.parse",
+        config={},
+    )
+    batch = common.InputBatch(key="seed:1", values=())
+    record = PartitionRecord(
+        store="items",
+        key="large",
+        payload={"text": "x" * 1_000},
+    )
+    common.finish_batch(parse, batch, outputs=[record])
+    pg.commit()
+
+    with pg.cursor() as cur:
+        cur.execute(
+            "SELECT outputs FROM task_units WHERE task_id = %s",
+            (tasks["parse"],),
+        )
+        [artifact] = cur.fetchone()[0]
+    assert artifact["type"] == "_WireArtifact"
+    assert (tmp_path / artifact["path"]).is_file()
+
+    sink, _ = _ctx(
+        pg,
+        run_id=run_id,
+        task_id=tasks["sink"],
+        node="sink",
+        module="store.upsert",
+        config={"store": "items"},
+    )
+    result = store_upsert(sink)
+    assert result.exhausted and result.stats["stored"] == 1
+    with pg.cursor() as cur:
+        cur.execute(
+            "SELECT attrs->>'text' FROM source_units "
+            "WHERE source = 'demo' AND store = 'items' AND unit_key = 'large'")
+        assert cur.fetchone() == ("x" * 1_000,)
+
+
+def test_push_full_set_stages_and_empty_push_tombstones(
+        pg, tmp_path, monkeypatch):
+    from windex.worker import dag
+
+    monkeypatch.setenv("WINDEX_DATA_ROOT", str(tmp_path))
+    spec = {"corpus": {"source": "memory", "id_prefix": "memory:"}}
+
+    def run_push(dedupe: str, chunks: list[dict]):
+        run_id = dag.submit_run(
+            pg,
+            recipe="memory",
+            source="memory",
+            spec=spec,
+            dedupe_key=dedupe,
+            params={
+                "conversation_id": "chat-1",
+                "title": "A chat",
+                "chunks": chunks,
+            },
+            tasks=[
+                {"node": "push", "module": "push.docs", "kind": "receive"},
+                {"node": "stage", "module": "ledger.stage", "kind": "load",
+                 "depends_on": ["push"]},
+            ],
+        )
+        assert run_id is not None
+        with pg.cursor() as cur:
+            cur.execute(
+                "SELECT node, id FROM run_tasks WHERE run_id = %s", (run_id,))
+            tasks = dict(cur.fetchall())
+        receive, _ = _ctx(
+            pg,
+            run_id=run_id,
+            task_id=tasks["push"],
+            recipe="memory",
+            source="memory",
+            module="push.docs",
+            config={"mode": "full_set", "max_docs": 500,
+                    "max_text_chars": 16_000},
+            spec=spec,
+            params={
+                "conversation_id": "chat-1",
+                "title": "A chat",
+                "chunks": chunks,
+            },
+        )
+        assert push_docs(receive).exhausted
+        stage, _ = _ctx(
+            pg,
+            run_id=run_id,
+            task_id=tasks["stage"],
+            recipe="memory",
+            source="memory",
+            node="stage",
+            module="ledger.stage",
+            config={"replace": True, "replace_scope": "partition",
+                    "replace_guard": "census"},
+            spec=spec,
+        )
+        assert ledger_stage(stage).exhausted
+
+    run_push("memory-filled", [{"index": 0, "text": "remember this"}])
+    with pg.cursor() as cur:
+        cur.execute(
+            "SELECT status, text_ref FROM documents WHERE id = 'memory:chat-1/00000'")
+        status, text_ref = cur.fetchone()
+    assert status == "deduped"
+    assert (tmp_path / "staging" / text_ref).is_file()
+
+    run_push("memory-empty", [])
+    with pg.cursor() as cur:
+        cur.execute(
+            "SELECT status FROM documents WHERE id = 'memory:chat-1/00000'")
+        assert cur.fetchone() == ("deleted",)
+
+
+def test_exact_transform_and_loader_preserve_duplicate_ledger_row(
+        pg, tmp_path, monkeypatch):
+    from windex.worker import dag
+
+    monkeypatch.setenv("WINDEX_DATA_ROOT", str(tmp_path))
+    spec = {"corpus": {"source": "hn", "id_prefix": "hn:"}}
+    run_id = dag.submit_run(
+        pg,
+        recipe="hn",
+        source="hn",
+        spec=spec,
+        dedupe_key="exact-load",
+        tasks=[
+            {"node": "extract", "module": "test.extract", "kind": "extract"},
+            {"node": "exact", "module": "dedup.exact", "kind": "transform",
+             "depends_on": ["extract"]},
+            {"node": "stage", "module": "ledger.stage", "kind": "load",
+             "depends_on": ["exact"]},
+        ],
+    )
+    assert run_id is not None
+    with pg.cursor() as cur:
+        cur.execute("SELECT node, id FROM run_tasks WHERE run_id = %s", (run_id,))
+        tasks = dict(cur.fetchall())
+        docs = [
+            ExtractedDoc(
+                ref=PartitionRef(store="window", key="one"),
+                suffix=str(index),
+                url=f"https://news.ycombinator.com/item?id={index}",
+                title="Same",
+                text="same body",
+                fields={"story_text": "same body"},
+            )
+            for index in (1, 2)
+        ]
+        cur.execute(
+            """
+            INSERT INTO task_units
+                   (run_id, task_id, unit_key, state, outputs, finished_at)
+            VALUES (%s, %s, 'window', 'done', %s, now())
+            """,
+            (run_id, tasks["extract"], Jsonb(wire.encode_many(docs))),
+        )
+    pg.commit()
+    exact, _ = _ctx(
+        pg,
+        run_id=run_id,
+        task_id=tasks["exact"],
+        recipe="hn",
+        source="hn",
+        node="exact",
+        module="dedup.exact",
+        config={"scope": "batch"},
+        spec=spec,
+    )
+    assert dedup_exact(exact).exhausted
+    stage, _ = _ctx(
+        pg,
+        run_id=run_id,
+        task_id=tasks["stage"],
+        recipe="hn",
+        source="hn",
+        node="stage",
+        module="ledger.stage",
+        config={"replace": False},
+        spec=spec,
+    )
+    assert ledger_stage(stage).exhausted
+    with pg.cursor() as cur:
+        cur.execute(
+            "SELECT id, status, duplicate_of, text_ref "
+            "FROM documents ORDER BY id")
+        rows = cur.fetchall()
+    assert rows[0][0:3] == ("hn:1", "deduped", None)
+    assert rows[1][0:3] == ("hn:2", "duplicate", "hn:1")
+    assert rows[0][3] and rows[1][3] is None
+
+
+def test_store_repos_writes_wide_table_and_advances_parent(pg):
+    from windex.worker import dag
+
+    _seed(pg, source="gh", store="gh_hours", key="2026-01-01-0.json.gz",
+          upstream={"key": "2026-01-01-0.json.gz"})
+    run_id = dag.submit_run(
+        pg,
+        recipe="gh",
+        source="github",
+        spec={},
+        dedupe_key="repo-store",
+        tasks=[
+            {"node": "watch", "module": "github.watch_events", "kind": "catalog"},
+            {"node": "repos", "module": "store.repos", "kind": "collect",
+             "depends_on": ["watch"]},
+        ],
+    )
+    assert run_id is not None
+    with pg.cursor() as cur:
+        cur.execute("SELECT node, id FROM run_tasks WHERE run_id = %s", (run_id,))
+        tasks = dict(cur.fetchall())
+        record = PartitionRecord(
+            store="repos",
+            key="42",
+            ref=PartitionRef(
+                store="gh_hours", key="2026-01-01-0.json.gz"),
+            stage="candidate",
+            payload={"repo_id": 42, "full_name": "openai/example"},
+            delta={"star_events": 3},
+        )
+        cur.execute(
+            """
+            INSERT INTO task_units
+                   (run_id, task_id, unit_key, state, outputs, finished_at)
+            VALUES (%s, %s, 'hour', 'done', %s, now())
+            """,
+            (run_id, tasks["watch"], Jsonb(wire.encode_many([record]))),
+        )
+    pg.commit()
+    sink, _ = _ctx(
+        pg,
+        run_id=run_id,
+        task_id=tasks["repos"],
+        recipe="gh",
+        source="github",
+        node="repos",
+        module="store.repos",
+        config={"store": "repos"},
+    )
+    assert store_repos(sink).stats["stored"] == 1
+    with pg.cursor() as cur:
+        cur.execute(
+            "SELECT full_name, star_events FROM repos WHERE repo_id = 42")
+        assert cur.fetchone() == ("openai/example", 3)
+        cur.execute(
+            "SELECT ingested FROM source_units "
+            "WHERE source = 'gh' AND store = 'gh_hours'")
+        assert cur.fetchone()[0] == {"key": "2026-01-01-0.json.gz"}
 
 
 def test_common_stream_rejects_wrong_port_type(pg):

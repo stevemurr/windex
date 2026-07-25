@@ -21,9 +21,14 @@ flows:
       once:  {kind: discover, uses: static.once, with: {key: sitemap}}
       site:  {kind: fetch, uses: http.get,
               with: {host_interval: "@config.request_interval"}}
-      urls:  {kind: catalog, uses: list.sitemap, with: {}}
-      rec:   {kind: collect, uses: store.upsert, with: {store: root}}
-    edges: [[once, site], [site, urls], [urls, rec]]
+      roots: {kind: catalog, uses: list.sitemap,
+              with: {shard_allow: "sitemap-doc.xml"}}
+      posts: {kind: catalog, uses: list.sitemap,
+              with: {shard_allow: "sitemap-blog.xml"}}
+      rec_roots: {kind: collect, uses: store.upsert, with: {store: root}}
+      rec_posts: {kind: collect, uses: store.upsert, with: {store: post}}
+    edges: [[once, site], [site, roots], [site, posts],
+            [roots, rec_roots], [posts, rec_posts]]
   crawl:
     nodes:
       # Two discover branches, two fetches, two extracts — converging on ONE load.

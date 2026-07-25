@@ -75,6 +75,7 @@ def encode(value: WireValue) -> dict[str, Any]:
             "type": "PartitionRecord",
             "store": value.store,
             "key": value.key,
+            "ref": _ref(value.ref) if value.ref is not None else None,
             "upstream": value.upstream,
             "stage": value.stage,
             "payload": value.payload,
@@ -131,6 +132,10 @@ def decode(raw: Any) -> WireValue:
         return PartitionRecord(
             store=str(raw.get("store", "")),
             key=str(raw.get("key", "")),
+            ref=(
+                _load_ref(raw.get("ref"))
+                if raw.get("ref") is not None else None
+            ),
             upstream=dict(raw.get("upstream") or {}),
             stage=raw.get("stage"),
             payload=dict(raw.get("payload") or {}),

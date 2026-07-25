@@ -68,16 +68,32 @@ def submit(conn: psycopg.Connection, *, recipe: str, settings: Settings,
         raise ValueError(f"recipe {recipe!r} is disabled")
 
     persisted = store.get_recipe_config(conn, recipe)
-    merged = {**persisted, **dict(params or {})}
+    supplied = dict(params or {})
+    config_keys = {
+        str(field.get("key"))
+        for field in got["spec"].get("config", [])
+        if isinstance(field, dict) and field.get("key")
+    }
+    input_keys = {
+        "input", "documents", "partition", "conversation_id", "title", "chunks",
+    }
+    unknown = set(supplied) - config_keys - input_keys
+    if unknown:
+        raise ValueError(
+            f"unknown recipe config field(s): {', '.join(sorted(unknown))}")
+    config_values = {
+        **persisted,
+        **{key: value for key, value in supplied.items() if key in config_keys},
+    }
     tasks = recipe_compile.compile_tasks(
-        got["spec"], flow=flow, settings=settings, values=merged)
+        got["spec"], flow=flow, settings=settings, values=config_values)
     if not tasks:
         raise ValueError(f"recipe {recipe!r} flow has no tasks")
     unavailable = recipe_compile.unavailable_modules(tasks)
     if unavailable:
         raise ModulesUnavailable(unavailable)
 
-    run_params = dict(merged)
+    run_params = {**config_values, **supplied}
     if flow:
         run_params["flow"] = flow
     return dag.submit_run(

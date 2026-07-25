@@ -116,20 +116,16 @@ def _install_probe_runners(monkeypatch):
         monkeypatch.setitem(runners.RUNNERS, module, done)
 
 
-def test_submit_refuses_a_valid_but_unimplemented_graph(pg, settings):
+def test_submit_accepts_a_fully_implemented_graph(pg, settings):
     store.create_recipe(pg, DOC, settings)
-    try:
-        run_store.submit(
-            pg,
-            recipe="probe",
-            settings=settings,
-            params={"seeds": ["https://example.com/docs/"]},
-        )
-    except run_store.ModulesUnavailable as exc:
-        assert exc.modules == [
-            "crawl.frontier", "html.trafilatura", "http.get", "ledger.stage"]
-    else:
-        raise AssertionError("unimplemented graph was queued")
+    run_id = run_store.submit(
+        pg,
+        recipe="probe",
+        settings=settings,
+        params={"seeds": ["https://example.com/docs/"]},
+    )
+    assert run_id is not None
+    assert run_store.get_run(pg, run_id)["state"] == "queued"
 
 
 def test_submit_freezes_values_dedupes_and_cancels(
@@ -236,9 +232,8 @@ def test_admin_tasks_expose_execution_availability(pg, settings, monkeypatch):
     placement = client.get(
         "/admin/v1/recipes/probe/tasks", headers=auth)
     assert placement.status_code == 200
-    assert placement.json()["executable"] is False
-    assert placement.json()["unavailable_modules"] == [
-        "crawl.frontier", "html.trafilatura", "http.get", "ledger.stage"]
+    assert placement.json()["executable"] is True
+    assert placement.json()["unavailable_modules"] == []
 
     queued = client.post(
         "/admin/v1/runs",
@@ -248,6 +243,5 @@ def test_admin_tasks_expose_execution_availability(pg, settings, monkeypatch):
         },
         headers=auth,
     )
-    assert queued.status_code == 409
-    assert queued.json()["detail"]["unavailable_modules"] == [
-        "crawl.frontier", "html.trafilatura", "http.get", "ledger.stage"]
+    assert queued.status_code == 202
+    assert queued.json()["queued"] is True

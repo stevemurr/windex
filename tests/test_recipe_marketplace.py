@@ -13,8 +13,8 @@ def test_bundled_catalog_lists_and_installs_with_config(pg, settings):
     entries = marketplace.list_entries(pg, settings)
     docs = next(entry for entry in entries if entry["id"] == "windex:web_docs")
     assert docs["installed"] is False
-    assert docs["executable"] is False
-    assert "http.get" in docs["unavailable_modules"]
+    assert docs["executable"] is True
+    assert docs["unavailable_modules"] == []
 
     installed = marketplace.install(
         pg,
