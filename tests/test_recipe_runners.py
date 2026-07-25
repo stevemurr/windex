@@ -180,7 +180,13 @@ def test_hf_anchor_replay_fetches_only_banked_pages(pg, monkeypatch):
             key="docs/transformers",
             id_scope="hf:docs/transformers/",
         ),
-        payload={"kind": "docs", "license": "Apache-2.0"},
+        # The catalog stores the public landing URL. The fetcher must use the
+        # root's llms.txt instead, then use child URLs for selected pages.
+        payload={
+            "url": "https://huggingface.co/docs/transformers",
+            "kind": "docs",
+            "license": "Apache-2.0",
+        },
     )
 
     pages = _hf_root_pages(
@@ -192,6 +198,7 @@ def test_hf_anchor_replay_fetches_only_banked_pages(pg, monkeypatch):
     )
 
     assert len(pages) == 1
+    assert requested[0] == "/docs/transformers/llms.txt"
     assert pages[0].meta["payload"]["path"] == "quicktour"
     assert pages[0].ref.id_scope == "hf:docs/transformers/quicktour"
     assert not any("pipelines" in path for path in requested)
