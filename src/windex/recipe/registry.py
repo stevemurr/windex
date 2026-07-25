@@ -217,6 +217,10 @@ _FETCH = (
                section="politeness"),
             _p("request_timeout", "float", lo=1, hi=300, default=15, unit="s",
                section="politeness"),
+            _p("retries", "int", lo=0, hi=10, default=3,
+               help="Retry 429 and transient server errors inside the task so "
+                    "a published reset window does not consume its run retry budget.",
+               section="politeness"),
             _p("max_bytes", "int", lo=1024, hi=4_000_000, default=4_000_000,
                ceiling="crawl_max_page_bytes", unit="bytes", section="limits"),
             _p("allowed_types", "csv",

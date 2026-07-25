@@ -5,12 +5,14 @@ from __future__ import annotations
 import gzip
 import json
 
+import httpx
 from psycopg.types.json import Jsonb
 
+from windex.modules import fetch as fetch_module
 from windex.modules.catalog import list_json_manifest, list_lines, list_path_manifest_gz
 from windex.modules.collect import store_repos, store_upsert
 from windex.modules.discover import state_pending, static_once
-from windex.modules.fetch import _hf_sync_blob
+from windex.modules.fetch import _hf_sync_blob, _page, _page_limiter
 from windex.modules.load import ledger_stage
 from windex.modules.receive import push_docs
 from windex.modules.transform import dedup_exact
@@ -72,6 +74,74 @@ def _seed(pg, *, source="demo", store="items", key, upstream=None, ingested=None
              processed_at, Jsonb(attrs or {})),
         )
     pg.commit()
+
+
+def test_recipe_http_get_uses_response_aware_limiter_for_hf():
+    from windex.hf.fetch import PagesRateLimiter
+    from windex.smallweb.poll import HostRateLimiter
+
+    assert isinstance(_page_limiter("hf", 3), PagesRateLimiter)
+    assert type(_page_limiter("docs", 3)) is HostRateLimiter
+
+
+def test_recipe_page_retries_429_inside_task_budget(pg, monkeypatch):
+    """A published pages-bucket reset is not a task failure.
+
+    The task retry budget is for failed work, not the host asking us to wait.
+    Keeping this retry inside the fetch also preserves the already committed
+    edge units when a long crawl reaches the shared-IP bucket boundary.
+    """
+    responses = iter([
+        httpx.Response(
+            429,
+            headers={"ratelimit": '"pages";r=0;t=6'},
+        ),
+        httpx.Response(
+            200,
+            text="ok",
+            headers={"content-type": "text/plain"},
+        ),
+    ])
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: next(responses)))
+
+    class Limiter:
+        interval = 3.0
+
+        def __init__(self):
+            self.seen = []
+            self.waits = 0
+
+        def wait(self, host):
+            self.waits += 1
+
+        def observe(self, response):
+            self.seen.append(response.status_code)
+            if response.status_code == 429:
+                self.interval = 7.0
+
+    limiter = Limiter()
+    sleeps = []
+    monkeypatch.setattr(fetch_module, "check_url", lambda url: None)
+    monkeypatch.setattr(fetch_module.time, "sleep", sleeps.append)
+    ctx, _ = _ctx(
+        pg,
+        task_id=7100,
+        source="hf",
+        module="http.get",
+        config={"robots": False, "retries": 1},
+    )
+    unit = WorkUnit(
+        ref=PartitionRef(store="post", key="example"),
+        payload={"url": "https://example.test/post"},
+    )
+
+    page = _page(ctx, unit, client, object(), limiter)
+
+    assert page.body == b"ok"
+    assert limiter.seen == [429, 200]
+    assert limiter.waits == 2
+    assert sleeps == [7.0]
 
 
 def test_static_once_is_durable_and_idempotent(pg):

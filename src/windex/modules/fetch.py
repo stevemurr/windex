@@ -14,7 +14,8 @@ import os
 import re
 import time
 from collections import deque
-from datetime import date, timedelta
+from datetime import date, datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from types import SimpleNamespace
@@ -260,7 +261,10 @@ def _page(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
         if modified:
             headers["If-Modified-Since"] = str(modified)
 
-    for _ in range(6):
+    redirects = 0
+    retries = int(ctx.config.get("retries", 3))
+    transient_attempt = 0
+    while redirects < 6:
         check_url(current)
         if bool(ctx.config.get("robots", True)) and not robots.allowed(current):
             return RawBlob(
@@ -271,11 +275,19 @@ def _page(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
             )
         limiter.wait((urlsplit(current).hostname or "").lower())
         with client.stream("GET", current, headers=headers) as response:
+            observe = getattr(limiter, "observe", None)
+            if observe is not None:
+                # The HF pages bucket is shared by every process on this IP.
+                # Its response header is the only honest view of the remaining
+                # budget, and a 429 is the response where observing it matters
+                # most. Do this before raise_for_status().
+                observe(response)
             if response.status_code in _REDIRECTS:
                 location = response.headers.get("location")
                 if not location:
                     break
                 current = str(httpx.URL(current).join(location))
+                redirects += 1
                 continue
             if response.status_code == 304:
                 return RawBlob(
@@ -284,6 +296,19 @@ def _page(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
                           "payload": unit.payload, "upstream": unit.upstream},
                     epoch=unit.epoch,
                 )
+            if response.status_code == 429 or response.status_code >= 500:
+                if transient_attempt >= retries:
+                    response.raise_for_status()
+                transient_attempt += 1
+                delay = min(2 ** (transient_attempt - 1), 30)
+                if response.status_code == 429:
+                    delay = max(
+                        delay,
+                        _retry_after_seconds(response),
+                        float(getattr(limiter, "interval", 0)),
+                    )
+                time.sleep(delay)
+                continue
             response.raise_for_status()
             media = response.headers.get("content-type", "").lower()
             if accepted and not any(kind in media for kind in accepted):
@@ -326,6 +351,31 @@ def _page(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
                 epoch=unit.epoch,
             )
     raise RuntimeError(f"too many redirects fetching {url}")
+
+
+def _retry_after_seconds(response: httpx.Response) -> float:
+    """Retry-After as seconds, accepting both legal wire formats."""
+    raw = response.headers.get("retry-after")
+    if not raw:
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        try:
+            when = parsedate_to_datetime(raw)
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+
+
+def _page_limiter(source: str, interval: float) -> HostRateLimiter:
+    if source == "hf":
+        from windex.hf.fetch import PagesRateLimiter
+
+        return PagesRateLimiter(interval)
+    return HostRateLimiter(interval)
 
 
 def _node_config(ctx: TaskContext, module: str) -> dict:
@@ -598,7 +648,7 @@ def http_get(ctx: TaskContext) -> SliceResult:
             getattr(settings, "crawl_robots_ttl", 86_400),
             user_agent=_USER_AGENT,
         )
-        limiter = HostRateLimiter(interval)
+        limiter = _page_limiter(ctx.source, interval)
         if ctx.source == "crawl" and batches:
             outputs, visited = _crawl_pages(ctx, batches, client, robots, limiter)
             finish_batch(ctx, batches[0], outputs=outputs)
