@@ -173,6 +173,7 @@ def test_hf_anchor_replay_fetches_only_banked_pages(pg, monkeypatch):
         module="http.get",
         config={"robots": False},
         params={"anchor_ids": ["hf:docs/transformers/quicktour"]},
+        should_yield=lambda: True,
     )
     unit = WorkUnit(
         ref=PartitionRef(
@@ -1004,6 +1005,7 @@ def test_hf_sync_filters_roots_before_probing_llms(pg, monkeypatch):
         module="http.get",
         config={},
         params={"roots": "docs/keep"},
+        should_yield=lambda: True,
     )
     unit = WorkUnit(
         ref=PartitionRef(store="", key="sitemap"),

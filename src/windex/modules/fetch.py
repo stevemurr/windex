@@ -523,10 +523,10 @@ def _hf_sync_blob(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
                     "license": license_for(root),
                 })
             entries.append(entry)
-            if ctx.should_yield():
-                raise RuntimeError(
-                    "HF sitemap refresh reached a slice boundary; "
-                    "retrying its atomic census")
+            # The sitemap plus every llms.txt hash is one destructive-census
+            # guard. It must finish atomically even when HF's polite pacing
+            # exceeds the worker's ordinary slice deadline; the heartbeat
+            # thread continues renewing the lease while this loop runs.
     return RawBlob(
         ref=unit.ref,
         uri=index.uri,
@@ -593,9 +593,9 @@ def _hf_root_pages(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
         blob = _page(ctx, page_unit, client, robots, limiter)
         if blob.body:
             outputs.append(blob)
-        if ctx.should_yield():
-            raise RuntimeError(
-                "HF root crawl reached a slice boundary; retrying its atomic root")
+        # A root is the replace boundary. Returning a partial list would make a
+        # truncated fetch look like a complete census and tombstone valid pages,
+        # so this atomic unit is allowed to outlive an ordinary worker slice.
     return outputs
 
 
