@@ -198,6 +198,11 @@ def list_sitemap(ctx: TaskContext) -> SliceResult:
         for value in str(ctx.config.get("shard_allow", "")).split(",")
         if value.strip()
     }
+    wanted_roots = {
+        value.strip().strip("/")
+        for value in str(ctx.params.get("roots") or "").split(",")
+        if value.strip()
+    }
 
     def parse(blob: RawBlob, store: str) -> list[PartitionRecord]:
         body = blob_bytes(blob)
@@ -226,6 +231,8 @@ def list_sitemap(ctx: TaskContext) -> SliceResult:
                     }
                 else:
                     key = root_key(url)
+                    if wanted_roots and key not in wanted_roots:
+                        continue
                     target_store = "root"
                     llms_hash = entry.get("llms_hash")
                     upstream = {"llms_hash": llms_hash}

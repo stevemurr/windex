@@ -10,6 +10,7 @@ from psycopg.types.json import Jsonb
 from windex.modules.catalog import list_json_manifest, list_lines, list_path_manifest_gz
 from windex.modules.collect import store_repos, store_upsert
 from windex.modules.discover import state_pending, static_once
+from windex.modules.fetch import _hf_sync_blob
 from windex.modules.load import ledger_stage
 from windex.modules.receive import push_docs
 from windex.modules.transform import dedup_exact
@@ -684,3 +685,53 @@ def test_line_and_gzip_catalogs_filter_inputs(pg):
             b"crawl-data/CC-NEWS/2026/07/CC-NEWS-123.warc.gz\nnot-a-warc\n"),
     )
     assert list_path_manifest_gz(paths).stats["records"] == 1
+
+
+def test_hf_sync_filters_roots_before_probing_llms(pg, monkeypatch):
+    sitemap_index = b"""\
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>https://huggingface.co/sitemap-doc.xml</loc></sitemap>
+</sitemapindex>"""
+    sitemap_docs = b"""\
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://huggingface.co/docs/keep</loc></url>
+  <url><loc>https://huggingface.co/docs/drop</loc></url>
+</urlset>"""
+    requested = []
+
+    def page(_ctx, unit, _client, _robots, _limiter):
+        url = str(unit.payload.get("url") or "https://huggingface.co/sitemap.xml")
+        requested.append(url)
+        if url.endswith("sitemap.xml"):
+            body = sitemap_index
+        elif url.endswith("sitemap-doc.xml"):
+            body = sitemap_docs
+        elif url.endswith("docs/keep/llms.txt"):
+            body = b"- [Index](https://huggingface.co/docs/keep/en/index)"
+        else:
+            raise AssertionError(f"unexpected fetch: {url}")
+        return RawBlob(ref=unit.ref, uri=url, body=body, epoch=unit.epoch)
+
+    monkeypatch.setattr("windex.modules.fetch._page", page)
+    ctx, _ = _ctx(
+        pg,
+        task_id=7199,
+        recipe="hf",
+        source="hf",
+        module="http.get",
+        config={},
+        params={"roots": "docs/keep"},
+    )
+    unit = WorkUnit(
+        ref=PartitionRef(store="", key="sitemap"),
+        epoch=ctx.run_id,
+    )
+
+    blob = _hf_sync_blob(ctx, unit, object(), object(), object())
+    envelope = json.loads(blob.body)
+
+    assert [entry["url"] for entry in envelope["sitemaps"]] == [
+        "https://huggingface.co/docs/keep",
+    ]
+    assert "https://huggingface.co/docs/keep/llms.txt" in requested
+    assert "https://huggingface.co/docs/drop/llms.txt" not in requested

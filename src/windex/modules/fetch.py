@@ -424,6 +424,11 @@ def _hf_sync_blob(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
             index.body.decode("utf-8", errors="replace"))
     except Exception as exc:
         raise RuntimeError(f"invalid Hugging Face sitemap index: {exc}") from exc
+    wanted_roots = {
+        value.strip().strip("/")
+        for value in str(ctx.params.get("roots") or "").split(",")
+        if value.strip()
+    }
     entries = []
     for shard_url in shards:
         shard_name = shard_url.rsplit("/", 1)[-1]
@@ -442,6 +447,8 @@ def _hf_sync_blob(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
             entry = {"shard": shard_name, "url": url, "lastmod": lastmod}
             if shard_name == "sitemap-doc.xml":
                 root = root_key(url)
+                if wanted_roots and root not in wanted_roots:
+                    continue
                 llms_unit = WorkUnit(
                     ref=unit.ref,
                     payload={"url": f"https://huggingface.co/{root}/llms.txt"},
