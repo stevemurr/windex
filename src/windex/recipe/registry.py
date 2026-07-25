@@ -335,7 +335,10 @@ _CATALOG = (
     _simple("list.path_manifest_gz", "catalog", "gzipped path manifest",
             "Newline-delimited paths inside a .gz.", "ccnews/sync.py:32",
             fields=(_p("key_pattern", "regex_list", max_items=4, max_len=500),
-                    _p("min_age_days", "int", lo=0, hi=3650, default=0),)),
+                    _p("min_age_days", "int", lo=0, hi=3650, default=0),
+                    _p("max_age_days", "int", lo=0, hi=3650, default=0,
+                       help="Exclude dated paths older than this rolling window; "
+                            "zero keeps the lower bound open."),)),
     _simple("list.llms_txt", "catalog", "llms.txt", "Link list from an llms.txt.",
             "hf/sync.py:120"),
     _simple("github.watch_events", "catalog", "GH Archive watch events",

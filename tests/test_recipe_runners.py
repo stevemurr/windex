@@ -757,6 +757,33 @@ def test_line_and_gzip_catalogs_filter_inputs(pg):
     assert list_path_manifest_gz(paths).stats["records"] == 1
 
 
+def test_path_manifest_honors_rolling_backfill_window(pg):
+    today = fetch_module.date.today()
+    recent = today - fetch_module.timedelta(days=30)
+    old = today - fetch_module.timedelta(days=120)
+    manifest = "\n".join([
+        "crawl-data/CC-NEWS/"
+        f"{recent:%Y/%m}/CC-NEWS-{recent:%Y%m%d}120000-00000.warc.gz",
+        "crawl-data/CC-NEWS/"
+        f"{old:%Y/%m}/CC-NEWS-{old:%Y%m%d}120000-00000.warc.gz",
+    ]).encode()
+    paths, _ = _catalog_graph(
+        pg,
+        suffix="rolling-paths",
+        module="list.path_manifest_gz",
+        config={
+            "key_pattern": [r"CC-NEWS-\d+-\d+\.warc\.gz$"],
+            "max_age_days": 90,
+        },
+        body=gzip.compress(manifest),
+    )
+
+    assert list_path_manifest_gz(paths).stats["records"] == 1
+    [(_, records)] = _outputs(pg, paths.task_id)
+    assert records[0].key.endswith(
+        f"CC-NEWS-{recent:%Y%m%d}120000-00000.warc.gz")
+
+
 def test_hf_sync_filters_roots_before_probing_llms(pg, monkeypatch):
     sitemap_index = b"""\
 <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">

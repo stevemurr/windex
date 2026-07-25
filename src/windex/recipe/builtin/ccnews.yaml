@@ -26,7 +26,8 @@ flows:
                 with: {url_template: "https://data.commoncrawl.org/crawl-data/CC-NEWS/warc.paths.gz",
                        allowed_hosts: "data.commoncrawl.org", missing_ok: true}}
       paths:   {kind: catalog, uses: list.path_manifest_gz,
-                with: {key_pattern: ['^crawl-data/CC-NEWS/\d{4}/\d{2}/CC-NEWS-\d+-\d+\.warc\.gz$']}}
+                with: {key_pattern: ['^crawl-data/CC-NEWS/\d{4}/\d{2}/CC-NEWS-\d+-\d+\.warc\.gz$'],
+                       max_age_days: "@config.backfill_days"}}
       record:  {kind: collect, uses: store.upsert, with: {store: warc, on_conflict: skip}}
     edges: [[once, listing], [listing, paths], [paths, record]]
   ingest:

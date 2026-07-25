@@ -158,7 +158,9 @@ def list_json_manifest(ctx: TaskContext) -> SliceResult:
 def list_path_manifest_gz(ctx: TaskContext) -> SliceResult:
     patterns = _patterns(ctx.config.get("key_pattern", []))
     min_age = int(ctx.config.get("min_age_days", 0))
-    cutoff = date.today() - timedelta(days=min_age)
+    max_age = int(ctx.config.get("max_age_days", 0))
+    newest = date.today() - timedelta(days=min_age)
+    oldest = date.today() - timedelta(days=max_age) if max_age else None
 
     def parse(blob: RawBlob, store: str) -> list[PartitionRecord]:
         data = blob_bytes(blob)
@@ -174,7 +176,7 @@ def list_path_manifest_gz(ctx: TaskContext) -> SliceResult:
                 continue
             if patterns and not any(pattern.search(key) for pattern in patterns):
                 continue
-            if min_age:
+            if min_age or max_age:
                 match = re.search(r"(20\d{2})(?:/)?([01]\d)(?:/)?([0-3]\d)", key)
                 if match is None:
                     continue
@@ -182,7 +184,9 @@ def list_path_manifest_gz(ctx: TaskContext) -> SliceResult:
                     published = date(*(int(part) for part in match.groups()))
                 except ValueError:
                     continue
-                if published > cutoff:
+                if min_age and published > newest:
+                    continue
+                if oldest is not None and published < oldest:
                     continue
             seen.add(key)
             records.append(PartitionRecord(store=store, key=key))
