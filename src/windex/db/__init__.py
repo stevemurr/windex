@@ -139,6 +139,22 @@ def init_db(conn: psycopg.Connection) -> None:
         cur.execute(schema)
     conn.commit()
     _seed_schedule(conn)
+    _seed_recipes(conn)
+
+
+def _seed_recipes(conn) -> None:
+    """Register the shipped recipes. Idempotent; leaves locally-edited ones alone.
+
+    Runs on every init-db so a deploy that adds a source makes it appear, and so a
+    fresh box has all eleven registered before anything is ingested.
+    """
+    try:
+        from windex.config import get_settings
+        from windex.recipe import store as recipe_store
+
+        recipe_store.seed_builtins(conn, get_settings())
+    except Exception as exc:  # noqa: BLE001 — never let this block schema init
+        console.print(f"[yellow]recipe seed skipped: {exc}[/yellow]")
 
 
 def _seed_schedule(conn: psycopg.Connection) -> None:

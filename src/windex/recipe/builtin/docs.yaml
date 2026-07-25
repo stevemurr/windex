@@ -1,0 +1,58 @@
+schema: windex.recipe/1
+name: docs
+version: 1
+title: Programming documentation
+description: >
+  DevDocs bundles — Python, Rust, React and friends. Each docset is one partition,
+  refreshed when its upstream mtime moves past what was last ingested.
+provenance:
+  builtin: true
+  upstream: https://devdocs.io
+  license: per-docset; attribution is carried on every document
+corpus: {source: docs, id_prefix: "docs:", collection: docs}
+
+config:
+  - key: slugs
+    kind: csv
+    stage: install
+    label: Docsets
+    help: >
+      Which DevDocs slugs to track, e.g. python~3.14. Empty means every docset in
+      the manifest, which is 819 of them.
+
+state:
+  docset:
+    key: docset slug
+    order: key
+
+flows:
+  # Poll the manifest and record what exists upstream. Writes no documents.
+  sync:
+    nodes:
+      once:     {kind: discover, uses: static.once, with: {key: manifest}}
+      manifest: {kind: fetch, uses: http.download,
+                 with: {url_template: "https://devdocs.io/docs.json",
+                        allowed_hosts: "devdocs.io", keep: false}}
+      entries:  {kind: catalog, uses: list.json_manifest,
+                 with: {key_field: slug, upstream_field: mtime}}
+      record:   {kind: collect, uses: store.upsert,
+                 with: {store: docset, on_conflict: merge}}
+    edges: [[once, manifest], [entries, record], [manifest, entries]]
+
+  # Ingest the docsets whose mtime advanced.
+  ingest:
+    nodes:
+      pending: {kind: discover, uses: state.pending,
+                with: {store: docset, predicate: token_moved, order: key, batch: 4}}
+      bundle:  {kind: fetch, uses: http.download,
+                with: {url_template: "https://documents.devdocs.io/{key}/db.json",
+                       allowed_hosts: "documents.devdocs.io", keep: false}}
+      pages:   {kind: extract, uses: html.devdocs_page, with: {}}
+      stage:   {kind: load, uses: ledger.stage,
+                # Per-docset full replace: a new release renames and removes pages,
+                # and partition scope is what stops one docset's refresh touching
+                # another's documents.
+                with: {replace: true, replace_scope: partition, replace_guard: census}}
+    edges: [[pending, bundle], [bundle, pages], [pages, stage]]
+
+refresh: [sync, ingest]

@@ -1,0 +1,22 @@
+schema: windex.recipe/1
+name: memory
+version: 1
+title: Chat memory
+description: >
+  Conversations pushed over HTTP, not fetched. FULL-REPLACE per conversation: a
+  push carries the whole chunk set and absent ids are tombstoned, which is what
+  makes an edited conversation converge instead of accumulating orphans.
+provenance: {builtin: true, upstream: "local push API"}
+corpus: {source: memory, id_prefix: "memory:", collection: memory}
+config:
+  - {key: max_chunks, kind: int, lo: 1, hi: 10000, default: 500, label: Chunks per push}
+state: {}
+flows:
+  receive:
+    nodes:
+      push:  {kind: receive, uses: push.docs,
+              with: {mode: full_set, max_docs: "@config.max_chunks"}}
+      stage: {kind: load, uses: ledger.stage,
+              with: {replace: true, replace_scope: partition}}
+    edges: [[push, stage]]
+refresh: []

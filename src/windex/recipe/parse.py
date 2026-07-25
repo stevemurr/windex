@@ -232,6 +232,18 @@ def _parse_node(nid: str, raw, cfg_keys, settings, where: str) -> Node:
                                          f"{where}.with.{key}")
         elif param.required:
             raise ValueError(f"{where}: {uses} requires {key!r}")
+        elif param.default is not None:
+            # Materialize the module's default rather than leaving the key absent.
+            # The spec is FROZEN onto each run, so an omitted default would mean a
+            # past run silently changes behaviour when the module's default changes
+            # — which makes the freeze worthless. A complete spec is also what lets
+            # a runner read its config without consulting the registry.
+            #
+            # Assigned directly, NOT through coerce(): a module's own default is
+            # in-tree code, not caller input, so the security boundary does not
+            # apply to it — and coerce() rightly refuses a locked field, which
+            # would make a locked field unable to carry its own value.
+            config[key] = param.default
     return Node(id=nid, kind=kind, uses=uses, config=config)
 
 
@@ -327,8 +339,18 @@ def _parse_flow(name: str, raw, cfg_keys, settings, stores: set[str]) -> Flow:
                 edges=tuple(edges), order=order)
 
 
-def parse(body: dict, settings: Settings) -> Recipe:
-    """Validate + normalize a recipe document. Raises ValueError (-> 422)."""
+def parse(body: dict, settings: Settings, *, builtin: bool = False) -> Recipe:
+    """Validate + normalize a recipe document. Raises ValueError (-> 422).
+
+    `builtin` relaxes exactly one check: the reserved-name guard. That guard exists
+    so a user-created source cannot shadow a built-in corpus (`news`, `github`, …),
+    and the built-in recipes are precisely the things entitled to those names.
+
+    It is a PARAMETER, never a field in the document. A recipe that could declare
+    itself builtin could claim `news` and write into the news corpus, so the claim
+    has to come from the caller — in-tree loading passes True, and every path that
+    accepts a document from outside (the API, the marketplace) leaves it False.
+    """
     if not isinstance(body, dict):
         raise ValueError("recipe must be an object")
     schema = body.get("schema", SCHEMA)
@@ -339,7 +361,7 @@ def parse(body: dict, settings: Settings) -> Recipe:
     if not isinstance(name, str) or not _NAME_RE.match(name):
         raise ValueError("name must match ^[a-z][a-z0-9_]{1,31}$")
     from windex.custom_source.registry import RESERVED
-    if name in RESERVED:
+    if name in RESERVED and not builtin:
         raise ValueError(f"name {name!r} is reserved for a built-in source")
 
     corpus_raw = _obj(body, "corpus")
@@ -347,9 +369,18 @@ def parse(body: dict, settings: Settings) -> Recipe:
     prefix = corpus_raw.get("id_prefix") or f"{source}:"
     if not isinstance(source, str) or not _NAME_RE.match(source):
         raise ValueError("corpus.source must match ^[a-z][a-z0-9_]{1,31}$")
-    if not isinstance(prefix, str) or not prefix.startswith(source):
-        raise ValueError("corpus.id_prefix must begin with corpus.source, so a "
-                         "recipe cannot write ids into another source's namespace")
+    # The prefix must be namespaced to something THIS recipe owns — its own name or
+    # its corpus source. Both, because the two legitimately differ: the `gh` recipe
+    # feeds the `github` corpus and writes `gh:owner/repo` ids, and CLAUDE.md pins
+    # those ids as the public API, so they cannot be renamed to match. What this
+    # still forbids is the case that matters: a recipe claiming another source's
+    # prefix and thereby its power to overwrite and tombstone.
+    if not isinstance(prefix, str) or not (
+            prefix.startswith(source) or prefix.startswith(name)):
+        raise ValueError(
+            f"corpus.id_prefix {prefix!r} must begin with the recipe name "
+            f"({name!r}) or corpus.source ({source!r}), so a recipe cannot write "
+            f"ids into another source's namespace")
 
     config = _parse_config_schema(body.get("config"))
     cfg_keys = {f.key: f for f in config}
@@ -377,7 +408,12 @@ def parse(body: dict, settings: Settings) -> Recipe:
         raise ValueError("a recipe may have `receive` roots or `discover` roots, "
                          "not both — a source is push or pull")
 
-    refresh = tuple(body.get("refresh") or [f.name for f in flows])
+    # An ABSENT refresh means "every flow"; an explicitly empty one means "nothing
+    # to refresh", which is what a push source is. `or` collapses those two, and
+    # collapsing them gives memory and custom a pull cycle they cannot service.
+    raw_refresh = body.get("refresh")
+    refresh = tuple(raw_refresh if raw_refresh is not None
+                    else [f.name for f in flows])
     known = {f.name for f in flows}
     for r in refresh:
         if r not in known:
@@ -392,7 +428,7 @@ def parse(body: dict, settings: Settings) -> Recipe:
     )
 
 
-def validate(body: dict, settings: Settings) -> dict:
+def validate(body: dict, settings: Settings, *, builtin: bool = False) -> dict:
     """Parse and report, instead of raising. What `POST /recipes/validate` returns.
 
     Pure: no IO, no network, no database. That is what lets an editor call it on
@@ -400,7 +436,7 @@ def validate(body: dict, settings: Settings) -> dict:
     `dry-run`, which executes.
     """
     try:
-        recipe = parse(body, settings)
+        recipe = parse(body, settings, builtin=builtin)
     except ValueError as exc:
         return {"valid": False, "errors": [{"message": str(exc)}],
                 "warnings": [], "normalized": None, "graph": None}

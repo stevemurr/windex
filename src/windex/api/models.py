@@ -298,6 +298,45 @@ class Registry(_Loose):
     always_before_load: list[str] = []
 
 
+class Recipe(_Loose):
+    """One registered source. Built-ins and installed recipes are the same shape —
+    that collapse is the point of the whole project."""
+
+    name: str
+    source: str | None = None
+    kind: str | None = None
+    title: str | None = None
+    description: str | None = None
+    spec: dict[str, Any] | None = None
+    spec_hash: str | None = None
+    version: int | None = None
+    enabled: bool | None = None
+    builtin: bool | None = None
+    node_count: int | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    # Node ids and edges per flow, so an editor can lay out the graph without
+    # walking the whole spec.
+    flows: dict[str, Any] = {}
+    # Every name a client might need for this source, so none is hardcoded — the
+    # four scattered copies of {ccnews -> news} are what this replaces.
+    search_name: str | None = None
+    corpus_name: str | None = None
+    loop_name: str | None = None
+
+
+class RecipeList(_Loose):
+    recipes: list[Recipe] = []
+
+
+class RecipeTasks(_Loose):
+    """What a run would fan out to. Placement, without queueing anything."""
+
+    recipe: str
+    flow: str | None = None
+    tasks: list[dict[str, Any]] = []
+
+
 class Health(_Loose):
     status: str
     service: str | None = None

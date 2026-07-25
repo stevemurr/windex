@@ -282,6 +282,58 @@ def admin_recipe_validate(body: dict) -> dict:
     return recipe_parse.validate(body, get_settings())
 
 
+@admin.get("/v1/recipes", responses={200: {"model": m.RecipeList}})
+def admin_recipes(include_spec: bool = Query(False)) -> dict:
+    """Every registered source, built-in and installed alike.
+
+    They are the same kind of thing now — one table, one list, one editor. `spec` is
+    omitted by default because a sidebar wants names and status, not eleven full
+    DAGs.
+    """
+    from windex import db
+    from windex.recipe import store
+
+    with db.pooled(get_settings().pg_dsn) as conn:
+        return {"recipes": store.list_recipes(conn, include_spec=include_spec)}
+
+
+@admin.get("/v1/recipes/{name}", responses={200: {"model": m.Recipe}})
+def admin_recipe(name: str) -> dict:
+    """One recipe, with its graph. What the editor opens."""
+    from windex import db
+    from windex.recipe import store
+
+    with db.pooled(get_settings().pg_dsn) as conn:
+        got = store.get_recipe(conn, name)
+    if got is None:
+        raise HTTPException(404, f"unknown recipe: {name}")
+    return got
+
+
+@admin.get("/v1/recipes/{name}/tasks", responses={200: {"model": m.RecipeTasks}})
+def admin_recipe_tasks(name: str, flow: str | None = Query(None)) -> dict:
+    """The tasks a run of this recipe would fan out to — lane, dependencies,
+    preconditions and progress weight per node.
+
+    A dry look at placement without queueing anything, so the editor can show WHERE
+    a node will run and what it waits on rather than making the author read source.
+    """
+    from windex import db
+    from windex.recipe import compile as recipe_compile
+    from windex.recipe import store
+
+    with db.pooled(get_settings().pg_dsn) as conn:
+        got = store.get_recipe(conn, name)
+    if got is None:
+        raise HTTPException(404, f"unknown recipe: {name}")
+    try:
+        tasks = recipe_compile.compile_tasks(got["spec"], flow=flow,
+                                            settings=get_settings())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"recipe": name, "flow": flow, "tasks": tasks}
+
+
 @admin.get("/v1/whoami", responses={200: {"model": m.WhoAmI}})
 def admin_whoami() -> dict:
     """Gated echo, so pairing fails at setup with a clear message rather than on

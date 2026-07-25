@@ -165,7 +165,7 @@ def test_a_recipe_cannot_write_another_sources_ids(settings):
     """`load` forces ids to corpus.id_prefix, so this is the check that stops a
     recipe tombstoning or overwriting another source's documents."""
     msg = err(settings, lambda d: d["corpus"].__setitem__("id_prefix", "gh:"))
-    assert "id_prefix must begin with" in msg
+    assert "must begin with the recipe name" in msg
 
 
 def test_reserved_and_malformed_names_are_refused(settings):

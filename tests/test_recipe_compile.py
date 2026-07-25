@@ -87,7 +87,8 @@ def test_preconditions_are_declared_and_include_referenced_secrets():
 
     doc = dict(BASE)
     doc["flows"] = {"h": {"nodes": {
-        "d": {"kind": "discover", "uses": "state.repos_pending", "with": {}},
+        "d": {"kind": "discover", "uses": "state.repos_pending",
+              "with": {"store": "frontier"}},
         "g": {"kind": "fetch", "uses": "github.graphql_batch",
               "with": {"token_ref": "@secret.github_tokens"}},
         "x": {"kind": "extract", "uses": "github.compose_doc", "with": {}},

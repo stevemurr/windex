@@ -1,0 +1,51 @@
+schema: windex.recipe/1
+name: ccnews
+version: 1
+title: Common Crawl News
+description: >
+  News articles from the CC-News WARC crawl, extracted with the FineWeb block
+  pipeline and deduplicated exactly and near-exactly across a rolling window.
+provenance: {builtin: true, upstream: "https://data.commoncrawl.org/crawl-data/CC-NEWS/",
+             license: "Common Crawl Terms of Use"}
+corpus: {source: news, id_prefix: "news:", collection: news}
+config:
+  - {key: backfill_days, kind: int, lo: 1, hi: 3650, default: 90,
+     label: Backfill window (days), help: How far back sync looks for unprocessed WARCs.}
+  - {key: language, kind: str, default: en, stage: install, label: Language}
+  - {key: dedup_window_days, kind: int, lo: 1, hi: 365, default: 30,
+     label: Near-dup window (days),
+     help: News syndication crosses days; this is the MinHash comparison window.}
+  - {key: batch_warcs, kind: int, lo: 1, hi: 64, default: 8, label: WARCs per slice}
+state:
+  warc: {key: WARC path, order: key}
+flows:
+  sync:
+    nodes:
+      once:    {kind: discover, uses: static.once, with: {key: warc-paths}}
+      listing: {kind: fetch, uses: http.download,
+                with: {url_template: "https://data.commoncrawl.org/crawl-data/CC-NEWS/warc.paths.gz",
+                       allowed_hosts: "data.commoncrawl.org", missing_ok: true}}
+      paths:   {kind: catalog, uses: list.path_manifest_gz,
+                with: {key_pattern: ['^crawl-data/CC-NEWS/\d{4}/\d{2}/CC-NEWS-\d+-\d+\.warc\.gz$']}}
+      record:  {kind: collect, uses: store.upsert, with: {store: warc, on_conflict: skip}}
+    edges: [[once, listing], [listing, paths], [paths, record]]
+  ingest:
+    nodes:
+      # `lease` here and almost nowhere else: re-running a unit means re-downloading
+      # a 1GB WARC, which is the only case expensive enough to pay for a lease.
+      pending:  {kind: discover, uses: state.pending,
+                 with: {store: warc, predicate: unseen, order: key,
+                        batch: "@config.batch_warcs", claim: lease, stale_minutes: 60}}
+      download: {kind: fetch, uses: http.download,
+                 with: {url_template: "https://data.commoncrawl.org/{key}",
+                        allowed_hosts: "data.commoncrawl.org", keep: false}}
+      extract:  {kind: extract, uses: warc.datatrove,
+                 with: {language: "@config.language", workers: 4}}
+      canon:    {kind: transform, uses: canonical.url, with: {strategy: sha1_of_canonical}}
+      exact:    {kind: transform, uses: dedup.exact, with: {scope: both}}
+      near:     {kind: transform, uses: dedup.minhash,
+                 with: {window_days: "@config.dedup_window_days"}}
+      stage:    {kind: load, uses: ledger.stage, with: {replace: false}}
+    edges: [[pending, download], [download, extract], [extract, canon],
+            [canon, exact], [exact, near], [near, stage]]
+refresh: [sync, ingest]

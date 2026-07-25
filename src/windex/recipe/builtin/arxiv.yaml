@@ -1,0 +1,29 @@
+schema: windex.recipe/1
+name: arxiv
+version: 1
+title: arXiv papers
+description: OAI-PMH metadata harvest over date windows, with in-stream tombstones.
+provenance: {builtin: true, upstream: "https://export.arxiv.org/oai2", license: arXiv ToU}
+corpus: {source: arxiv, id_prefix: "arxiv:", collection: arxiv}
+config:
+  # 3.0s is arXiv's published rate, not a guess — the floor enforces their number.
+  - {key: request_interval, kind: float, lo: 3.0, hi: 60, default: 3.0, unit: s,
+     label: Request interval, help: "arXiv ToU is 1 request / 3s from one connection."}
+  - {key: incremental_days, kind: int, lo: 1, hi: 365, default: 7}
+  - {key: earliest, kind: date, default: "2005-09-16", stage: install,
+     label: Backfill floor, help: arXiv's own earliestDatestamp.}
+state:
+  window: {key: "from..until"}
+flows:
+  harvest:
+    nodes:
+      windows: {kind: discover, uses: time.windows,
+                with: {unit: month, incremental_days: "@config.incremental_days",
+                       earliest: "@config.earliest"}}
+      oai:     {kind: fetch, uses: http.paginate,
+                with: {protocol: oai_resumption, allowed_hosts: "export.arxiv.org",
+                       request_interval: "@config.request_interval"}}
+      records: {kind: extract, uses: oai.arxiv_records, with: {}}
+      stage:   {kind: load, uses: ledger.stage, with: {replace: false}}
+    edges: [[windows, oai], [oai, records], [records, stage]]
+refresh: [harvest]

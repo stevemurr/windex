@@ -253,7 +253,11 @@ class Param:
         and it is what a form surfaces to the user.
         """
         key = self.key
-        if self.locked_reason:
+        if self.locked_reason and value != self.default:
+            # A lock means "you may not CHANGE this", not "this may not appear".
+            # Restating the default is not a change — and it has to be allowed, or
+            # a spec that materializes defaults (so a frozen run is complete and
+            # self-describing) could never be parsed back in.
             raise ValueError(f"{key}: not editable ({self.locked_reason})")
 
         if self.kind == "bool":

@@ -1,0 +1,21 @@
+schema: windex.recipe/1
+name: custom
+version: 1
+title: Custom pushed sources
+description: >
+  The template for a user-registered push source. UPSERT + explicit delete: unlike
+  memory, an absent id is never tombstoned merely for being absent, because a
+  caller staging a delta has not told us anything about what it left out.
+provenance: {builtin: true, upstream: "local push API"}
+corpus: {source: custom, id_prefix: "custom:", collection: custom}
+config:
+  - {key: max_docs, kind: int, lo: 1, hi: 10000, default: 500, label: Docs per push}
+state: {}
+flows:
+  receive:
+    nodes:
+      push:  {kind: receive, uses: push.docs,
+              with: {mode: delta, max_docs: "@config.max_docs"}}
+      stage: {kind: load, uses: ledger.stage, with: {replace: false}}
+    edges: [[push, stage]]
+refresh: []

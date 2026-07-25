@@ -52,7 +52,11 @@ def compile_tasks(spec: dict, *, flow: str | None = None,
     stores, not edges, which is what keeps every graph acyclic while `repos` is
     written by discovery, read by hydration and written back.
     """
-    recipe = recipe_parse.parse(spec, settings or Settings())
+    # builtin=True because this spec is already REGISTERED — it came from the
+    # recipes table or from a run's frozen copy. The reserved-name guard governs
+    # ADMISSION (install), not compilation, and applying it here would make a
+    # built-in source uncompilable by its own name.
+    recipe = recipe_parse.parse(spec, settings or Settings(), builtin=True)
     name = flow or (recipe.refresh[0] if recipe.refresh else recipe.flows[0].name)
     chosen = next((f for f in recipe.flows if f.name == name), None)
     if chosen is None:

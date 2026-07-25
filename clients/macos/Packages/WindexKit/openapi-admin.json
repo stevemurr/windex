@@ -1407,6 +1407,243 @@
         "title": "RecentDoc",
         "type": "object"
       },
+      "Recipe": {
+        "additionalProperties": true,
+        "description": "One registered source. Built-ins and installed recipes are the same shape \u2014\nthat collapse is the point of the whole project.",
+        "properties": {
+          "builtin": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Builtin"
+          },
+          "corpus_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Corpus Name"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "flows": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Flows",
+            "type": "object"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "loop_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loop Name"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "node_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Count"
+          },
+          "search_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search Name"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "spec": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec"
+          },
+          "spec_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec Hash"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "Recipe",
+        "type": "object"
+      },
+      "RecipeList": {
+        "additionalProperties": true,
+        "properties": {
+          "recipes": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Recipe"
+            },
+            "title": "Recipes",
+            "type": "array"
+          }
+        },
+        "title": "RecipeList",
+        "type": "object"
+      },
+      "RecipeTasks": {
+        "additionalProperties": true,
+        "description": "What a run would fan out to. Placement, without queueing anything.",
+        "properties": {
+          "flow": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flow"
+          },
+          "recipe": {
+            "title": "Recipe",
+            "type": "string"
+          },
+          "tasks": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Tasks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "recipe"
+        ],
+        "title": "RecipeTasks",
+        "type": "object"
+      },
       "Registry": {
         "additionalProperties": true,
         "description": "The module palette. The graph editor renders nodes, connection rules and\nevery node inspector from this, so it is served whole and cached client-side\nagainst its ETag rather than queried piecemeal.",
@@ -3791,6 +4028,66 @@
         "summary": "Recent Indexed"
       }
     },
+    "/v1/recipes": {
+      "get": {
+        "description": "Every registered source, built-in and installed alike.\n\nThey are the same kind of thing now \u2014 one table, one list, one editor. `spec` is\nomitted by default because a sidebar wants names and status, not eleven full\nDAGs.",
+        "operationId": "admin_recipes",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "include_spec",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Spec",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeList",
+                  "additionalProperties": true,
+                  "title": "Response Admin Recipes",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Recipes"
+      }
+    },
     "/v1/recipes/validate": {
       "post": {
         "description": "Parse + type-check a recipe. Pure: no network, no database, no filesystem.\n\nThat purity is the point \u2014 an editor can call this on every keystroke, and it\nis what separates `validate` from `preview` (which fetches the seeds) and\n`dry-run` (which executes the graph against a counting sink).",
@@ -3851,6 +4148,140 @@
           }
         },
         "summary": "Admin Recipe Validate"
+      }
+    },
+    "/v1/recipes/{name}": {
+      "get": {
+        "description": "One recipe, with its graph. What the editor opens.",
+        "operationId": "admin_recipe",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Recipe",
+                  "additionalProperties": true,
+                  "title": "Response Admin Recipe",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Recipe"
+      }
+    },
+    "/v1/recipes/{name}/tasks": {
+      "get": {
+        "description": "The tasks a run of this recipe would fan out to \u2014 lane, dependencies,\npreconditions and progress weight per node.\n\nA dry look at placement without queueing anything, so the editor can show WHERE\na node will run and what it waits on rather than making the author read source.",
+        "operationId": "admin_recipe_tasks",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "flow",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Flow"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeTasks",
+                  "additionalProperties": true,
+                  "title": "Response Admin Recipe Tasks",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Recipe Tasks"
       }
     },
     "/v1/registry": {

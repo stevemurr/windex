@@ -112,10 +112,28 @@ _DISCOVER = (
         ),
     ),
     Module(
+        "static.once", "discover", "Run once",
+        "Emits exactly one unit of work. The root for a flow that polls a fixed "
+        "upstream rather than iterating a store.",
+        built_from="ccnews/sync.py, docs_source/sync.py, hf/sync.py, wiki/sync.py "
+                   "— every `sync` step that fetches one known listing",
+        fields=(
+            _p("key", "str", default="once", label="Unit key",
+               help="Recorded on the unit so a sync flow's history is readable. "
+                    "Not a partition: nothing is claimed and nothing is watermarked."),
+            _p("payload", "csv", default="", label="Payload",
+               help="Optional key=value pairs passed to the fetch node's template."),
+        ),
+    ),
+    Module(
         "state.repos_pending", "discover", "Pending repos",
         "The repos-table adapter of the pending selector.",
         built_from="github/hydrate.py:82, github/embed_index.py:51",
         fields=(
+            _p("store", "str", required=True, label="Store",
+               help="The repos store. A dedicated wide table behind a store adapter: "
+                    "millions of rows with indexed stars and a topics array, which "
+                    "a generic jsonb payload would be a real regression on."),
             _p("stages", "csv", default="candidate", label="Stages"),
             _p("min_star_events", "int", lo=0, hi=100_000, default=0),
             _p("order", "choice", choices=("star_events_desc", "stars_desc"),
