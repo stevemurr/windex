@@ -100,6 +100,10 @@ _DISCOVER = (
             _p("order", "choice", choices=("key", "ord", "processed_at", "stars_desc"),
                default="ord", label="Order"),
             _p("batch", "int", lo=1, hi=10_000, default=50, label="Units per slice"),
+            _p("limit", "int", lo=1, hi=1_000_000, label="Units per run",
+               help="Optional cap on the run-local snapshot. Use this when a "
+                    "source's configured batch is an operational run budget, "
+                    "not merely a worker slice size."),
             _p("claim", "choice", choices=("none", "lease"), default="none",
                label="Claim policy",
                help="none: pending-ness never consults status, so a killed worker's "

@@ -15,7 +15,7 @@ flows:
     nodes:
       once:    {kind: discover, uses: static.once, with: {key: dump-index}}
       index:   {kind: fetch, uses: http.download,
-                with: {url_template: "https://dumps.wikimedia.org/other/cirrussearch/current/",
+                with: {url_template: "https://dumps.wikimedia.org/other/cirrus_search_index/",
                        allowed_hosts: "dumps.wikimedia.org"}}
       # require_marker: a dump still being written has no completeness marker, and
       # ingesting a partial shard is worse than waiting a day.
@@ -29,7 +29,7 @@ flows:
                 with: {store: shard, predicate: token_moved, order: key, batch: 1,
                        claim: lease, stale_minutes: 60}}
       shard:   {kind: fetch, uses: http.download,
-                with: {url_template: "https://dumps.wikimedia.org/other/cirrussearch/current/{key}",
+                with: {url_template: "https://dumps.wikimedia.org/other/cirrus_search_index/{dump_date}/index_name={dump}_content/{key}",
                        allowed_hosts: "dumps.wikimedia.org", keep: false}}
       pages:   {kind: extract, uses: cirrus.articles, with: {chunk_rows: "@config.chunk_rows"}}
       stage:   {kind: load, uses: ledger.stage, with: {replace: false}}

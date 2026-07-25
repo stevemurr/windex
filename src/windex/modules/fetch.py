@@ -81,7 +81,10 @@ def _template_url(ctx: TaskContext, unit: WorkUnit) -> str:
     template = str(ctx.config.get("url_template", ""))
     if not template:
         raise PermanentTaskError("http.download requires url_template")
-    values = {"key": unit.ref.key, **unit.payload}
+    # Installed recipe config is frozen in run params. Templates need both that
+    # partition-invariant context (for example wiki's ``dump``) and the unit's
+    # catalog payload (``dump_date``).
+    values = {**ctx.params, "key": unit.ref.key, **unit.payload}
     try:
         return template.format_map(values)
     except (KeyError, ValueError) as exc:
@@ -619,7 +622,25 @@ def _smallweb_feed(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
         newest_entries,
     )
 
-    feed = _page(ctx, unit, client, robots, limiter)
+    try:
+        feed = _page(ctx, unit, client, robots, limiter)
+    except (httpx.HTTPError, httpx.InvalidURL, BlockedTarget) as exc:
+        # A public feed list inevitably contains expired domains, broken TLS,
+        # and malformed URLs. That is a property of this unit, not a reason to
+        # retry and eventually fail the other ~36k feeds in the task.
+        return RawBlob(
+            ref=unit.ref,
+            uri=str(unit.payload.get("url") or unit.ref.key),
+            body=b"",
+            meta={
+                "status": getattr(getattr(exc, "response", None), "status_code", 0),
+                "reason": "fetch_error",
+                "error": f"{type(exc).__name__}: {str(exc)[:500]}",
+                "payload": unit.payload,
+                "upstream": unit.upstream,
+            },
+            epoch=unit.epoch,
+        )
     if not feed.body or feed.meta.get("not_modified"):
         return feed
     parsed = feedparser.parse(feed.body)
@@ -639,7 +660,10 @@ def _smallweb_feed(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
                 upstream=unit.upstream,
                 epoch=unit.epoch,
             )
-            page = _page(ctx, page_unit, client, robots, limiter)
+            try:
+                page = _page(ctx, page_unit, client, robots, limiter)
+            except (httpx.HTTPError, httpx.InvalidURL, BlockedTarget):
+                continue
             body = (
                 page.body.decode("utf-8", errors="replace")
                 if page.body else None

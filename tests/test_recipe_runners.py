@@ -21,6 +21,8 @@ from windex.modules.fetch import (
     _oai,
     _page,
     _page_limiter,
+    _smallweb_feed,
+    _template_url,
 )
 from windex.modules.load import ledger_stage
 from windex.modules.receive import push_docs
@@ -91,6 +93,64 @@ def test_recipe_http_get_uses_response_aware_limiter_for_hf():
 
     assert isinstance(_page_limiter("hf", 3), PagesRateLimiter)
     assert type(_page_limiter("docs", 3)) is HostRateLimiter
+
+
+def test_download_template_can_use_frozen_config_and_partition_payload(pg):
+    ctx, _ = _ctx(
+        pg,
+        task_id=7099,
+        source="wiki",
+        module="http.download",
+        config={
+            "url_template": (
+                "https://dumps.wikimedia.org/{dump_date}/"
+                "index_name={dump}_content/{key}"
+            ),
+        },
+        params={"dump": "enwiki", "flow": "ingest"},
+    )
+    unit = WorkUnit(
+        ref=PartitionRef(store="shard", key="enwiki-00000.json.bz2"),
+        payload={"dump_date": "20260719"},
+    )
+
+    assert _template_url(ctx, unit) == (
+        "https://dumps.wikimedia.org/20260719/"
+        "index_name=enwiki_content/enwiki-00000.json.bz2"
+    )
+
+
+def test_smallweb_records_a_broken_feed_without_failing_the_task(pg, monkeypatch):
+    def broken(*args, **kwargs):
+        raise httpx.ConnectError(
+            "TLS alert",
+            request=httpx.Request("GET", "https://broken.example/feed"),
+        )
+
+    monkeypatch.setattr(fetch_module, "_page", broken)
+    ctx, _ = _ctx(
+        pg,
+        task_id=7098,
+        recipe="smallweb",
+        source="smallweb",
+        module="http.get",
+        config={},
+    )
+    unit = WorkUnit(
+        ref=PartitionRef(
+            store="feed",
+            key="https://broken.example/feed",
+        ),
+        payload={"url": "https://broken.example/feed"},
+        upstream={"etag": "old"},
+    )
+
+    result = _smallweb_feed(ctx, unit, object(), object(), object())
+
+    assert result.body == b""
+    assert result.meta["reason"] == "fetch_error"
+    assert result.meta["error"].startswith("ConnectError:")
+    assert result.meta["upstream"] == {"etag": "old"}
 
 
 def test_recipe_page_retries_429_inside_task_budget(pg, monkeypatch):
@@ -345,6 +405,32 @@ def test_state_pending_token_moved_batches_and_resumes(pg):
     assert [key for key, _ in _outputs(pg, ctx.task_id)] == ["a", "c"]
     assert _outputs(pg, ctx.task_id)[1][1][0].payload == {"kind": "doc"}
     assert len(beats) == 2
+
+
+def test_state_pending_limit_caps_the_whole_run_not_each_slice(pg):
+    for key in ("a", "b", "c"):
+        _seed(pg, key=key)
+    ctx, _ = _ctx(
+        pg,
+        task_id=7110,
+        module="state.pending",
+        config={
+            "store": "items",
+            "predicate": "unseen",
+            "order": "key",
+            "batch": 2,
+            "limit": 2,
+            "claim": "none",
+        },
+    )
+
+    first = state_pending(ctx)
+    replay = state_pending(ctx)
+
+    assert first.exhausted and first.units_done == 2
+    assert first.units_total == 2
+    assert replay.exhausted and replay.units_done == 0
+    assert [key for key, _ in _outputs(pg, ctx.task_id)] == ["a", "b"]
 
 
 def test_state_pending_stage_and_lease_claim(pg):

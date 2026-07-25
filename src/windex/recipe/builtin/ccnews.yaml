@@ -39,7 +39,8 @@ flows:
       # a 1GB WARC, which is the only case expensive enough to pay for a lease.
       pending:  {kind: discover, uses: state.pending,
                  with: {store: warc, predicate: unseen, order: key,
-                        batch: "@config.batch_warcs", claim: lease, stale_minutes: 60}}
+                        batch: "@config.batch_warcs", limit: "@config.batch_warcs",
+                        claim: lease, stale_minutes: 60}}
       download: {kind: fetch, uses: http.download,
                  with: {url_template: "https://data.commoncrawl.org/{key}",
                         allowed_hosts: "data.commoncrawl.org", keep: false}}

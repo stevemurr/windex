@@ -157,6 +157,17 @@ def state_pending(ctx: TaskContext) -> SliceResult:
         raise PermanentTaskError("state.pending requires a store")
     source = ctx.recipe or ctx.source
     batch = int(ctx.config.get("batch", 50))
+    overall = int(ctx.config.get("limit") or 0)
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM task_units WHERE task_id = %s",
+            (ctx.task_id,),
+        )
+        already = int(cur.fetchone()[0])
+    if overall and already >= overall:
+        ctx.conn.commit()
+        return SliceResult(exhausted=True, units_total=overall)
+    take = min(batch, overall - already) if overall else batch
     if source == "gh" and store == "gh_shards":
         threshold = int(ctx.params.get("star_threshold", 10))
         rows = _github_shard_rows(date.today(), threshold)
@@ -247,13 +258,13 @@ def state_pending(ctx: TaskContext) -> SliceResult:
     if claim == "lease":
         params.append(stale)
     params.extend(anchor_args)
-    params.extend([ctx.task_id, batch + 1])
+    params.extend([ctx.task_id, take + 1])
 
     with ctx.conn.cursor() as cur:
         cur.execute(query, params)
         rows = cur.fetchall()
         selected = []
-        for key, upstream, attempts, attrs in rows[:batch]:
+        for key, upstream, attempts, attrs in rows[:take]:
             attrs = dict(attrs or {})
             unit = WorkUnit(
                 ref=PartitionRef(
@@ -304,7 +315,11 @@ def state_pending(ctx: TaskContext) -> SliceResult:
         ctx.heartbeat(done, 0, {"last": selected[-1][0], "store": store})
     return SliceResult(
         units_done=done,
-        exhausted=len(selected) == len(rows),
+        exhausted=(
+            bool(overall and already + done >= overall)
+            or (len(rows) <= take and done == len(rows))
+        ),
+        units_total=overall or -1,
         stats={"emitted": done, "store": store},
     )
 

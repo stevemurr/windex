@@ -100,6 +100,21 @@ def test_ccnews_sync_fetches_monthly_manifests(settings):
     assert by_id["listing"].config["url_template"].endswith(
         "/CC-NEWS/{key}/warc.paths.gz")
     assert not by_id["listing"].config.get("missing_ok")
+    ingest = next(flow for flow in recipe.flows if flow.name == "ingest")
+    pending = next(node for node in ingest.nodes if node.id == "pending")
+    assert pending.config["limit"] == "@config.batch_warcs"
+
+
+def test_wiki_shards_use_the_dated_cirrus_index(settings):
+    recipe = next(
+        item for item in store.load_builtins(settings) if item.name == "wiki")
+    ingest = next(flow for flow in recipe.flows if flow.name == "ingest")
+    shard = next(node for node in ingest.nodes if node.id == "shard")
+
+    assert shard.config["url_template"] == (
+        "https://dumps.wikimedia.org/other/cirrus_search_index/"
+        "{dump_date}/index_name={dump}_content/{key}"
+    )
 
 
 def test_push_sources_have_no_pull_roots(settings):
