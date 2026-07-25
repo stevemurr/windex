@@ -603,11 +603,13 @@ def time_windows(ctx: TaskContext) -> SliceResult:
                 for key, payload, rolling in rows
             ],
         )
+        keys = [key for key, _, _ in rows]
         cur.execute(
             """
             SELECT u.unit_key, u.upstream, u.attrs
               FROM source_units u
              WHERE u.source = %s AND u.store = %s
+               AND u.unit_key = ANY(%s)
                AND (u.ingested IS NULL OR (u.attrs->>'rolling')::boolean)
                AND NOT EXISTS (
                      SELECT 1 FROM task_units t
@@ -615,7 +617,7 @@ def time_windows(ctx: TaskContext) -> SliceResult:
              ORDER BY (u.attrs->>'rolling')::boolean, u.ord
              LIMIT 101
             """,
-            (source, store, ctx.task_id),
+            (source, store, keys, ctx.task_id),
         )
         pending = cur.fetchall()
     selected = []

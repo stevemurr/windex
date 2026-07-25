@@ -18,7 +18,7 @@ flows:
   harvest:
     nodes:
       windows: {kind: discover, uses: time.windows,
-                with: {unit: month, incremental_days: "@config.incremental_days",
+                with: {unit: day, incremental_days: "@config.incremental_days",
                        earliest: "@config.earliest"}}
       oai:     {kind: fetch, uses: http.paginate,
                 with: {protocol: oai_resumption, allowed_hosts: "export.arxiv.org",

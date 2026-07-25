@@ -11,9 +11,15 @@ import httpx
 from psycopg.types.json import Jsonb
 
 from windex.modules import fetch as fetch_module
+from windex.modules import discover as discover_module
 from windex.modules.catalog import list_json_manifest, list_lines, list_path_manifest_gz
 from windex.modules.collect import store_repos, store_upsert
-from windex.modules.discover import _github_shard_rows, state_pending, static_once
+from windex.modules.discover import (
+    _github_shard_rows,
+    state_pending,
+    static_once,
+    time_windows,
+)
 from windex.modules.fetch import (
     _github_search,
     _hf_root_pages,
@@ -295,6 +301,42 @@ def test_github_search_frontier_is_daily_and_complete():
         "to": "2008-01-03",
         "star_threshold": 10,
     }
+
+
+def test_time_windows_ignores_stale_units_from_an_old_granularity(
+        pg, monkeypatch):
+    _seed(
+        pg,
+        source="arxiv",
+        store="window",
+        key="2005-09-16..2005-09-30",
+        attrs={"from": "2005-09-16", "until": "2005-09-30",
+               "rolling": False},
+    )
+    monkeypatch.setattr(
+        discover_module,
+        "_window_rows",
+        lambda ctx, today: [(
+            "2005-09-16..2005-09-16",
+            {"from": "2005-09-16", "until": "2005-09-16"},
+            False,
+        )],
+    )
+    ctx, _ = _ctx(
+        pg,
+        task_id=7111,
+        recipe="arxiv",
+        source="arxiv",
+        module="time.windows",
+        config={"unit": "day", "earliest": "2005-09-16"},
+    )
+
+    result = time_windows(ctx)
+
+    assert result.exhausted and result.units_done == 1
+    assert [key for key, _ in _outputs(pg, ctx.task_id)] == [
+        "2005-09-16..2005-09-16",
+    ]
 
 
 def test_hf_anchor_replay_fetches_only_banked_pages(pg, monkeypatch):

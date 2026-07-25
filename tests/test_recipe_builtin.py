@@ -123,6 +123,15 @@ def test_wiki_shards_use_the_dated_cirrus_index(settings):
     )
 
 
+def test_arxiv_uses_day_sized_atomic_oai_windows(settings):
+    recipe = next(
+        item for item in store.load_builtins(settings) if item.name == "arxiv")
+    harvest = next(flow for flow in recipe.flows if flow.name == "harvest")
+    windows = next(node for node in harvest.nodes if node.id == "windows")
+
+    assert windows.config["unit"] == "day"
+
+
 def test_push_sources_have_no_pull_roots(settings):
     """A source is push or pull. Mixing them makes "what does refresh do"
     unanswerable, and the two have opposite rules for absent ids."""
