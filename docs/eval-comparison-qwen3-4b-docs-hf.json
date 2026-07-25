@@ -1,0 +1,207 @@
+{
+  "recorded_at": "2026-07-25 America/Los_Angeles",
+  "git_commit": "e7cf234",
+  "mode": "hybrid",
+  "rerank_enabled": false,
+  "k": 10,
+  "per_source": 25,
+  "sample_seed": "docs-hf-model-swap-v1",
+  "baseline": {
+    "file": "docs/eval-baseline-qwen3-8b-docs-hf.json",
+    "model": "qwen3-embedding-8b",
+    "dimension": 4096,
+    "collections": {
+      "docs__qwen3-embedding-8b": 18108,
+      "hf__qwen3-embedding-8b": 3816
+    },
+    "summary": {
+      "ndcg_at_10": {
+        "mean": 0.90872,
+        "stdev": 0.006191284196352127
+      },
+      "mrr": {
+        "mean": 0.8913,
+        "stdev": 0.008366600265340763
+      },
+      "per_source": {
+        "docs": {
+          "ndcg_at_10": 0.9151970480557542,
+          "mrr": 0.8866666666666667
+        },
+        "hf": {
+          "ndcg_at_10": 0.9022846281714299,
+          "mrr": 0.896
+        }
+      }
+    }
+  },
+  "candidate": {
+    "model": "qwen3-embedding-4b",
+    "checkpoint": "Forturne/Qwen3-Embedding-4B-NVFP4",
+    "dimension": 2560,
+    "collections": {
+      "docs__qwen3-embedding-4b": 18108,
+      "hf__qwen3-embedding-4b": 3816
+    }
+  },
+  "corpus_gate": {
+    "anchors_match": true,
+    "queries_match": true,
+    "anchor_sha256": "3f01a25cbb0b571264673ab06a82fc0fc4544f99b9d25fb8bbfcbe7db445cbfd",
+    "query_sha256": "07584d70409922e912e3df30460ee0623c963ba25680d00659692c23adf0d889"
+  },
+  "runs": [
+    {
+      "run": 1,
+      "seconds": 3.618,
+      "overall": {
+        "ndcg_at_10": 0.9108,
+        "mrr": 0.894
+      },
+      "docs": {
+        "ndcg_at_10": 0.9164228728608148,
+        "mrr": 0.888,
+        "hit_at_10": 1.0
+      },
+      "hf": {
+        "ndcg_at_10": 0.9052371901428583,
+        "mrr": 0.9,
+        "hit_at_10": 0.92
+      }
+    },
+    {
+      "run": 2,
+      "seconds": 2.848,
+      "overall": {
+        "ndcg_at_10": 0.9108,
+        "mrr": 0.894
+      },
+      "docs": {
+        "ndcg_at_10": 0.9164228728608148,
+        "mrr": 0.888,
+        "hit_at_10": 1.0
+      },
+      "hf": {
+        "ndcg_at_10": 0.9052371901428583,
+        "mrr": 0.9,
+        "hit_at_10": 0.92
+      }
+    },
+    {
+      "run": 3,
+      "seconds": 2.956,
+      "overall": {
+        "ndcg_at_10": 0.9034,
+        "mrr": 0.884
+      },
+      "docs": {
+        "ndcg_at_10": 0.9016600630036732,
+        "mrr": 0.868,
+        "hit_at_10": 1.0
+      },
+      "hf": {
+        "ndcg_at_10": 0.9052371901428583,
+        "mrr": 0.9,
+        "hit_at_10": 0.92
+      }
+    },
+    {
+      "run": 4,
+      "seconds": 2.686,
+      "overall": {
+        "ndcg_at_10": 0.9034,
+        "mrr": 0.884
+      },
+      "docs": {
+        "ndcg_at_10": 0.9016600630036732,
+        "mrr": 0.868,
+        "hit_at_10": 1.0
+      },
+      "hf": {
+        "ndcg_at_10": 0.9052371901428583,
+        "mrr": 0.9,
+        "hit_at_10": 0.92
+      }
+    },
+    {
+      "run": 5,
+      "seconds": 2.942,
+      "overall": {
+        "ndcg_at_10": 0.9034,
+        "mrr": 0.884
+      },
+      "docs": {
+        "ndcg_at_10": 0.9016600630036732,
+        "mrr": 0.868,
+        "hit_at_10": 1.0
+      },
+      "hf": {
+        "ndcg_at_10": 0.9052371901428583,
+        "mrr": 0.9,
+        "hit_at_10": 0.92
+      }
+    }
+  ],
+  "summary": {
+    "ndcg_at_10": {
+      "mean": 0.90636,
+      "stdev": 0.004053146925538269,
+      "min": 0.9034,
+      "max": 0.9108
+    },
+    "mrr": {
+      "mean": 0.888,
+      "stdev": 0.005477225575051666,
+      "min": 0.884,
+      "max": 0.894
+    },
+    "seconds": {
+      "mean": 3.01,
+      "stdev": 0.3565192841909116,
+      "min": 2.686,
+      "max": 3.618
+    },
+    "per_source": {
+      "docs": {
+        "ndcg_at_10": {
+          "mean": 0.9075651869465299,
+          "stdev": 0.008085923970916085
+        },
+        "mrr": {
+          "mean": 0.876,
+          "stdev": 0.010954451150103331
+        },
+        "hit_at_10": 1.0
+      },
+      "hf": {
+        "ndcg_at_10": {
+          "mean": 0.9052371901428583,
+          "stdev": 0.0
+        },
+        "mrr": {
+          "mean": 0.9,
+          "stdev": 0.0
+        },
+        "hit_at_10": 0.92
+      }
+    }
+  },
+  "delta_vs_8b": {
+    "ndcg_at_10": -0.0023599999999999177,
+    "ndcg_at_10_percent": -0.25970305959992817,
+    "mrr": -0.0032999999999999696,
+    "mrr_percent": -0.37024570561872573,
+    "docs": {
+      "ndcg_at_10": -0.007631861109224267,
+      "mrr": -0.010666666666666713
+    },
+    "hf": {
+      "ndcg_at_10": 0.0029525619714283475,
+      "mrr": 0.0040000000000000036
+    }
+  },
+  "decision": {
+    "result": "keep-4b",
+    "reason": "The aggregate delta is smaller than normal repeat variance, Hit@10 is unchanged for both sources, and Hugging Face improves while the smaller model reduces vector width from 4096 to 2560."
+  }
+}

@@ -1,95 +1,106 @@
 # Source recipes — status
 
-Last updated 2026-07-24.
-Integrated with the backend runner/eval work through `8923812`.
+Last updated 2026-07-25.
 
-## Done
+## Outcome
 
-| Phase | | |
-|---|---|---|
-| 0 | `Param` schema, typed request models, `hmac.compare_digest`, operation ids, `dump-openapi.py` | ✅ |
-| 1★ | Corpus moved to local NVMe; storage-tier metrics + `StorageLow`; CIFS boot guard retired | ✅ |
-| 1 | Additive DDL — recipes, source_units, runs/tasks/units/events, triggers, pauses | ✅ |
-| 3 | `/admin/v1` sub-app, auth on by default, fail-closed off-loopback, separate schemas | ✅ |
-| 6 | Recipe engine — ports, 42-module registry, parser, `compile_tasks` | ✅ |
-| 7a | **All 11 sources registered as recipes**, openable via the API | ✅ |
-| 7b | Runner foundation — durable typed edge stream; 6 generic discover/catalog/collect modules | ✅ first slice |
-| 8 | Worker pool — claim/lease/slice, lanes, WFQ, slot recycling, memory ceiling | ✅ merged |
-| 9 | Trigger scheduler — croniter-backed cron in IANA tz, pause-aware, atomic fire | ✅ merged |
-| 10 | Recipe CRUD, revision history, config materialization | ✅ |
-| 11 | Generic runs list/detail/cancel/events + typed SSE | ✅ |
-| 12 | Inert marketplace catalogs, install forms, lossless updates | ✅ |
-| 13 | Native macOS control plane, recipe editor, Galley, marketplace | ✅ |
-| ~~2, 4, 5~~ | Watermark migration | **removed** — superseded by the reset decision |
-| eval | Fixed 50-query docs+hf 8B baseline, five repeats and exact anchor/query hashes | ✅ |
+The recipe backend is executable end to end. All 42 registered modules have
+in-tree runners, all 11 built-in sources compile without unavailable modules,
+and the generic run API executes their real discover, fetch, catalog, extract,
+transform, collect, and load behavior.
 
-The generated admin schema and Swift types cover the JSON API surface. Run
-events are also available as a typed JSON endpoint and an SSE stream declaring
-`text/event-stream`.
+The clean reset is complete. It removed 17,493,427 ledger documents, run/task
+history, source watermarks, Windex-owned Qdrant collections, and transient
+staging/download artifacts while preserving settings, recipes, schedules, and
+custom-source registration. The replacement corpus is being built only through
+the recipe runners.
 
-## Not done
+The embedding service now runs `Forturne/Qwen3-Embedding-4B-NVFP4` as
+`qwen3-embedding-4b` with 2,560-dimensional vectors. The fixed 8B baseline is
+banked in `docs/eval-baseline-qwen3-8b-docs-hf.json`; the paired 4B result is
+recorded in `docs/eval-comparison-qwen3-4b-docs-hf.json`. Across five exact,
+rerank-off repeats, 4B measured mean NDCG@10 `0.90636` and MRR `0.88800`,
+versus 8B's `0.90872` and `0.89130`. The deltas (`-0.26%` and `-0.37%`) are
+inside normal repeat variance; Hit@10 was unchanged, and HF improved. The
+production decision is therefore to keep 4B.
 
-**Module implementations are in progress.** The runtime now has a crash-safe,
-typed edge stream in `task_units.outputs`, including fan-in/fan-out lineage and
-replay-safe consumption. Six generic modules execute:
-`static.once`, `state.pending`, `list.lines`, `list.json_manifest`,
-`list.path_manifest_gz`, and `store.upsert`. The remaining 36 declarations still
-resolve to the explicit "declared but not yet implemented" error. This is still
-the bulk of the remaining work: moving each source's fetch/extract/load behaviour
-out of its package and behind a module.
+## Shipped backend
 
-The run API refuses a graph before queueing if any module is unavailable.
-Registry and placement responses expose that state, so clients distinguish a
-valid inert recipe from an executable one without manufacturing a failed run.
-
-What remains is the module migration, then **reset + clean ingest** (the
-reproducibility proof). Keep the web console until the signed native app has been
-deployed and direct-LAN pairing has been verified.
-
-## Live now for the Swift client
-
-Base `http://<host>:8100`. Auth `Authorization: Bearer $WINDEX_WRITE_TOKEN` on
-everything under `/admin`.
-
-| | |
+| Area | Status |
 |---|---|
-| `GET /admin/v1/health` | open — probe before pairing; reports `auth_required` |
-| `GET /admin/v1/whoami` | validate a token at setup |
-| `GET /admin/v1/registry` | 42 modules, 8 kinds, port lattice. ETag'd. The editor's whole palette |
-| `GET /admin/v1/recipes` | all 11 sources |
-| `GET /admin/v1/recipes/{name}` | one recipe with its flows/nodes/edges — what the editor opens |
-| `GET /admin/v1/recipes/{name}/tasks` | placement per node: lane, deps, preconditions, weight |
-| `POST /admin/v1/recipes/validate` | pure, no IO — safe to call per keystroke |
-| `POST/PUT /admin/v1/recipes` | validated writes with revision history |
-| `/admin/v1/runs` | generic runs, history, cancel, JSON events + SSE |
-| `/admin/v1/marketplace` | inert bundled/operator-mounted catalogs |
-| `GET /admin/v1/settings` | drives `SchemaForm`; real data |
-| `/admin/v1/{loops,freshness,activity,jobs,schedule,logs,stats,timeseries}` | real data |
-| `GET /v1/search`, `/v1/docs/{id}` | docs + hf are searchable; other source collections await rebuild |
+| Registry | 42 implemented modules, 8 kinds, closed port lattice |
+| Recipes | 11 built-ins; list/open/validate/config/revision operations |
+| Runs | submit/list/detail/cancel, JSON events, typed SSE |
+| Runtime | durable typed edges, fan-in/fan-out, leases, yielding, WFQ lanes |
+| Source state | durable frontiers, watermarks, stale leases, bounded run snapshots |
+| Safety | host allowlists, SSRF checks, census guards, partial-run prune protection |
+| Marketplace | inert catalogs, install/update metadata, executable-state reporting |
+| Native client | pairing, recipe editor, Galley, marketplace, and operations screens |
 
-**Search is partial and that is not a client bug.** The docs and hf collections
-were rebuilt to secure the model-comparison baseline (18,108 + 3,816 points).
-The corpus survived intact (17.49M documents, 31 G of parquet), but the remaining
-source vectors are still deferred to the planned rebuild. `reset` now only
-deletes collections it owns, proven by test.
+Notable runtime guarantees proven during the clean rebuild:
 
-## Open decisions
+- module and recipe defaults are frozen into both node config and run params;
+- a lock forbids changing a field but does not reject the frozen field itself;
+- GitHub and arXiv pagination use bounded daily resume units;
+- crawl BFS frontiers persist per URL across worker yields;
+- crawl page-budget or fetch failures propagate an incomplete-census marker, so
+  partial results may stage but may not tombstone unseen documents;
+- Hugging Face roots are atomic replace boundaries, while completed fetch units
+  checkpoint before the next long unit starts;
+- CC News uses monthly manifests and a true run-wide WARC cap;
+- zero-page or missing Hugging Face manifests remain observable without forming
+  a permanent crawl loop.
 
-1. **Module implementations** — six generic discover/catalog/collect modules
-   execute through the durable edge stream. The remaining 36 declarations must
-   migrate before every built-in recipe is executable.
-2. **Clean ingest** — reset and rebuild only after the complete runner set lands.
-3. **4B comparison** — the 8B side is now banked in
-   `docs/eval-baseline-qwen3-8b-docs-hf.json`: 50 fixed anchors, five repeats,
-   mean NDCG@10 `0.90872` and MRR `0.8913`. The identical anchors/query hash must
-   be used after a 4B subset reindex.
-4. **Indexing is paused.** Deliberate — the loops were embedding a backlog that the
-   reset discards. Resume with `POST /v1/control/start`.
-5. **4B/NVFP4 timing** — the rebuild is the moment to switch, so the corpus is
-   embedded once. NVFP4 has already caused one measured regression on the rerank
-   path, hence (3).
-6. **Signed macOS validation** — this checkout has no Apple signing identity.
-   Archive/notarization tooling is checked in, but direct-LAN TCC validation needs
-   a Developer ID build.
-7. **Production credential rotation** — rotate the previously shared write token
-   on the server after deploying this API/client revision.
+## Clean rollout
+
+| Source | Clean recipe path |
+|---|---|
+| docs | 18,108 documents rebuilt and embedded |
+| hf | 831 posts + 2,985 documentation pages rebuilt for the fixed comparison pool |
+| ccnews | monthly manifest sync; bounded 8-WARC ingest verified |
+| wiki | current dated Cirrus shard catalog and real shard download verified |
+| smallweb | 36,271-feed frontier; dead TLS/expired feeds isolated per unit |
+| hn | historical window harvest active |
+| gh | daily Search API frontier + Archive tail active; hydrate/compose follow discovery |
+| arxiv | daily OAI frontier active |
+| memory/custom/crawl | push/crawl runners available; crawl frontier is crash-resumable |
+
+Historical backfills continue as ordinary durable runs. They are not prerequisites
+for the docs+HF model comparison and survive worker/container restarts.
+
+## Live API for the Swift client
+
+Base `http://<host>:8100`. Everything under `/admin` requires
+`Authorization: Bearer $WINDEX_WRITE_TOKEN`, except the pairing health probe.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /admin/v1/health` | pairing probe and `auth_required` |
+| `GET /admin/v1/whoami` | validate a paired token |
+| `GET /admin/v1/registry` | module palette, kinds, ports, placement |
+| `GET /admin/v1/recipes` | all registered recipes |
+| `GET /admin/v1/recipes/{name}` | one recipe and its flow DAGs |
+| `GET /admin/v1/recipes/{name}/tasks` | compiled placement and preconditions |
+| `POST /admin/v1/recipes/validate` | pure validation |
+| `POST/PUT /admin/v1/recipes` | validated writes and revision history |
+| `/admin/v1/runs` | submit/history/detail/cancel/events/SSE |
+| `/admin/v1/marketplace` | bundled and operator-mounted catalogs |
+| `GET /admin/v1/settings` | SchemaForm data |
+| `/admin/v1/{loops,freshness,activity,jobs,schedule,logs,stats,timeseries}` | operations data |
+| `GET /v1/search`, `/v1/docs/{id}` | search and document retrieval |
+
+## Verification
+
+- Full suite: 1,003 tests passed.
+- Production registry: 42/42 modules report `implemented: true`.
+- Production recipe list: 11/11 built-ins.
+- Admin health: `status: ok`, authentication required.
+- Qdrant docs pool: 18,108 4B points.
+- Qdrant HF pool: 3,816 4B points.
+- Fixed comparison: identical anchor and query hashes; 4B NDCG@10 `0.90636`,
+  MRR `0.88800`; decision `keep-4b`.
+
+The remaining operational follow-up is credential rotation after the frontend
+has validated pairing with the deployed server. Signed macOS notarization also
+remains environment-dependent because this checkout has no Apple signing
+identity.
