@@ -9,6 +9,7 @@ dist/
 .ruff_cache/
 .claude/
 .coverage
+.DS_Store
 *.bak
 *.bak-*
 .qdrant-rsync.log
