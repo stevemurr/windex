@@ -1,0 +1,174 @@
+{
+  "recorded_at": "2026-07-24 America/Los_Angeles",
+  "git_commit": "0c8b529",
+  "model": "qwen3-embedding-8b",
+  "dimension": 4096,
+  "mode": "hybrid",
+  "rerank_enabled": false,
+  "k": 10,
+  "per_source": 25,
+  "sample_seed": "docs-hf-model-swap-v1",
+  "anchor_sha256": "3f01a25cbb0b571264673ab06a82fc0fc4544f99b9d25fb8bbfcbe7db445cbfd",
+  "query_sha256": "07584d70409922e912e3df30460ee0623c963ba25680d00659692c23adf0d889",
+  "collections": {
+    "docs__qwen3-embedding-8b": 18108,
+    "hf__qwen3-embedding-8b": 3816
+  },
+  "anchors": {
+    "docs": [
+      "docs:rust/std/simd/type.u64x2",
+      "docs:php/class.v8jsexception",
+      "docs:php/splfileobject.ftell",
+      "docs:ruby~3.4/net/httpswitchprotocol",
+      "docs:react/reference/react-dom/components/input",
+      "docs:php/function.stats-dens-pmf-negative-binomial",
+      "docs:css/nesting_selector",
+      "docs:rust/std/mem/fn.take",
+      "docs:php/function.getimagesize",
+      "docs:javascript/global_objects/uint8clampedarray",
+      "docs:php/solrclient.query",
+      "docs:php/datetime.getoffset",
+      "docs:php/sessionupdatetimestamphandlerinterface.updatetimestamp",
+      "docs:ruby~3.4/prism/casematchnode",
+      "docs:php/gearmanworker.wait",
+      "docs:rust/std/primitive.u128",
+      "docs:react/reference/react/useref",
+      "docs:python~3.14/index",
+      "docs:css/absolute-size",
+      "docs:css/::picker",
+      "docs:rust/book/ch10-00-generics",
+      "docs:php/function.xml-get-current-byte-index",
+      "docs:html/reference/elements/dir",
+      "docs:php/function.fdf-next-field-name",
+      "docs:django~6.1/intro/reusable-apps"
+    ],
+    "hf": [
+      "hf:blog/spaces-dev-mode",
+      "hf:learn/deep-rl-course/unitbonus3/envs-to-try",
+      "hf:docs/transformers.js/api/env",
+      "hf:learn/computer-vision-course/unit4/multimodal-models/clip-and-relatives/blip",
+      "hf:learn/cookbook/agent_rag",
+      "hf:blog/keras-chatbot-arena",
+      "hf:docs/transformers/model_doc/mistral4",
+      "hf:learn/computer-vision-course/unit2/cnns/convnext",
+      "hf:blog/Photoroom/prx-part3",
+      "hf:docs/datasets/about_dataset_features",
+      "hf:learn/computer-vision-course/unit7/video-processing/transformers-based-models",
+      "hf:blog/scaling-secrets-management",
+      "hf:docs/diffusers/api/models/ltx_video_transformer3d",
+      "hf:docs/transformers/model_doc/vilt",
+      "hf:docs/transformers/model_doc/mobilebert",
+      "hf:docs/lerobot/policy_tdmpc_README",
+      "hf:docs/openenv/main/environments/finqa",
+      "hf:docs/transformers/model_doc/hy_v3",
+      "hf:docs/trackio/trl_integration",
+      "hf:blog/llm-course",
+      "hf:docs/hub/datasets-polars-optimizations",
+      "hf:docs/diffusers/api/models/wan_transformer_3d",
+      "hf:docs/diffusers/api/models/wan_animate_transformer_3d",
+      "hf:learn/agents-course/unit2/smolagents/introduction",
+      "hf:docs/transformers/model_doc/xlnet"
+    ]
+  },
+  "runs": [
+    {
+      "run": 1,
+      "overall": {
+        "ndcg_at_10": 0.9102,
+        "mrr": 0.8933
+      },
+      "docs": {
+        "ndcg_at_10": 0.9151970480557542,
+        "mrr": 0.8866666666666667,
+        "hit_at_10": 1.0
+      },
+      "hf": {
+        "ndcg_at_10": 0.9052371901428583,
+        "mrr": 0.9,
+        "hit_at_10": 0.92
+      }
+    },
+    {
+      "run": 2,
+      "overall": {
+        "ndcg_at_10": 0.9028,
+        "mrr": 0.8833
+      },
+      "docs": {
+        "ndcg_at_10": 0.9004342381986125,
+        "mrr": 0.8666666666666667,
+        "hit_at_10": 1.0
+      },
+      "hf": {
+        "ndcg_at_10": 0.9052371901428583,
+        "mrr": 0.9,
+        "hit_at_10": 0.92
+      }
+    },
+    {
+      "run": 3,
+      "overall": {
+        "ndcg_at_10": 0.9028,
+        "mrr": 0.8833
+      },
+      "docs": {
+        "ndcg_at_10": 0.9151970480557542,
+        "mrr": 0.8866666666666667,
+        "hit_at_10": 1.0
+      },
+      "hf": {
+        "ndcg_at_10": 0.8904743802857166,
+        "mrr": 0.88,
+        "hit_at_10": 0.92
+      }
+    },
+    {
+      "run": 4,
+      "overall": {
+        "ndcg_at_10": 0.9176,
+        "mrr": 0.9033
+      },
+      "docs": {
+        "ndcg_at_10": 0.9299598579128958,
+        "mrr": 0.9066666666666667,
+        "hit_at_10": 1.0
+      },
+      "hf": {
+        "ndcg_at_10": 0.9052371901428583,
+        "mrr": 0.9,
+        "hit_at_10": 0.92
+      }
+    },
+    {
+      "run": 5,
+      "overall": {
+        "ndcg_at_10": 0.9102,
+        "mrr": 0.8933
+      },
+      "docs": {
+        "ndcg_at_10": 0.9151970480557542,
+        "mrr": 0.8866666666666667,
+        "hit_at_10": 1.0
+      },
+      "hf": {
+        "ndcg_at_10": 0.9052371901428583,
+        "mrr": 0.9,
+        "hit_at_10": 0.92
+      }
+    }
+  ],
+  "summary": {
+    "ndcg_at_10": {
+      "mean": 0.90872,
+      "stdev": 0.006191284196352127,
+      "min": 0.9028,
+      "max": 0.9176
+    },
+    "mrr": {
+      "mean": 0.8913,
+      "stdev": 0.008366600265340763,
+      "min": 0.8833,
+      "max": 0.9033
+    }
+  }
+}

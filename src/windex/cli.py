@@ -1270,6 +1270,13 @@ def eval_cmd(
     mode: str = typer.Option("hybrid", help="hybrid | dense | lexical"),
     k: int = typer.Option(0, help="cutoff for NDCG@k / Recall@k (0 = config eval_k)"),
     per_source: int = typer.Option(0, help="known-item samples per source (0 = config)"),
+    source: list[str] = typer.Option(
+        [], "--source",
+        help="Restrict evaluation to these sources (repeatable); default all",
+    ),
+    sample_seed: str = typer.Option(
+        "", help="Stable sample seed for reproducible model comparisons",
+    ),
     judge: bool = typer.Option(False, help="also run the LLM-as-judge leg (needs WINDEX_JUDGE_*)"),
     persist: bool = typer.Option(True, help="write the run to search_quality"),
 ) -> None:
@@ -1280,13 +1287,33 @@ def eval_cmd(
     import subprocess
 
     from windex.eval import run_eval
-    from windex.eval.harness import persist_run
+    from windex.eval.harness import SOURCES, persist_run
 
     settings = get_settings()
     k = k or settings.eval_k
     per_source = per_source or settings.eval_per_source
-    console.print(f"[cyan]eval[/cyan] mode={mode} k={k} per_source={per_source} judge={judge}")
-    result = run_eval(settings, per_source=per_source, k=k, mode=mode, llm_judge=judge)
+    unknown = set(source) - set(SOURCES)
+    if unknown:
+        console.print(
+            f"[red]unknown source(s): {sorted(unknown)}[/red] — "
+            f"pick from {', '.join(SOURCES)}"
+        )
+        raise typer.Exit(1)
+    sources = source or None
+    seed = sample_seed or None
+    console.print(
+        f"[cyan]eval[/cyan] mode={mode} k={k} per_source={per_source} "
+        f"sources={sources or 'all'} seed={seed or 'random'} judge={judge}"
+    )
+    result = run_eval(
+        settings,
+        per_source=per_source,
+        k=k,
+        mode=mode,
+        llm_judge=judge,
+        sources=sources,
+        sample_seed=seed,
+    )
     ov = result["overall"]
     console.print(f"  known-item  NDCG@{k}={ov[f'known_item_ndcg@{k}']:.4f}  MRR={ov['known_item_mrr']:.4f}")
     if result["golden"]:
@@ -1296,7 +1323,12 @@ def eval_cmd(
     for src, v in result["known_item"].items():
         console.print(f"    {src:9s} n={v['n']:<3} ndcg@{k}={v[f'ndcg@{k}']:.3f} "
                       f"mrr={v['mrr']:.3f} hit@{k}={v[f'hit@{k}']:.3f}")
-    if persist:
+    if persist and sources:
+        console.print(
+            "[yellow]subset eval not persisted to the global search_quality "
+            "headline; the full result remains in this command's output[/yellow]"
+        )
+    elif persist:
         try:
             sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
                                  capture_output=True, text=True).stdout.strip()
