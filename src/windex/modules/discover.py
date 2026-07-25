@@ -164,6 +164,13 @@ def state_pending(ctx: TaskContext) -> SliceResult:
     stale = int(ctx.config.get("stale_minutes", 60))
     anchor_filter = sql.SQL("")
     anchor_args: list[Any] = []
+    source_filter = sql.SQL("")
+    if source == "hf" and store == "root":
+        # The sitemap includes a few client-rendered roots with no llms.txt.
+        # Sync records them with a null hash for observability; they are not a
+        # crawl frontier because there is no complete page enumeration.
+        source_filter = sql.SQL(
+            "AND u.upstream->>'llms_hash' IS NOT NULL")
     raw_anchors = ctx.params.get("anchor_ids")
     if source == "hf" and raw_anchors:
         anchors = (
@@ -199,6 +206,7 @@ def state_pending(ctx: TaskContext) -> SliceResult:
          WHERE u.source = %s AND u.store = %s
            AND {pending}
            {lease}
+           {source_filter}
            {anchor_filter}
            AND NOT EXISTS (
                  SELECT 1 FROM task_units t
@@ -208,6 +216,7 @@ def state_pending(ctx: TaskContext) -> SliceResult:
         """).format(
             pending=pending,
             lease=lease,
+            source_filter=source_filter,
             anchor_filter=anchor_filter,
             order=order,
         )

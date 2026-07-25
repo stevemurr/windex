@@ -311,8 +311,15 @@ def test_state_pending_uses_recipe_not_corpus_source_as_store_namespace(pg):
 def test_state_pending_can_replay_exact_hf_anchors(pg):
     _seed(pg, source="hf", store="post", key="wanted")
     _seed(pg, source="hf", store="post", key="other")
-    _seed(pg, source="hf", store="root", key="docs/diffusers")
-    _seed(pg, source="hf", store="root", key="docs/unrelated")
+    _seed(
+        pg, source="hf", store="root", key="docs/diffusers",
+        upstream={"llms_hash": "present"})
+    _seed(
+        pg, source="hf", store="root", key="docs/unrelated",
+        upstream={"llms_hash": "present"})
+    _seed(
+        pg, source="hf", store="root", key="docs/no-llms",
+        upstream={"llms_hash": None})
     ctx, _ = _ctx(
         pg,
         task_id=7106,
@@ -358,6 +365,25 @@ def test_state_pending_can_replay_exact_hf_anchors(pg):
     assert state_pending(roots).units_done == 1
     [(key, _)] = _outputs(pg, roots.task_id)
     assert key == "docs/diffusers"
+
+    full, _ = _ctx(
+        pg,
+        task_id=7109,
+        recipe="hf",
+        source="hf",
+        module="state.pending",
+        config={
+            "store": "root",
+            "predicate": "token_moved",
+            "order": "key",
+            "batch": 10,
+        },
+    )
+    assert state_pending(full).units_done == 2
+    assert [key for key, _ in _outputs(pg, full.task_id)] == [
+        "docs/diffusers",
+        "docs/unrelated",
+    ]
 
 
 def test_state_pending_yields_after_a_committed_unit_and_resumes(pg):
@@ -979,7 +1005,8 @@ def test_hf_sync_filters_roots_before_probing_llms(pg, monkeypatch):
     sitemap_docs = b"""\
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://huggingface.co/docs/keep</loc></url>
-  <url><loc>https://huggingface.co/docs/drop</loc></url>
+  <url><loc>https://huggingface.co/docs/no-llms</loc></url>
+  <url><loc>https://huggingface.co/docs/ignore</loc></url>
 </urlset>"""
     requested = []
 
@@ -992,6 +1019,10 @@ def test_hf_sync_filters_roots_before_probing_llms(pg, monkeypatch):
             body = sitemap_docs
         elif url.endswith("docs/keep/llms.txt"):
             body = b"- [Index](https://huggingface.co/docs/keep/en/index)"
+        elif url.endswith("docs/no-llms/llms.txt"):
+            response = httpx.Response(
+                404, request=httpx.Request("GET", url))
+            response.raise_for_status()
         else:
             raise AssertionError(f"unexpected fetch: {url}")
         return RawBlob(ref=unit.ref, uri=url, body=body, epoch=unit.epoch)
@@ -1004,7 +1035,7 @@ def test_hf_sync_filters_roots_before_probing_llms(pg, monkeypatch):
         source="hf",
         module="http.get",
         config={},
-        params={"roots": "docs/keep"},
+        params={"roots": "docs/keep,docs/no-llms"},
         should_yield=lambda: True,
     )
     unit = WorkUnit(
@@ -1017,6 +1048,9 @@ def test_hf_sync_filters_roots_before_probing_llms(pg, monkeypatch):
 
     assert [entry["url"] for entry in envelope["sitemaps"]] == [
         "https://huggingface.co/docs/keep",
+        "https://huggingface.co/docs/no-llms",
     ]
+    assert envelope["sitemaps"][1]["llms_hash"] is None
+    assert envelope["sitemaps"][1]["pages"] == 0
     assert "https://huggingface.co/docs/keep/llms.txt" in requested
-    assert "https://huggingface.co/docs/drop/llms.txt" not in requested
+    assert "https://huggingface.co/docs/ignore/llms.txt" not in requested

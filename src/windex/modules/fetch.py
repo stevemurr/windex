@@ -509,10 +509,18 @@ def _hf_sync_blob(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
                     payload={"url": f"https://huggingface.co/{root}/llms.txt"},
                     epoch=unit.epoch,
                 )
-                llms = _page(ctx, llms_unit, client, robots, limiter)
+                try:
+                    llms = _page(ctx, llms_unit, client, robots, limiter)
+                except httpx.HTTPStatusError as exc:
+                    # HF advertises a handful of client-rendered roots that
+                    # deliberately have no llms.txt. They remain in the catalog
+                    # with a NULL hash so discovery can exclude them.
+                    if exc.response.status_code != 404:
+                        raise
+                    llms = None
                 text = (
                     llms.body.decode("utf-8", errors="replace")
-                    if llms.body else ""
+                    if llms is not None and llms.body else ""
                 )
                 pages = parse_llms(text, root) if text else []
                 entry.update({
