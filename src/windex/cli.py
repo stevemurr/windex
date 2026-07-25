@@ -1911,5 +1911,58 @@ def _mark_ingest(source: str) -> None:
         db.set_control(conn, f"ingest_ts_{source}", str(int(time_mod.time())))
 
 
+@app.command()
+def worker(
+    slots: int = typer.Option(0, help="Slot subprocesses (0 = WINDEX_WORKER_SLOTS or 4)"),
+    lanes: str = typer.Option("", help="Comma-separated lanes to serve (default: all)"),
+    slice_seconds: float = typer.Option(0.0, help="Seconds a task holds a slot before yielding"),
+    name: str = typer.Option("", help="Pool name recorded in lease_worker ids"),
+    inline: bool = typer.Option(False, "--inline",
+                                help="Run ONE slot in this process (debugging; no supervisor)"),
+) -> None:
+    """The worker pool: claim leased tasks from `run_tasks` and run them in slices.
+
+    Replaces the fourteen per-source loop containers with one supervisor and K
+    slot subprocesses. A claimed task runs a SLICE, not to completion — it
+    commits, yields, and re-enters the queue — so a 20,000-page crawl no longer
+    FIFO-blocks every other source for eleven hours, a pause takes effect within
+    one slice, and a slot can be recycled to reclaim memory without losing work.
+
+    Never exits on failure: a Postgres blip, a bad task or an OOM-killed slot is
+    logged and swept, because nothing supervises this process and an exit would
+    leave the whole queue stranded (the failure that stalled indexing ~36 h on
+    2026-07-17).
+    """
+    import logging as _logging
+
+    from windex.worker import config_from_env, default_resolve
+    from windex.worker.slot import slot_main
+    from windex.worker.supervisor import Pool
+
+    _logging.basicConfig(level=_logging.INFO,
+                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    settings = get_settings()
+    cfg = config_from_env().with_overrides(
+        slots=slots or None,
+        slice_seconds=slice_seconds or None,
+        name=name or None,
+        lanes=tuple(x.strip() for x in lanes.split(",") if x.strip()) or None,
+    )
+    if inline:
+        # One slot, no fork: the debugging shape. Preconditions are evaluated
+        # once and published so the claim predicate behaves identically to the
+        # supervised path — an inline run that silently ignored preconditions
+        # would be a debugging tool that lies about production.
+        from windex.worker import control as _control
+        from windex.worker.preconditions import evaluate
+
+        _control.write(cfg.control_path, satisfied=evaluate(settings),
+                       blocked_lanes=(), generation=0)
+        raise typer.Exit(slot_main(settings.pg_dsn, default_resolve, cfg, 0))
+    console.print(f"[bold]worker pool[/bold] '{cfg.name}' — {cfg.slots} slots, "
+                  f"lanes {', '.join(cfg.lanes)}, slice {cfg.slice_seconds:.0f}s")
+    Pool(settings.pg_dsn, default_resolve, cfg, settings=settings).run()
+
+
 if __name__ == "__main__":
     app()
