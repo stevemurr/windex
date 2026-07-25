@@ -190,3 +190,62 @@ def test_recipe_validate_is_pure_and_reports_precisely(client):
     r = client.post("/admin/v1/recipes/validate", json=good, headers=auth())
     assert r.json()["valid"] is False
     assert "host_intervall" in r.json()["errors"][0]["message"]
+
+
+def test_every_admin_response_is_typed_in_the_schema():
+    """Guard against the untyped surface regrowing.
+
+    Handlers are annotated `-> dict`, which FastAPI renders as a bare `{}`. A
+    generated client then hand-decodes every body, and nothing catches a service
+    function quietly changing shape. Schemas are attached via
+    `responses={code: {"model": X}}` rather than `response_model=`, deliberately:
+    response_model VALIDATES and TRANSFORMS — it coerced int->float and bool->int,
+    materialized unset optionals as explicit null, and dropped undeclared fields.
+    All five of those broke real responses when tried. `responses=` emits the
+    identical $ref and touches the body not at all.
+    """
+    import windex.api.app as app_mod
+
+    schema = app_mod.admin.openapi()
+    untyped = []
+    for path, item in schema["paths"].items():
+        for method, op in item.items():
+            if not isinstance(op, dict):
+                continue
+            responses = op.get("responses", {})
+            ok = responses.get("200") or responses.get("201") or responses.get("202")
+            if not ok:
+                continue
+            content = ok.get("content", {})
+            # SSE streams have no JSON body to describe; they declare
+            # text/event-stream instead, which is the honest answer.
+            if "text/event-stream" in content:
+                continue
+            sch = (content.get("application/json") or {}).get("schema", {})
+            bare = not sch or (sch.get("type") == "object"
+                               and "properties" not in sch and "$ref" not in sch)
+            if bare:
+                untyped.append(f"{method.upper()} {path}")
+    assert untyped == [], (
+        "these /admin/v1 responses have no schema, so a generated client cannot "
+        f"type them: {untyped}. Add a model in windex/api/models.py and attach it "
+        'with responses={200: {"model": ...}}.')
+
+
+def test_response_models_never_alter_a_body():
+    """The models are DESCRIPTIVE. If one ever starts filtering or coercing, the
+    console loses a column silently — so assert the mechanism, not just the schema."""
+    import windex.api.app as app_mod
+
+    from pydantic import BaseModel
+
+    for route in app_mod.admin.routes:
+        model = getattr(route, "response_model", None)
+        # `-> dict` return annotations also populate response_model, and `dict` is
+        # permissive enough to be a no-op. The dangerous case is a declared schema
+        # doing the validating.
+        if isinstance(model, type) and issubclass(model, BaseModel):
+            raise AssertionError(
+                f"{route.path} uses response_model={model.__name__}, which validates "
+                "and transforms the body. Use responses={code: {'model': X}} to "
+                "document the shape instead.")

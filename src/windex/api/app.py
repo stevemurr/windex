@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from fastapi import Body
 
 from windex.api import jobs, logs, prom, service
+from windex.api import models as m
 from windex.config import get_settings
 
 STARTED_AT = time.time()  # serve-process uptime for the console
@@ -223,7 +224,7 @@ admin = FastAPI(
 )
 
 
-@admin.get("/v1/health")
+@admin.get("/v1/health", responses={200: {"model": m.Health}})
 def admin_health() -> dict:
     """Unauthenticated liveness + capability probe — the one open admin route.
 
@@ -242,7 +243,7 @@ def admin_health() -> dict:
     }
 
 
-@admin.get("/v1/registry")
+@admin.get("/v1/registry", responses={200: {"model": m.Registry}})
 def admin_registry(response: Response) -> dict:
     """The module palette: port types, node kinds, and every module's config schema.
 
@@ -268,7 +269,7 @@ class RecipeDoc(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-@admin.post("/v1/recipes/validate")
+@admin.post("/v1/recipes/validate", responses={200: {"model": m.ValidationReport}})
 def admin_recipe_validate(body: dict) -> dict:
     """Parse + type-check a recipe. Pure: no network, no database, no filesystem.
 
@@ -281,7 +282,7 @@ def admin_recipe_validate(body: dict) -> dict:
     return recipe_parse.validate(body, get_settings())
 
 
-@admin.get("/v1/whoami")
+@admin.get("/v1/whoami", responses={200: {"model": m.WhoAmI}})
 def admin_whoami() -> dict:
     """Gated echo, so pairing fails at setup with a clear message rather than on
     the first write."""
@@ -491,7 +492,7 @@ def _stats_with_uptime(settings) -> dict:
     return body
 
 
-@ops.get("/metrics")
+@ops.get("/metrics", responses={200: {"model": m.SearchMetrics}})
 def metrics(minutes: int = Query(60, ge=1, le=43200)) -> dict:
     """Search-performance rollup: latency percentiles + hybrid→keyword
     degradation counts over the trailing window."""
@@ -508,24 +509,24 @@ def prometheus_metrics() -> Response:
     return Response(prom.render(get_settings()), media_type=prom.CONTENT_TYPE_LATEST)
 
 
-@ops.get("/recent")
+@ops.get("/recent", responses={200: {"model": list[m.RecentDoc]}})
 def recent(limit: int = Query(30, ge=1, le=100)) -> list[dict]:
     return service.get_recent(get_settings(), limit=limit)
 
 
-@ops.get("/recent/embedded")
+@ops.get("/recent/embedded", responses={200: {"model": list[m.RecentDoc]}})
 def recent_embedded(limit: int = Query(25, ge=1, le=100)) -> list[dict]:
     """Recently embedded (landed in Qdrant), newest first — console progress feed."""
     return service.recent_feed(get_settings(), "indexed_at", limit=limit)
 
 
-@ops.get("/recent/indexed")
+@ops.get("/recent/indexed", responses={200: {"model": list[m.RecentDoc]}})
 def recent_indexed(limit: int = Query(25, ge=1, le=100)) -> list[dict]:
     """Recently indexed (harvested/staged), newest first — console progress feed."""
     return service.recent_feed(get_settings(), "created_at", limit=limit)
 
 
-@ops.post("/system/refresh-stats")
+@ops.post("/system/refresh-stats", responses={200: {"model": m.ActionResult}})
 def refresh_stats() -> dict:
     """Force-drop the cached doc rollups so /metrics + /v1/stats recompute now
     (used after a bulk cleanup so dashboards reflect immediately)."""
@@ -533,28 +534,28 @@ def refresh_stats() -> dict:
     return {"ok": True}
 
 
-@ops.get("/timeseries")
+@ops.get("/timeseries", responses={200: {"model": list[m.TimeseriesPoint]}})
 def timeseries(minutes: int = Query(60, ge=5, le=1440)) -> list[dict]:
     return service.get_timeseries(get_settings(), minutes=minutes)
 
 
-@ops.post("/control/{action}")
+@ops.post("/control/{action}", responses={200: {"model": m.ControlState}})
 def control(action: Literal["start", "pause"]) -> dict:
     value = "running" if action == "start" else "paused"
     return {"indexing": service.set_control(get_settings(), value)}
 
 
-@ops.get("/workers")
+@ops.get("/workers", responses={200: {"model": m.WorkersState}})
 def workers() -> dict:
     return service.get_worker_activity(get_settings())
 
 
-@ops.get("/logs")
+@ops.get("/logs", responses={200: {"model": list[m.LogSource]}})
 def logs_list() -> list[dict]:
     return logs.list_logs()
 
 
-@ops.get("/logs/{name}")
+@ops.get("/logs/{name}", responses={200: {"model": m.LogTail}})
 def logs_tail(
     name: str,
     lines: int = Query(200, ge=1, le=2000),
@@ -567,12 +568,12 @@ def logs_tail(
         raise HTTPException(404, f"unknown log: {name}")
 
 
-@ops.get("/jobs")
+@ops.get("/jobs", responses={200: {"model": list[m.JobInfo]}})
 def jobs_list() -> list[dict]:
     return jobs.list_jobs()
 
 
-@ops.post("/jobs/{name}/start")
+@ops.post("/jobs/{name}/start", responses={200: {"model": m.ActionResult}})
 def jobs_start(name: str, params: dict = Body(default={})) -> dict:
     try:
         return jobs.start(name, params)
@@ -584,7 +585,7 @@ def jobs_start(name: str, params: dict = Body(default={})) -> dict:
         raise HTTPException(409, str(exc))
 
 
-@ops.post("/jobs/{name}/stop")
+@ops.post("/jobs/{name}/stop", responses={200: {"model": m.ActionResult}})
 def jobs_stop(name: str) -> dict:
     try:
         return jobs.stop(name)
@@ -592,14 +593,14 @@ def jobs_stop(name: str) -> dict:
         raise HTTPException(404, f"unknown job: {name}")
 
 
-@ops.post("/throttle/{profile}")
+@ops.post("/throttle/{profile}", responses={200: {"model": m.ThrottleState}})
 def throttle(profile: Literal["polite", "full", "env"]) -> dict:
     """Embedding throughput profile — read by embedders at each pass, so it
     applies within about a minute without restarting anything."""
     return {"embed_profile": service.set_embed_profile(get_settings(), profile)}
 
 
-@ops.get("/loops")
+@ops.get("/loops", responses={200: {"model": m.LoopsState}})
 def loops_state() -> dict:
     """Per-source loop desired-state + running, and whether the supervisor is
     alive. Lightweight (pgrep + one control read) so the console control panel
@@ -607,7 +608,7 @@ def loops_state() -> dict:
     return service.supervisor_status(get_settings())
 
 
-@ops.post("/loops/{source}")
+@ops.post("/loops/{source}", responses={200: {"model": m.ActionResult}})
 def loop_set(source: str, params: dict = Body(default={})) -> dict:
     """Turn an embed loop on/off (desired-state). `off` stops it and keeps it off
     — `windex up` and the watchdog both honor the flag, so it won't come back."""
@@ -617,7 +618,7 @@ def loop_set(source: str, params: dict = Body(default={})) -> dict:
         raise HTTPException(404, f"unknown source: {source}")
 
 
-@ops.post("/ingest/{source}")
+@ops.post("/ingest/{source}", responses={200: {"model": m.ActionResult}})
 def ingest_set(source: str, params: dict = Body(default={})) -> dict:
     """Turn a source's auto-ingest on/off (desired-state). Off means the refresh
     sweep and the scheduler skip fetching it; a manual 'check now' still runs."""
@@ -627,38 +628,38 @@ def ingest_set(source: str, params: dict = Body(default={})) -> dict:
         raise HTTPException(404, f"unknown source: {source}")
 
 
-@ops.post("/system/loops")
+@ops.post("/system/loops", responses={200: {"model": m.ActionResult}})
 def loops_bulk(params: dict = Body(default={})) -> dict:
     """Bulk on/off for every embed loop ('start all' / 'stop all')."""
     return {"loops": service.set_all_loops_enabled(get_settings(), bool(params.get("enabled", True)))}
 
 
-@ops.post("/system/up")
+@ops.post("/system/up", responses={200: {"model": m.ActionResult}})
 def system_up() -> dict:
     """Reconcile to desired state — detached `windex up` (starts enabled loops
     and serve that are down)."""
     return service.system_up(get_settings())
 
 
-@ops.post("/system/restart")
+@ops.post("/system/restart", responses={200: {"model": m.ActionResult}})
 def system_restart() -> dict:
     """Bounce the loops — stop every one, then `windex up` restarts the enabled."""
     return service.restart_loops(get_settings())
 
 
-@ops.post("/system/refresh")
+@ops.post("/system/refresh", responses={200: {"model": m.ActionResult}})
 def system_refresh(params: dict = Body(default={})) -> dict:
     """Kick off a freshness sweep — detached `windex refresh [--source …]`."""
     return service.run_refresh(get_settings(), params.get("sources") or [])
 
 
-@ops.get("/freshness")
+@ops.get("/freshness", responses={200: {"model": list[m.SourceFreshness]}})
 def freshness_state() -> list[dict]:
     """Per-source indexed/pending counts + last embed-loop activity."""
     return service.freshness(get_settings())
 
 
-@ops.get("/datasets/{source}/stats")
+@ops.get("/datasets/{source}/stats", responses={200: {"model": m.DatasetStats}})
 def dataset_stats(source: str) -> dict:
     """Per-dataset detail (freshness row-click): counts by pipeline status +
     content date range."""
@@ -668,14 +669,14 @@ def dataset_stats(source: str) -> dict:
         raise HTTPException(404, f"unknown source: {source}")
 
 
-@ops.get("/schedule")
+@ops.get("/schedule", responses={200: {"model": list[m.ScheduleEntry]}})
 def schedule_state() -> list[dict]:
     """The editable schedule entries with running + last-run — what the console
     schedule editor reads (name, kind, target, hour, minute, weekday, enabled)."""
     return service.schedule_status(get_settings())
 
 
-@ops.put("/schedule/{name}")
+@ops.put("/schedule/{name}", responses={200: {"model": m.ScheduleEntry}})
 def schedule_upsert(name: str, params: dict = Body(default={})) -> dict:
     """Create or edit a schedule entry. Body: any of hour/minute/weekday/enabled
     /target/kind. Editing an existing entry preserves unspecified fields;
@@ -686,7 +687,7 @@ def schedule_upsert(name: str, params: dict = Body(default={})) -> dict:
         raise HTTPException(422, str(exc))
 
 
-@ops.delete("/schedule/{name}")
+@ops.delete("/schedule/{name}", responses={200: {"model": m.ActionResult}})
 def schedule_delete(name: str) -> dict:
     """Delete a schedule entry (404 if it doesn't exist)."""
     try:
@@ -695,7 +696,7 @@ def schedule_delete(name: str) -> dict:
         raise HTTPException(404, f"unknown scheduled job: {name}")
 
 
-@ops.post("/schedule/{name}/run")
+@ops.post("/schedule/{name}/run", responses={200: {"model": m.ActionResult}})
 def schedule_run(name: str) -> dict:
     """Run a scheduled entry now (detached), ignoring the ingest desired-state
     flag (a manual run is an explicit 'check now')."""
@@ -705,14 +706,19 @@ def schedule_run(name: str) -> dict:
         raise HTTPException(404, f"unknown scheduled job: {name}")
 
 
-@ops.get("/activity")
+@ops.get("/activity", responses={200: {"model": list[m.ActivityItem]}})
 def activity_state() -> list[dict]:
     """Watchable things for the log drawer: actions, loops, services — with
     running state, last activity, and crash flag. Tail any via GET /v1/logs/{name}."""
     return service.activity(get_settings())
 
 
-@ops.get("/events")
+@ops.get("/events",
+         # No JSON body to describe: this is a stream. Declaring the
+         # media type is the honest answer, and it stops the schema
+         # advertising an empty object a client would try to decode.
+         responses={200: {"content": {"text/event-stream": {}},
+                           "description": "Server-sent events."}})
 async def events(ticks: int | None = Query(None, ge=1, le=100)) -> StreamingResponse:
     """SSE stream for the dashboard: `stats` every ~2s, `recent` only when it
     changes, `timeseries` every ~16s. REST endpoints remain the poll/agent API;
@@ -762,14 +768,14 @@ class SettingsPatch(BaseModel):
     values: dict
 
 
-@ops.get("/settings")
+@ops.get("/settings", responses={200: {"model": m.SettingsAll}})
 def source_settings_all() -> dict:
     """Every scope: field schema, effective value, and where the value came
     from (default | env | db)."""
     return {"scopes": service.all_source_settings(get_settings())}
 
 
-@ops.get("/settings/{scope}")
+@ops.get("/settings/{scope}", responses={200: {"model": m.SettingsScope}})
 def source_settings_get(scope: str) -> dict:
     out = service.source_settings(get_settings(), scope)
     if out is None:
@@ -777,7 +783,7 @@ def source_settings_get(scope: str) -> dict:
     return out
 
 
-@ops.patch("/settings/{scope}", dependencies=[Depends(require_write_token)])
+@ops.patch("/settings/{scope}", responses={200: {"model": m.SettingsScope}}, dependencies=[Depends(require_write_token)])
 def source_settings_patch(scope: str, body: SettingsPatch) -> dict:
     """Set one or more overrides. 422 for an unknown key, a key belonging to a
     different scope, or a value of the wrong type; numbers are clamped to their
@@ -791,7 +797,7 @@ def source_settings_patch(scope: str, body: SettingsPatch) -> dict:
     return out
 
 
-@ops.delete("/settings/{scope}/{key}",
+@ops.delete("/settings/{scope}/{key}", responses={200: {"model": m.SettingsScope}},
             dependencies=[Depends(require_write_token)])
 def source_settings_revert(scope: str, key: str) -> dict:
     """Drop one override so the key falls back to env, then the code default."""
@@ -912,7 +918,7 @@ def crawl_console() -> RedirectResponse:
     return RedirectResponse("/manage#crawl", status_code=308)
 
 
-@ops.post("/crawl/preview", dependencies=[Depends(require_write_token)])
+@ops.post("/crawl/preview", responses={200: {"model": m.CrawlPreview}}, dependencies=[Depends(require_write_token)])
 async def crawl_preview(body: CrawlPreview) -> dict:
     """Dry run: fetch only the seed(s) and report what WOULD be crawled.
 
@@ -926,7 +932,7 @@ async def crawl_preview(body: CrawlPreview) -> dict:
         raise HTTPException(422, str(exc))
 
 
-@ops.post("/crawl", dependencies=[Depends(require_write_token)], status_code=202)
+@ops.post("/crawl", responses={202: {"model": m.CrawlQueued}}, dependencies=[Depends(require_write_token)], status_code=202)
 async def crawl_start(body: CrawlStart) -> dict:
     """Queue a crawl. 202 + {run_id} — the worker picks it up; 422 on a bad
     recipe or source name."""
@@ -938,13 +944,13 @@ async def crawl_start(body: CrawlStart) -> dict:
         raise HTTPException(422, str(exc))
 
 
-@ops.get("/crawl/runs")
+@ops.get("/crawl/runs", responses={200: {"model": m.CrawlRunList}})
 def crawl_runs(source: str | None = None,
                limit: int = Query(50, ge=1, le=200)) -> dict:
     return {"runs": service.crawl_runs(get_settings(), source, limit)}
 
 
-@ops.get("/crawl/runs/{run_id}")
+@ops.get("/crawl/runs/{run_id}", responses={200: {"model": m.CrawlRunDetail}})
 def crawl_run_get(run_id: int) -> dict:
     run = service.crawl_run_get(get_settings(), run_id)
     if run is None:
@@ -952,7 +958,7 @@ def crawl_run_get(run_id: int) -> dict:
     return run
 
 
-@ops.post("/crawl/runs/{run_id}/cancel", dependencies=[Depends(require_write_token)])
+@ops.post("/crawl/runs/{run_id}/cancel", responses={200: {"model": m.CrawlCancelled}}, dependencies=[Depends(require_write_token)])
 def crawl_cancel(run_id: int) -> dict:
     out = service.crawl_cancel(get_settings(), run_id)
     if out is None:
@@ -960,7 +966,12 @@ def crawl_cancel(run_id: int) -> dict:
     return out
 
 
-@ops.get("/crawl/runs/{run_id}/events")
+@ops.get("/crawl/runs/{run_id}/events",
+         # No JSON body to describe: this is a stream. Declaring the
+         # media type is the honest answer, and it stops the schema
+         # advertising an empty object a client would try to decode.
+         responses={200: {"content": {"text/event-stream": {}},
+                           "description": "Server-sent events."}})
 async def crawl_events(run_id: int,
                        ticks: int | None = Query(None, ge=1, le=10_000)
                        ) -> StreamingResponse:

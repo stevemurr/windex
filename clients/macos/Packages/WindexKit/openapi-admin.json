@@ -1,6 +1,144 @@
 {
   "components": {
     "schemas": {
+      "ActionResult": {
+        "additionalProperties": true,
+        "description": "A mutating call's acknowledgement. Shapes vary by action (each returns the\nstate it just set), so only the common keys are declared.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          }
+        },
+        "title": "ActionResult",
+        "type": "object"
+      },
+      "ActivityItem": {
+        "additionalProperties": true,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "last_ts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Ts"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "running": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Running"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ActivityItem",
+        "type": "object"
+      },
+      "ControlState": {
+        "additionalProperties": true,
+        "properties": {
+          "indexing": {
+            "title": "Indexing",
+            "type": "string"
+          }
+        },
+        "required": [
+          "indexing"
+        ],
+        "title": "ControlState",
+        "type": "object"
+      },
+      "CrawlCancelled": {
+        "additionalProperties": true,
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "integer"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "CrawlCancelled",
+        "type": "object"
+      },
       "CrawlDedup": {
         "additionalProperties": false,
         "properties": {
@@ -121,7 +259,7 @@
         "title": "CrawlLimits",
         "type": "object"
       },
-      "CrawlPreview": {
+      "CrawlPreview-Input": {
         "additionalProperties": false,
         "properties": {
           "dedup": {
@@ -202,6 +340,365 @@
           }
         },
         "title": "CrawlPreview",
+        "type": "object"
+      },
+      "CrawlPreview-Output": {
+        "additionalProperties": true,
+        "description": "A dry run over the seeds only: fetches, writes nothing.\n\n`suggest` is the affordance worth preserving \u2014 when every link lives under a\ndifferent prefix than the seed, it proposes the one that would actually work,\nwhich turns a zero-result crawl into a one-click fix.",
+        "properties": {
+          "in_scope": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "In Scope"
+          },
+          "recipe": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipe"
+          },
+          "rejected": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Rejected",
+            "type": "object"
+          },
+          "sample": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample"
+          },
+          "seeds": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Seeds",
+            "type": "array"
+          },
+          "suggest": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggest"
+          },
+          "truncated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Truncated"
+          },
+          "urls": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Urls",
+            "type": "array"
+          }
+        },
+        "title": "CrawlPreview",
+        "type": "object"
+      },
+      "CrawlQueued": {
+        "additionalProperties": true,
+        "properties": {
+          "recipe": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipe"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "integer"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "CrawlQueued",
+        "type": "object"
+      },
+      "CrawlRun": {
+        "additionalProperties": true,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "recipe": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipe"
+          },
+          "requested_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested At"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "stats": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stats"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "CrawlRun",
+        "type": "object"
+      },
+      "CrawlRunDetail": {
+        "additionalProperties": true,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "recipe": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipe"
+          },
+          "requested_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested At"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "stats": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stats"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "urls": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Urls",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "CrawlRunDetail",
+        "type": "object"
+      },
+      "CrawlRunList": {
+        "additionalProperties": true,
+        "properties": {
+          "runs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CrawlRun"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "title": "CrawlRunList",
         "type": "object"
       },
       "CrawlScope": {
@@ -361,6 +858,61 @@
         "title": "CrawlStart",
         "type": "object"
       },
+      "DatasetStats": {
+        "additionalProperties": true,
+        "properties": {
+          "by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "By Status",
+            "type": "object"
+          },
+          "content_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content From"
+          },
+          "content_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content To"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "DatasetStats",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -372,6 +924,1030 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "Health": {
+        "additionalProperties": true,
+        "properties": {
+          "auth_required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Required"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "uptime_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uptime S"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Health",
+        "type": "object"
+      },
+      "JobInfo": {
+        "additionalProperties": true,
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "confirm": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirm"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "last_log": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Log"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Params",
+            "type": "object"
+          },
+          "pids": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Pids",
+            "type": "array"
+          },
+          "running": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Running"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "JobInfo",
+        "type": "object"
+      },
+      "LogSource": {
+        "additionalProperties": true,
+        "properties": {
+          "available": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "mtime": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mtime"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LogSource",
+        "type": "object"
+      },
+      "LogTail": {
+        "additionalProperties": true,
+        "properties": {
+          "available": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available"
+          },
+          "lines": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "truncated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Truncated"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LogTail",
+        "type": "object"
+      },
+      "LoopState": {
+        "additionalProperties": true,
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "ingest_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingest Enabled"
+          },
+          "log": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Log"
+          },
+          "pids": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Pids",
+            "type": "array"
+          },
+          "running": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Running"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "LoopState",
+        "type": "object"
+      },
+      "LoopsState": {
+        "additionalProperties": true,
+        "properties": {
+          "indexing_paused": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Indexing Paused"
+          },
+          "loops": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/LoopState"
+            },
+            "title": "Loops",
+            "type": "array"
+          },
+          "watchdog_running": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watchdog Running"
+          }
+        },
+        "title": "LoopsState",
+        "type": "object"
+      },
+      "RecentDoc": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "indexed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Indexed At"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "ts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ts"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "RecentDoc",
+        "type": "object"
+      },
+      "Registry": {
+        "additionalProperties": true,
+        "description": "The module palette. The graph editor renders nodes, connection rules and\nevery node inspector from this, so it is served whole and cached client-side\nagainst its ETag rather than queried piecemeal.",
+        "properties": {
+          "always_before_load": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Always Before Load",
+            "type": "array"
+          },
+          "kinds": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Kinds",
+            "type": "array"
+          },
+          "modules": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Modules",
+            "type": "array"
+          },
+          "port_types": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Port Types",
+            "type": "object"
+          },
+          "registry_version": {
+            "title": "Registry Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "registry_version"
+        ],
+        "title": "Registry",
+        "type": "object"
+      },
+      "ScheduleEntry": {
+        "additionalProperties": true,
+        "properties": {
+          "cadence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cadence"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "hour": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hour"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "last_run": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run"
+          },
+          "last_run_ts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run Ts"
+          },
+          "minute": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minute"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "running": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Running"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "weekday": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weekday"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ScheduleEntry",
+        "type": "object"
+      },
+      "SearchMetrics": {
+        "additionalProperties": true,
+        "properties": {
+          "by_source": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "By Source",
+            "type": "object"
+          },
+          "degraded": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degraded"
+          },
+          "degraded_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degraded Pct"
+          },
+          "embed_p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embed P95 Ms"
+          },
+          "p50_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50 Ms"
+          },
+          "p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Ms"
+          },
+          "p99_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P99 Ms"
+          },
+          "search_p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search P95 Ms"
+          },
+          "searches": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Searches"
+          },
+          "window_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Minutes"
+          }
+        },
+        "title": "SearchMetrics",
+        "type": "object"
+      },
+      "SettingsAll": {
+        "additionalProperties": true,
+        "properties": {
+          "scopes": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SettingsScope"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "title": "SettingsAll",
+        "type": "object"
+      },
+      "SettingsField": {
+        "additionalProperties": true,
+        "description": "One control. A superset of `Param.describe()` plus the resolved value and\nwhere it came from \u2014 the client renders entirely from this and hardcodes no\nfield. See windex/schema/param.py for what each attribute means.",
+        "properties": {
+          "advanced": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advanced"
+          },
+          "choices": {
+            "default": [],
+            "items": {},
+            "title": "Choices",
+            "type": "array"
+          },
+          "clamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clamp"
+          },
+          "clampNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clampnote"
+          },
+          "dependsOn": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dependson"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "editor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Editor"
+          },
+          "enforce": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enforce"
+          },
+          "help": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Help"
+          },
+          "hi": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hi"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "lo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lo"
+          },
+          "lockedReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lockedreason"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
+          "required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required"
+          },
+          "secret": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secret"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "SettingsField",
         "type": "object"
       },
       "SettingsPatch": {
@@ -386,6 +1962,151 @@
           "values"
         ],
         "title": "SettingsPatch",
+        "type": "object"
+      },
+      "SettingsScope": {
+        "additionalProperties": true,
+        "properties": {
+          "fields": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SettingsField"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "SettingsScope",
+        "type": "object"
+      },
+      "SourceFreshness": {
+        "additionalProperties": true,
+        "properties": {
+          "indexed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Indexed"
+          },
+          "last_embed_ts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Embed Ts"
+          },
+          "last_update_ts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Update Ts"
+          },
+          "pending": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "SourceFreshness",
+        "type": "object"
+      },
+      "ThrottleState": {
+        "additionalProperties": true,
+        "properties": {
+          "embed_profile": {
+            "title": "Embed Profile",
+            "type": "string"
+          }
+        },
+        "required": [
+          "embed_profile"
+        ],
+        "title": "ThrottleState",
+        "type": "object"
+      },
+      "TimeseriesPoint": {
+        "additionalProperties": true,
+        "properties": {
+          "docs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Docs"
+          },
+          "ingested": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingested"
+          },
+          "mb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mb"
+          },
+          "t": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T"
+          }
+        },
+        "title": "TimeseriesPoint",
         "type": "object"
       },
       "ValidationError": {
@@ -427,6 +2148,124 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "ValidationReport": {
+        "additionalProperties": true,
+        "properties": {
+          "errors": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "graph": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph"
+          },
+          "normalized": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized"
+          },
+          "valid": {
+            "title": "Valid",
+            "type": "boolean"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "valid"
+        ],
+        "title": "ValidationReport",
+        "type": "object"
+      },
+      "WhoAmI": {
+        "additionalProperties": true,
+        "properties": {
+          "auth_required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Required"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "scopes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "WhoAmI",
+        "type": "object"
+      },
+      "WorkersState": {
+        "additionalProperties": true,
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          }
+        },
+        "title": "WorkersState",
+        "type": "object"
       }
     }
   },
@@ -465,10 +2304,11 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "$ref": "#/components/schemas/ActivityItem",
                     "additionalProperties": true,
                     "type": "object"
                   },
-                  "title": "Response Activity State",
+                  "title": "Response 200 Activity State",
                   "type": "array"
                 }
               }
@@ -528,6 +2368,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ControlState",
                   "additionalProperties": true,
                   "title": "Response Control",
                   "type": "object"
@@ -587,6 +2428,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/CrawlQueued",
                   "additionalProperties": true,
                   "title": "Response Crawl Start",
                   "type": "object"
@@ -635,7 +2477,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CrawlPreview"
+                "$ref": "#/components/schemas/CrawlPreview-Input"
               }
             }
           },
@@ -646,6 +2488,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/CrawlPreview-Output",
                   "additionalProperties": true,
                   "title": "Response Crawl Preview",
                   "type": "object"
@@ -722,6 +2565,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/CrawlRunList",
                   "additionalProperties": true,
                   "title": "Response Crawl Runs",
                   "type": "object"
@@ -779,6 +2623,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/CrawlRunDetail",
                   "additionalProperties": true,
                   "title": "Response Crawl Run Get",
                   "type": "object"
@@ -836,6 +2681,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/CrawlCancelled",
                   "additionalProperties": true,
                   "title": "Response Crawl Cancel",
                   "type": "object"
@@ -912,9 +2758,10 @@
             "content": {
               "application/json": {
                 "schema": {}
-              }
+              },
+              "text/event-stream": {}
             },
-            "description": "Successful Response"
+            "description": "Server-sent events."
           },
           "422": {
             "content": {
@@ -966,6 +2813,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/DatasetStats",
                   "additionalProperties": true,
                   "title": "Response Dataset Stats",
                   "type": "object"
@@ -1033,9 +2881,10 @@
             "content": {
               "application/json": {
                 "schema": {}
-              }
+              },
+              "text/event-stream": {}
             },
-            "description": "Successful Response"
+            "description": "Server-sent events."
           },
           "422": {
             "content": {
@@ -1079,10 +2928,11 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "$ref": "#/components/schemas/SourceFreshness",
                     "additionalProperties": true,
                     "type": "object"
                   },
-                  "title": "Response Freshness State",
+                  "title": "Response 200 Freshness State",
                   "type": "array"
                 }
               }
@@ -1130,6 +2980,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/Health",
                   "additionalProperties": true,
                   "title": "Response Admin Health",
                   "type": "object"
@@ -1200,6 +3051,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ActionResult",
                   "additionalProperties": true,
                   "title": "Response Ingest Set",
                   "type": "object"
@@ -1249,10 +3101,11 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "$ref": "#/components/schemas/JobInfo",
                     "additionalProperties": true,
                     "type": "object"
                   },
-                  "title": "Response Jobs List",
+                  "title": "Response 200 Jobs List",
                   "type": "array"
                 }
               }
@@ -1320,6 +3173,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ActionResult",
                   "additionalProperties": true,
                   "title": "Response Jobs Start",
                   "type": "object"
@@ -1377,6 +3231,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ActionResult",
                   "additionalProperties": true,
                   "title": "Response Jobs Stop",
                   "type": "object"
@@ -1426,10 +3281,11 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "$ref": "#/components/schemas/LogSource",
                     "additionalProperties": true,
                     "type": "object"
                   },
-                  "title": "Response Logs List",
+                  "title": "Response 200 Logs List",
                   "type": "array"
                 }
               }
@@ -1535,6 +3391,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/LogTail",
                   "additionalProperties": true,
                   "title": "Response Logs Tail",
                   "type": "object"
@@ -1584,6 +3441,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/LoopsState",
                   "additionalProperties": true,
                   "title": "Response Loops State",
                   "type": "object"
@@ -1654,6 +3512,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ActionResult",
                   "additionalProperties": true,
                   "title": "Response Loop Set",
                   "type": "object"
@@ -1715,6 +3574,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/SearchMetrics",
                   "additionalProperties": true,
                   "title": "Response Metrics",
                   "type": "object"
@@ -1776,10 +3636,11 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "$ref": "#/components/schemas/RecentDoc",
                     "additionalProperties": true,
                     "type": "object"
                   },
-                  "title": "Response Recent",
+                  "title": "Response 200 Recent",
                   "type": "array"
                 }
               }
@@ -1840,10 +3701,11 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "$ref": "#/components/schemas/RecentDoc",
                     "additionalProperties": true,
                     "type": "object"
                   },
-                  "title": "Response Recent Embedded",
+                  "title": "Response 200 Recent Embedded",
                   "type": "array"
                 }
               }
@@ -1904,10 +3766,11 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "$ref": "#/components/schemas/RecentDoc",
                     "additionalProperties": true,
                     "type": "object"
                   },
-                  "title": "Response Recent Indexed",
+                  "title": "Response 200 Recent Indexed",
                   "type": "array"
                 }
               }
@@ -1967,6 +3830,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ValidationReport",
                   "additionalProperties": true,
                   "title": "Response Admin Recipe Validate",
                   "type": "object"
@@ -2016,6 +3880,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/Registry",
                   "additionalProperties": true,
                   "title": "Response Admin Registry",
                   "type": "object"
@@ -2066,10 +3931,11 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "$ref": "#/components/schemas/ScheduleEntry",
                     "additionalProperties": true,
                     "type": "object"
                   },
-                  "title": "Response Schedule State",
+                  "title": "Response 200 Schedule State",
                   "type": "array"
                 }
               }
@@ -2126,6 +3992,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ActionResult",
                   "additionalProperties": true,
                   "title": "Response Schedule Delete",
                   "type": "object"
@@ -2194,6 +4061,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ScheduleEntry",
                   "additionalProperties": true,
                   "title": "Response Schedule Upsert",
                   "type": "object"
@@ -2252,6 +4120,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ActionResult",
                   "additionalProperties": true,
                   "title": "Response Schedule Run",
                   "type": "object"
@@ -2301,6 +4170,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/SettingsAll",
                   "additionalProperties": true,
                   "title": "Response Source Settings All",
                   "type": "object"
@@ -2358,6 +4228,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/SettingsScope",
                   "additionalProperties": true,
                   "title": "Response Source Settings Get",
                   "type": "object"
@@ -2424,6 +4295,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/SettingsScope",
                   "additionalProperties": true,
                   "title": "Response Source Settings Patch",
                   "type": "object"
@@ -2491,6 +4363,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/SettingsScope",
                   "additionalProperties": true,
                   "title": "Response Source Settings Revert",
                   "type": "object"
@@ -2552,6 +4425,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ActionResult",
                   "additionalProperties": true,
                   "title": "Response Loops Bulk",
                   "type": "object"
@@ -2613,6 +4487,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ActionResult",
                   "additionalProperties": true,
                   "title": "Response System Refresh",
                   "type": "object"
@@ -2662,6 +4537,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ActionResult",
                   "additionalProperties": true,
                   "title": "Response Refresh Stats",
                   "type": "object"
@@ -2711,6 +4587,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ActionResult",
                   "additionalProperties": true,
                   "title": "Response System Restart",
                   "type": "object"
@@ -2760,6 +4637,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ActionResult",
                   "additionalProperties": true,
                   "title": "Response System Up",
                   "type": "object"
@@ -2823,6 +4701,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ThrottleState",
                   "additionalProperties": true,
                   "title": "Response Throttle",
                   "type": "object"
@@ -2884,10 +4763,11 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "$ref": "#/components/schemas/TimeseriesPoint",
                     "additionalProperties": true,
                     "type": "object"
                   },
-                  "title": "Response Timeseries",
+                  "title": "Response 200 Timeseries",
                   "type": "array"
                 }
               }
@@ -2935,6 +4815,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/WhoAmI",
                   "additionalProperties": true,
                   "title": "Response Admin Whoami",
                   "type": "object"
@@ -2983,6 +4864,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/WorkersState",
                   "additionalProperties": true,
                   "title": "Response Workers",
                   "type": "object"
