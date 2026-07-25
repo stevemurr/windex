@@ -19,7 +19,7 @@ exactly the upstream it was written for.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from windex.schema.param import Param
 

@@ -18,6 +18,12 @@ dependencies = [
     # 2026-07-19 on real data: 1.8x on GH Archive event parse, 5.8-9.4x on
     # API response dumps, 1.3x on wiki cirrus lines.
     "orjson>=3.9",
+    # Cron expansion for the trigger scheduler (src/windex/scheduler/). A base
+    # dependency, not an extra: the scheduler loop is an always-on member of
+    # `windex up`, so a box that can serve must also be able to tick. Hand-rolled
+    # calendar arithmetic is explicitly out — the bug this replaces is a DST one
+    # (schedule.hour claimed local time while _is_due compared datetime.now()).
+    "croniter>=2.0",
 ]
 
 [project.optional-dependencies]
