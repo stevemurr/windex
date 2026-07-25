@@ -199,7 +199,8 @@ struct RegistryCacheTests {
         #expect(second.registryVersion == 7)
         #expect(server.requests.count == 2)
         #expect(server.requests[1].header("If-None-Match") == "W/\"registry-7\"")
-        await #expect(!cache.wasStale)
+        let wasStale = await cache.wasStale
+        #expect(!wasStale)
     }
 
     /// A stale palette beats an editor that cannot open. The backend blinking
@@ -226,7 +227,8 @@ struct RegistryCacheTests {
         // Nothing is listening now; the cached copy should still come back.
         let registry = try await cache.load()
         #expect(registry.registryVersion == 7)
-        await #expect(cache.wasStale, "the UI needs to know it is showing a stale palette")
+        let wasStale = await cache.wasStale
+        #expect(wasStale, "the UI needs to know it is showing a stale palette")
         #expect(port > 0)
     }
 

@@ -67,7 +67,8 @@ struct PairingTests {
         }
         #expect(who.ok)
         #expect(who.scopes == ["admin"])
-        await #expect(client.hasToken)
+        let hasToken = await client.hasToken
+        #expect(hasToken)
         #expect(server.requests.map(\.path)
             == ["/admin/v1/health", "/admin/v1/whoami"])
     }
@@ -89,7 +90,8 @@ struct PairingTests {
         await #expect(throws: WindexError.self) {
             _ = try await client.pair(with: "wrong")
         }
-        await #expect(!client.hasToken)
+        let hasToken = await client.hasToken
+        #expect(!hasToken)
     }
 
     @Test("401 maps to .unauthorized and asks for re-pairing")
