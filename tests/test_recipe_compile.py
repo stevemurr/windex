@@ -183,6 +183,15 @@ def test_worker_default_resolver_uses_the_executable_recipe_registry():
     assert default_resolve("push.docs") is C.resolve("push.docs")
 
 
+def test_http_get_default_accepts_feed_and_sitemap_media_types():
+    from windex.recipe import registry
+
+    module = registry.MODULES["http.get"]
+    field = next(field for field in module.fields if field.key == "allowed_types")
+
+    assert {"xml", "rss", "atom"} <= set(field.default.split(","))
+
+
 def test_unavailable_modules_is_unique_and_sorted(monkeypatch):
     from windex.recipe import runners
 
