@@ -97,6 +97,30 @@ _ORDER = {
 }
 
 
+def _github_shard_rows(today: date, threshold: int) -> list[tuple[str, dict]]:
+    """One bounded Search API unit per creation day.
+
+    GitHub's 1,000-result search window may still require pagination within a
+    busy day, but a day is a safe atomic resume boundary. A single
+    2008..today unit cannot honor the worker's slice contract: preemption would
+    either discard hours of pagination or force the fetcher to hold one task for
+    the whole historical sweep.
+    """
+    first = date(2008, 1, 1)
+    return [
+        (
+            f"{day.isoformat()}..{day.isoformat()}@{threshold}",
+            {
+                "from": day.isoformat(),
+                "to": day.isoformat(),
+                "star_threshold": threshold,
+            },
+        )
+        for offset in range((today - first).days + 1)
+        for day in (first + timedelta(days=offset),)
+    ]
+
+
 def _predicate(config: dict) -> tuple[sql.Composable, list[Any]]:
     name = config.get("predicate", "token_moved")
     if name == "unseen":
@@ -135,23 +159,22 @@ def state_pending(ctx: TaskContext) -> SliceResult:
     batch = int(ctx.config.get("batch", 50))
     if source == "gh" and store == "gh_shards":
         threshold = int(ctx.params.get("star_threshold", 10))
-        first, last = "2008-01-01", date.today().isoformat()
-        key = f"{first}..{last}@{threshold}"
+        rows = _github_shard_rows(date.today(), threshold)
         with ctx.conn.cursor() as cur:
-            cur.execute(
+            cur.executemany(
                 """
                 INSERT INTO source_units
                        (source, store, unit_key, ord, upstream, attrs)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (source, store, unit_key) DO NOTHING
                 """,
-                (
-                    source, store, key, first,
-                    Jsonb({"from": first, "to": last,
-                           "star_threshold": threshold}),
-                    Jsonb({"from": first, "to": last,
-                           "star_threshold": threshold}),
-                ),
+                [
+                    (
+                        source, store, key, payload["from"],
+                        Jsonb(payload), Jsonb(payload),
+                    )
+                    for key, payload in rows
+                ],
             )
     order_name = str(ctx.config.get("order", "ord"))
     order = _ORDER.get(order_name)

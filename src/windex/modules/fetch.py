@@ -757,9 +757,9 @@ def _oai(ctx: TaskContext, unit: WorkUnit, client: httpx.Client) -> list[RawBlob
         _, token = parse_records(response.content)
         if not token:
             return outputs
-        if ctx.should_yield():
-            raise RuntimeError(
-                "OAI pagination reached a slice boundary; retrying its atomic window")
+        # A date window is the replace/resume boundary. Finish it even when the
+        # supervisor requests a yield; the heartbeat thread keeps the lease
+        # alive and _run_batches yields cleanly before claiming another window.
         time.sleep(interval)
 
 
@@ -846,9 +846,9 @@ def _github_search(ctx: TaskContext, unit: WorkUnit,
             "star_threshold": threshold, "repos": len(shard_items),
             "capped": total > cap,
         })
-        if ctx.should_yield():
-            raise RuntimeError(
-                "GitHub pagination reached a slice boundary; retrying its atomic shard")
+        # state.pending emits one creation day per input unit. Complete that
+        # bounded unit atomically, then _run_batches observes the yield before
+        # claiming another day.
         time.sleep(interval / len(tokens))
     return [RawBlob(
         ref=unit.ref,

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import gzip
 import json
+from datetime import date
+from types import SimpleNamespace
 
 import httpx
 from psycopg.types.json import Jsonb
@@ -11,10 +13,12 @@ from psycopg.types.json import Jsonb
 from windex.modules import fetch as fetch_module
 from windex.modules.catalog import list_json_manifest, list_lines, list_path_manifest_gz
 from windex.modules.collect import store_repos, store_upsert
-from windex.modules.discover import state_pending, static_once
+from windex.modules.discover import _github_shard_rows, state_pending, static_once
 from windex.modules.fetch import (
+    _github_search,
     _hf_root_pages,
     _hf_sync_blob,
+    _oai,
     _page,
     _page_limiter,
 )
@@ -147,6 +151,90 @@ def test_recipe_page_retries_429_inside_task_budget(pg, monkeypatch):
     assert limiter.seen == [429, 200]
     assert limiter.waits == 2
     assert sleeps == [7.0]
+
+
+def test_oai_finishes_atomic_window_after_yield_request(pg, monkeypatch):
+    responses = iter((b"page-1", b"page-2"))
+    client = httpx.Client(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, content=next(responses))))
+    monkeypatch.setattr(
+        "windex.arxiv.harvest.parse_records",
+        lambda body: ([], "next") if body == b"page-1" else ([], None),
+    )
+    sleeps = []
+    monkeypatch.setattr(fetch_module.time, "sleep", sleeps.append)
+    ctx, _ = _ctx(
+        pg,
+        task_id=7108,
+        source="arxiv",
+        module="http.paginate",
+        config={"request_interval": 3},
+        should_yield=lambda: True,
+    )
+    unit = WorkUnit(
+        ref=PartitionRef(store="window", key="2026-01-01..2026-01-31"),
+        payload={"from": "2026-01-01", "until": "2026-01-31"},
+    )
+
+    pages = _oai(ctx, unit, client)
+
+    assert [page.body for page in pages] == [b"page-1", b"page-2"]
+    assert sleeps == [3.0]
+
+
+def test_github_search_finishes_one_day_after_yield_request(pg, monkeypatch):
+    monkeypatch.setattr(
+        fetch_module,
+        "Settings",
+        lambda: SimpleNamespace(github_token_list=lambda: ["token"]),
+    )
+    monkeypatch.setattr(
+        "windex.github.discover._get",
+        lambda client, token, params: {"total_count": 0, "items": []},
+    )
+    monkeypatch.setattr(fetch_module.time, "sleep", lambda seconds: None)
+    ctx, _ = _ctx(
+        pg,
+        task_id=7109,
+        recipe="gh",
+        source="github",
+        module="http.paginate",
+        config={"request_interval": 2.1, "page_size": 100, "result_cap": 1000},
+        params={"star_threshold": 10},
+        should_yield=lambda: True,
+    )
+    unit = WorkUnit(
+        ref=PartitionRef(store="gh_shards", key="2026-07-01..2026-07-01@10"),
+        payload={"from": "2026-07-01", "to": "2026-07-01", "star_threshold": 10},
+    )
+
+    [result] = _github_search(ctx, unit, httpx.Client())
+
+    assert json.loads(result.body) == {
+        "items": [],
+        "shards": [{
+            "from": "2026-07-01",
+            "to": "2026-07-01",
+            "star_threshold": 10,
+            "repos": 0,
+            "capped": False,
+        }],
+    }
+
+
+def test_github_search_frontier_is_daily_and_complete():
+    rows = _github_shard_rows(date(2008, 1, 3), 10)
+
+    assert [key for key, _ in rows] == [
+        "2008-01-01..2008-01-01@10",
+        "2008-01-02..2008-01-02@10",
+        "2008-01-03..2008-01-03@10",
+    ]
+    assert rows[-1][1] == {
+        "from": "2008-01-03",
+        "to": "2008-01-03",
+        "star_threshold": 10,
+    }
 
 
 def test_hf_anchor_replay_fetches_only_banked_pages(pg, monkeypatch):
