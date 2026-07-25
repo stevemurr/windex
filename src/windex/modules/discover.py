@@ -162,6 +162,30 @@ def state_pending(ctx: TaskContext) -> SliceResult:
     if claim not in ("none", "lease"):
         raise PermanentTaskError(f"state.pending has unknown claim policy {claim!r}")
     stale = int(ctx.config.get("stale_minutes", 60))
+    anchor_filter = sql.SQL("")
+    anchor_args: list[Any] = []
+    raw_anchors = ctx.params.get("anchor_ids")
+    if source == "hf" and raw_anchors:
+        anchors = (
+            [value.strip() for value in raw_anchors.split(",")]
+            if isinstance(raw_anchors, str) else
+            [str(value).strip() for value in raw_anchors]
+        )
+        if store == "post":
+            keys = [
+                value[len("hf:blog/"):]
+                for value in anchors if value.startswith("hf:blog/")
+            ]
+        elif store == "root":
+            keys = sorted({
+                value[len("hf:"):].rsplit("/", 1)[0]
+                for value in anchors
+                if value.startswith(("hf:docs/", "hf:learn/"))
+            })
+        else:
+            keys = []
+        anchor_filter = sql.SQL("AND u.unit_key = ANY(%s)")
+        anchor_args.append(keys)
     lease = (
         sql.SQL(
             "AND (u.status <> 'processing' OR u.claimed_at IS NULL "
@@ -175,15 +199,22 @@ def state_pending(ctx: TaskContext) -> SliceResult:
          WHERE u.source = %s AND u.store = %s
            AND {pending}
            {lease}
+           {anchor_filter}
            AND NOT EXISTS (
                  SELECT 1 FROM task_units t
                   WHERE t.task_id = %s AND t.unit_key = u.unit_key)
          ORDER BY {order}
          LIMIT %s
-        """).format(pending=pending, lease=lease, order=order)
+        """).format(
+            pending=pending,
+            lease=lease,
+            anchor_filter=anchor_filter,
+            order=order,
+        )
     params: list[Any] = [source, store, *args]
     if claim == "lease":
         params.append(stale)
+    params.extend(anchor_args)
     params.extend([ctx.task_id, batch + 1])
 
     with ctx.conn.cursor() as cur:

@@ -12,7 +12,12 @@ from windex.modules import fetch as fetch_module
 from windex.modules.catalog import list_json_manifest, list_lines, list_path_manifest_gz
 from windex.modules.collect import store_repos, store_upsert
 from windex.modules.discover import state_pending, static_once
-from windex.modules.fetch import _hf_sync_blob, _page, _page_limiter
+from windex.modules.fetch import (
+    _hf_root_pages,
+    _hf_sync_blob,
+    _page,
+    _page_limiter,
+)
 from windex.modules.load import ledger_stage
 from windex.modules.receive import push_docs
 from windex.modules.transform import dedup_exact
@@ -144,6 +149,54 @@ def test_recipe_page_retries_429_inside_task_budget(pg, monkeypatch):
     assert sleeps == [7.0]
 
 
+def test_hf_anchor_replay_fetches_only_banked_pages(pg, monkeypatch):
+    llms = """# Transformers
+- [Quickstart](https://huggingface.co/docs/transformers/v5.14.0/quicktour.md)
+- [Pipelines](https://huggingface.co/docs/transformers/v5.14.0/main_classes/pipelines.md)
+"""
+    requested = []
+
+    def handler(request):
+        requested.append(request.url.path)
+        if request.url.path.endswith("llms.txt"):
+            return httpx.Response(
+                200, text=llms, headers={"content-type": "text/plain"})
+        return httpx.Response(
+            200, text="# Quickstart", headers={"content-type": "text/markdown"})
+
+    monkeypatch.setattr(fetch_module, "check_url", lambda url: None)
+    ctx, _ = _ctx(
+        pg,
+        task_id=7107,
+        recipe="hf",
+        source="hf",
+        module="http.get",
+        config={"robots": False},
+        params={"anchor_ids": ["hf:docs/transformers/quicktour"]},
+    )
+    unit = WorkUnit(
+        ref=PartitionRef(
+            store="root",
+            key="docs/transformers",
+            id_scope="hf:docs/transformers/",
+        ),
+        payload={"kind": "docs", "license": "Apache-2.0"},
+    )
+
+    pages = _hf_root_pages(
+        ctx,
+        unit,
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        object(),
+        fetch_module.HostRateLimiter(0),
+    )
+
+    assert len(pages) == 1
+    assert pages[0].meta["payload"]["path"] == "quicktour"
+    assert pages[0].ref.id_scope == "hf:docs/transformers/quicktour"
+    assert not any("pipelines" in path for path in requested)
+
+
 def test_static_once_is_durable_and_idempotent(pg):
     ctx, beats = _ctx(
         pg,
@@ -245,6 +298,34 @@ def test_state_pending_uses_recipe_not_corpus_source_as_store_namespace(pg):
     )
 
     assert state_pending(ctx).units_done == 1
+
+
+def test_state_pending_can_replay_exact_hf_anchors(pg):
+    _seed(pg, source="hf", store="post", key="wanted")
+    _seed(pg, source="hf", store="post", key="other")
+    ctx, _ = _ctx(
+        pg,
+        task_id=7106,
+        recipe="hf",
+        source="hf",
+        module="state.pending",
+        config={
+            "store": "post",
+            "predicate": "token_moved",
+            "order": "ord",
+            "batch": 20,
+        },
+        params={
+            "anchor_ids": [
+                "hf:blog/wanted",
+                "hf:docs/transformers/quicktour",
+            ],
+        },
+    )
+
+    assert state_pending(ctx).units_done == 1
+    [(key, _)] = _outputs(pg, ctx.task_id)
+    assert key == "wanted"
 
 
 def test_state_pending_yields_after_a_committed_unit_and_resumes(pg):
@@ -558,6 +639,80 @@ def test_exact_transform_and_loader_preserve_duplicate_ledger_row(
     assert rows[0][0:3] == ("hn:1", "deduped", None)
     assert rows[1][0:3] == ("hn:2", "duplicate", "hn:1")
     assert rows[0][3] and rows[1][3] is None
+
+
+def test_anchor_replay_does_not_advance_partial_source_watermark(
+        pg, tmp_path, monkeypatch):
+    from windex.worker import dag
+
+    monkeypatch.setenv("WINDEX_DATA_ROOT", str(tmp_path))
+    _seed(
+        pg,
+        source="hf",
+        store="root",
+        key="docs/transformers",
+        upstream={"llms_hash": "new"},
+        attrs={"id_scope": "hf:docs/transformers/"},
+    )
+    spec = {"corpus": {"source": "hf", "id_prefix": "hf:"}}
+    run_id = dag.submit_run(
+        pg,
+        recipe="hf",
+        source="hf",
+        spec=spec,
+        dedupe_key="anchor-watermark",
+        params={"anchor_ids": ["hf:docs/transformers/quicktour"]},
+        tasks=[
+            {"node": "extract", "module": "test.extract", "kind": "extract"},
+            {"node": "stage", "module": "ledger.stage", "kind": "load",
+             "depends_on": ["extract"]},
+        ],
+    )
+    assert run_id is not None
+    with pg.cursor() as cur:
+        cur.execute("SELECT node, id FROM run_tasks WHERE run_id = %s", (run_id,))
+        tasks = dict(cur.fetchall())
+        doc = ExtractedDoc(
+            ref=PartitionRef(
+                store="root",
+                key="docs/transformers",
+                id_scope="hf:docs/transformers/quicktour",
+            ),
+            suffix="docs/transformers/quicktour",
+            url="https://huggingface.co/docs/transformers/quicktour",
+            title="Quicktour",
+            text="A useful guide",
+        )
+        cur.execute(
+            """
+            INSERT INTO task_units
+                   (run_id, task_id, unit_key, state, outputs, finished_at)
+            VALUES (%s, %s, 'root', 'done', %s, now())
+            """,
+            (run_id, tasks["extract"], Jsonb(wire.encode_many([doc]))),
+        )
+    pg.commit()
+    stage, _ = _ctx(
+        pg,
+        run_id=run_id,
+        task_id=tasks["stage"],
+        recipe="hf",
+        source="hf",
+        node="stage",
+        module="ledger.stage",
+        config={"replace": True, "replace_scope": "partition",
+                "replace_guard": "census"},
+        spec=spec,
+        params={"anchor_ids": ["hf:docs/transformers/quicktour"]},
+    )
+
+    assert ledger_stage(stage).exhausted
+    with pg.cursor() as cur:
+        cur.execute(
+            "SELECT ingested FROM source_units "
+            "WHERE source = 'hf' AND store = 'root' "
+            "AND unit_key = 'docs/transformers'")
+        assert cur.fetchone() == (None,)
 
 
 def test_store_repos_writes_wide_table_and_advances_parent(pg):

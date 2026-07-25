@@ -76,6 +76,9 @@ def submit(conn: psycopg.Connection, *, recipe: str, settings: Settings,
     }
     input_keys = {
         "input", "documents", "partition", "conversation_id", "title", "chunks",
+        # Operational model comparisons may replay an exact, banked set without
+        # pretending that the partial set advances a source watermark.
+        "anchor_ids",
     }
     unknown = set(supplied) - config_keys - input_keys
     if unknown:

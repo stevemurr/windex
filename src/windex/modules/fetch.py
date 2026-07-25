@@ -544,17 +544,35 @@ def _hf_root_pages(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
     root = unit.ref.key.strip("/")
     pages = parse_llms(
         listing.body.decode("utf-8", errors="replace"), root)
+    raw_anchors = ctx.params.get("anchor_ids")
+    anchors = {
+        value.strip()
+        for value in (
+            raw_anchors.split(",")
+            if isinstance(raw_anchors, str) else raw_anchors or []
+        )
+        if value.strip()
+    }
     outputs = []
     for page in pages:
         version = page.get("version") or ""
         path = page["path"]
+        doc_id = f"hf:{root}/{path}"
+        if anchors and doc_id not in anchors:
+            continue
         version_part = f"{version}/" if version else ""
         url = f"https://huggingface.co/{root}/{version_part}{path}.md"
         page_unit = WorkUnit(
             ref=unit.ref.__class__(
                 store=unit.ref.store,
                 key=unit.ref.key,
-                id_scope=unit.ref.id_scope or f"hf:{root}/",
+                # An anchor replay is a deliberately partial root census. Its
+                # replace scope owns only that exact document; using the whole
+                # root here would tombstone unrelated pages.
+                id_scope=(
+                    doc_id if anchors
+                    else unit.ref.id_scope or f"hf:{root}/"
+                ),
             ),
             payload={
                 **unit.payload,

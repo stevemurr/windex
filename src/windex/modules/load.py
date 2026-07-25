@@ -482,7 +482,11 @@ def ledger_stage(ctx: TaskContext) -> SliceResult:
                         ))
                     tombstoned.update(removed)
                     vector_tombstones.update(vectors)
-            _advance_refs(ctx, docs + coverage_docs)
+            # A fixed-anchor model comparison is intentionally a partial source
+            # replay. It must not claim that the parent root/post watermark was
+            # fully ingested, or a later ordinary crawl would skip the rest.
+            if not ctx.params.get("anchor_ids"):
+                _advance_refs(ctx, docs + coverage_docs)
         else:
             coverage = ""
         finish_batch(
