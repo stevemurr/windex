@@ -210,12 +210,26 @@ def write_event(cur: psycopg.Cursor, event: str, *, run_id: int | None = None,
     partition window would otherwise get "no partition of relation found" from an
     *audit* write and lose the whole transaction it was recording. The logical
     instant goes in `data` where it costs nothing.
+
+    The savepoint covers the other half of the same hazard: using the database's
+    clock keeps a write inside the window, but the window itself runs out if
+    `init-db` has not rolled it forward in months. An audit row must never be able
+    to abort the transaction it exists to record, so the event is dropped and the
+    fire commits.
     """
-    cur.execute(
-        """INSERT INTO run_events (run_id, task_id, level, event, message, data)
-           VALUES (%s, %s, %s, %s, %s, %s)""",
-        (run_id, task_id, level, event, message, Jsonb(data or {})),
-    )
+    cur.execute("SAVEPOINT windex_event")
+    try:
+        cur.execute(
+            """INSERT INTO run_events (run_id, task_id, level, event, message, data)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (run_id, task_id, level, event, message, Jsonb(data or {})),
+        )
+    except psycopg.Error as exc:
+        cur.execute("ROLLBACK TO SAVEPOINT windex_event")
+        log.warning("run_events insert failed (%s); event %r dropped. Run "
+                    "`windex init-db` if a partition is missing.", exc, event)
+    else:
+        cur.execute("RELEASE SAVEPOINT windex_event")
 
 
 # --- reading ----------------------------------------------------------------

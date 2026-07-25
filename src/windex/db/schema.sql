@@ -666,34 +666,62 @@ CREATE TABLE IF NOT EXISTS run_events (
 CREATE INDEX IF NOT EXISTS run_events_run_idx   ON run_events (run_id, seq);
 CREATE INDEX IF NOT EXISTS run_events_error_idx ON run_events (seq) WHERE level IN ('warn','error');
 
--- Monthly partitions, rolled forward on every deploy. DROP PARTITION rather than
--- DELETE is deliberate and load-bearing: schema.sql already records that rolling
--- deletes on minhash_bands never reached autovacuum's threshold and needed
--- hand-tuned settings. task_units has the same shape (smallweb alone is ~1k
--- units/night; one 20k-page crawl is 20k rows), so retention must be O(1).
+-- Monthly partitions for the two per-run detail tables.
 --
--- Three months ahead, so a box that misses deploys for a while still has
--- somewhere to write. A DEFAULT partition is deliberately NOT created: a row
--- landing in DEFAULT makes the later CREATE for that month fail, which converts
--- a retention problem into an outage. Better to keep the window generous.
-DO $$
+-- DROP PARTITION rather than DELETE is deliberate and load-bearing: this file
+-- already records that rolling deletes on minhash_bands never reached
+-- autovacuum's threshold and needed hand-tuned settings. task_units has the same
+-- shape (smallweb alone is ~1k units/night; one 20k-page crawl is 20k rows), so
+-- retention has to be O(1).
+--
+-- A DEFAULT partition is deliberately NOT created: a row landing in it makes the
+-- later CREATE for that month fail, converting a retention problem into an
+-- outage. The cost of that choice is that the window MUST be rolled forward, and
+-- a window that runs out is not a lost log line — every claim writes a run_events
+-- row inside the claim transaction, so an exhausted window would stall the whole
+-- worker pool. Hence: this is a FUNCTION, called both here (every init-db) and
+-- from `windex maintain`, so a box that is deployed rarely still rolls forward
+-- nightly. Event writes additionally hold a SAVEPOINT as belt and braces.
+CREATE OR REPLACE FUNCTION windex_roll_partitions(
+    months_ahead integer DEFAULT 3,
+    keep_months  integer DEFAULT 0    -- 0 = create only, never drop
+) RETURNS TABLE (action text, part text) LANGUAGE plpgsql AS $windex$
 DECLARE
     tbl  text;
     m    date;
-    part text;
+    name text;
+    i    integer;
 BEGIN
     FOREACH tbl IN ARRAY ARRAY['task_units', 'run_events'] LOOP
-        FOR i IN 0..3 LOOP
+        FOR i IN 0..months_ahead LOOP
             m    := (date_trunc('month', now()) + (i || ' month')::interval)::date;
-            part := format('%s_%s', tbl, to_char(m, 'YYYYMM'));
-            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = part) THEN
+            name := format('%s_%s', tbl, to_char(m, 'YYYYMM'));
+            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = name) THEN
                 EXECUTE format(
                     'CREATE TABLE %I PARTITION OF %I FOR VALUES FROM (%L) TO (%L)',
-                    part, tbl, m, (m + interval '1 month')::date);
+                    name, tbl, m, (m + interval '1 month')::date);
+                action := 'created'; part := name; RETURN NEXT;
             END IF;
         END LOOP;
+
+        IF keep_months > 0 THEN
+            FOR name IN
+                SELECT c.relname FROM pg_inherits inh
+                JOIN pg_class c ON c.oid = inh.inhrelid
+                WHERE inh.inhparent = tbl::regclass
+                  AND c.relname ~ ('^' || tbl || '_[0-9]{6}$')
+                  AND to_date(right(c.relname, 6), 'YYYYMM')
+                      < (date_trunc('month', now()) - (keep_months || ' month')::interval)::date
+            LOOP
+                EXECUTE format('DROP TABLE %I', name);
+                action := 'dropped'; part := name; RETURN NEXT;
+            END LOOP;
+        END IF;
     END LOOP;
-END $$;
+END
+$windex$;
+
+SELECT windex_roll_partitions(3, 0);   -- create-only at init; maintain prunes
 
 -- Scoped pause, replacing control.indexing + control.loop_<src> + control.ingest_<src>.
 -- Paused work is simply not claimable, so one mechanism stops ingest, embed,

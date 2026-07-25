@@ -139,3 +139,45 @@ def migrate_schedule(conn: psycopg.Connection, *,
                          "minute": minute, "weekday": weekday},
             })
     return out
+
+
+def migrate_disable_flags(conn: psycopg.Connection, *,
+                          dry_run: bool = False) -> list[dict]:
+    """Convert `control.ingest_<src>` / `loop_<src>` = disabled into pause rows.
+
+    Without this, the scheduler cutover silently RE-ENABLES every source the
+    operator had turned off. The old `run_due` gated ingest on
+    `get_ingest_enabled`, which reads those control keys; the new scheduler reads
+    `pauses` and knows nothing about them. Two mechanisms for "don't run this",
+    and only one survives — so the flags have to be carried across, not dropped.
+
+    A disabled loop and a disabled ingest both become `source:<name>`, because the
+    new model pauses a scope rather than a mechanism: a paused source claims no
+    tasks at all, which is what "disabled" always meant in practice.
+
+    Idempotent, and it never clears a pause it did not create — an operator who
+    paused something by hand keeps their reason and their timestamp.
+    """
+    out: list[dict] = []
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT key, value FROM control "
+            "WHERE (key LIKE 'ingest\\_%%' OR key LIKE 'loop\\_%%') "
+            "  AND key NOT LIKE 'ingest\\_ts\\_%%' "
+            "  AND key NOT LIKE 'loop\\_heartbeat\\_%%' "
+            "  AND value = 'disabled'")
+        rows = cur.fetchall()
+        for key, _value in rows:
+            source = key.split("_", 1)[1]
+            scope = f"source:{source}"
+            out.append({"control_key": key, "scope": scope})
+            if dry_run:
+                continue
+            cur.execute(
+                "INSERT INTO pauses (scope, reason, paused_by) VALUES (%s, %s, %s) "
+                "ON CONFLICT (scope) DO NOTHING",
+                (scope, f"carried over from control.{key} at scheduler cutover",
+                 "migrate"))
+    if not dry_run:
+        conn.commit()
+    return out

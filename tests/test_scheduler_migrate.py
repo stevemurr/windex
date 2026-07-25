@@ -270,3 +270,61 @@ def test_migrated_triggers_are_immediately_tickable(pg_sched, add_schedule):
         {"node": "sync", "kind": "discover", "module": "wiki.sync"},
     ], now=datetime(2026, 7, 25, 3, 15, tzinfo=UTC))
     assert "ingest-cut" in [f.trigger for f in fired.fired]
+
+
+# --- the disable flags ------------------------------------------------------
+
+def test_disabled_sources_become_pauses(pg):
+    """Without this the cutover silently re-enables everything the operator had
+    turned off: `run_due` gated on control flags, the new scheduler reads pauses,
+    and only one of those survives."""
+    from windex.scheduler import migrate
+
+    with pg.cursor() as cur:
+        cur.executemany("INSERT INTO control (key, value) VALUES (%s, %s)", [
+            ("ingest_wiki", "disabled"),
+            ("loop_hn", "disabled"),
+            ("ingest_arxiv", "enabled"),        # untouched
+            ("ingest_ts_docs", "1784900000"),   # a watermark, not a flag
+            ("loop_heartbeat_hf", "1784900000"),
+        ])
+    pg.commit()
+
+    moved = migrate.migrate_disable_flags(pg)
+    assert {m["scope"] for m in moved} == {"source:wiki", "source:hn"}
+
+    with pg.cursor() as cur:
+        cur.execute("SELECT scope FROM pauses ORDER BY scope")
+        assert [r[0] for r in cur.fetchall()] == ["source:hn", "source:wiki"]
+
+
+def test_disable_migration_is_idempotent_and_preserves_a_manual_pause(pg):
+    from windex.scheduler import migrate
+
+    with pg.cursor() as cur:
+        cur.execute("INSERT INTO control (key, value) VALUES ('ingest_wiki', 'disabled')")
+        cur.execute("INSERT INTO pauses (scope, reason, paused_by) "
+                    "VALUES ('source:wiki', 'investigating a bad dump', 'murr')")
+    pg.commit()
+
+    migrate.migrate_disable_flags(pg)
+    migrate.migrate_disable_flags(pg)
+
+    with pg.cursor() as cur:
+        cur.execute("SELECT reason, paused_by FROM pauses WHERE scope = 'source:wiki'")
+        # a hand-written reason is not overwritten by the migration's boilerplate
+        assert cur.fetchone() == ("investigating a bad dump", "murr")
+
+
+def test_dry_run_reports_without_writing(pg):
+    from windex.scheduler import migrate
+
+    with pg.cursor() as cur:
+        cur.execute("INSERT INTO control (key, value) VALUES ('loop_docs', 'disabled')")
+    pg.commit()
+
+    assert migrate.migrate_disable_flags(pg, dry_run=True) == [
+        {"control_key": "loop_docs", "scope": "source:docs"}]
+    with pg.cursor() as cur:
+        cur.execute("SELECT count(*) FROM pauses")
+        assert cur.fetchone()[0] == 0

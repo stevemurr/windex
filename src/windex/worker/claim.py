@@ -119,12 +119,30 @@ def log_event(cur: psycopg.Cursor, run_id: int | None, task_id: int | None,
     Roughly 50-500 rows per run, never one per unit: per-item detail belongs in
     ``task_units``. This is what replaces tailing ``~/.windex/logs/<job>.log``,
     which only ever worked from inside whichever container wrote the file.
+
+    WRAPPED IN A SAVEPOINT, and that is not defensive habit. Callers write events
+    from INSIDE the claim transaction, and ``run_events`` is RANGE-partitioned with
+    a fixed window of months pre-created and no DEFAULT partition (deliberately —
+    a row landing in a default makes the later CREATE for that month fail). So a
+    box that goes long enough without ``init-db`` rolling the window forward would
+    raise "no partition of relation run_events found" on *every claim*, and a lost
+    log line would become a total pool stall. The savepoint keeps the failure
+    proportional to what was lost: the event is dropped, the claim commits.
     """
-    cur.execute(
-        "INSERT INTO run_events (run_id, task_id, level, event, message, data) "
-        "VALUES (%s, %s, %s, %s, %s, %s)",
-        (run_id, task_id, level, event, message, Jsonb(dict(data or {}))),
-    )
+    cur.execute("SAVEPOINT windex_event")
+    try:
+        cur.execute(
+            "INSERT INTO run_events (run_id, task_id, level, event, message, data) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (run_id, task_id, level, event, message, Jsonb(dict(data or {}))),
+        )
+    except psycopg.Error as exc:
+        cur.execute("ROLLBACK TO SAVEPOINT windex_event")
+        log.warning("run_events insert failed (%s); event %r dropped. If this is a "
+                    "missing partition, run `windex init-db` to roll the window "
+                    "forward.", exc, event)
+    else:
+        cur.execute("RELEASE SAVEPOINT windex_event")
 
 
 # --- pauses -----------------------------------------------------------------

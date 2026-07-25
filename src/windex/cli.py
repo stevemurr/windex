@@ -1197,6 +1197,18 @@ def maintain(
     settings = get_settings()
     conn = db.connect(settings.pg_dsn)
     conn.autocommit = True  # VACUUM/REINDEX CONCURRENTLY refuse transaction blocks
+    # Roll the run-detail partitions BEFORE anything slow, and before the early
+    # return below. The window has no DEFAULT partition on purpose, and every task
+    # claim writes a run_events row inside its claim transaction — so an exhausted
+    # window is not a lost log line, it is a stalled worker pool. init-db creates
+    # three months ahead, but a box that is deployed rarely relies on this nightly
+    # pass instead. Retention is a DROP of whole months, never a rolling DELETE:
+    # this table has the same shape as minhash_bands, whose rolling deletes never
+    # reached autovacuum's threshold and needed hand-tuned settings.
+    for action, part in conn.execute(
+            "SELECT * FROM windex_roll_partitions(%s, %s)", (3, 3)).fetchall():
+        console.print(f"[green]{action}[/green] partition {part}")
+
     churn_tables = ("minhash_bands", "documents", "feeds", "search_metrics")
     for table in churn_tables:
         conn.execute(f"VACUUM (ANALYZE) {table}")
