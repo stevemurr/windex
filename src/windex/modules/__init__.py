@@ -1,1 +1,1 @@
-"""In-tree implementations for the closed recipe module registry."""
+"""In-tree implementations for the closed Pipeline Module registry."""

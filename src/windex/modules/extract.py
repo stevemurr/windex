@@ -19,7 +19,7 @@ from windex.modules.common import (
     pending_batches,
     require_type,
 )
-from windex.recipe.ports import ExtractedDoc, PartitionRef, RawBlob
+from windex.pipeline.ports import ExtractedDoc, PartitionRef, RawBlob
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 _INPUT_BATCH = 8
@@ -78,11 +78,11 @@ def _published(value):
 
 def html_trafilatura(ctx: TaskContext) -> SliceResult:
     from windex.crawl.extract import declared_canonical, extract_page
-    from windex.crawl.run import doc_suffix
+    from windex.crawl.ids import document_suffix
     from windex.crawl.scope import canonicalize, same_host
 
     minimum = int(ctx.config.get("min_chars", 200))
-    recipe = SimpleNamespace(extract=SimpleNamespace(
+    policy = SimpleNamespace(extract=SimpleNamespace(
         min_chars=minimum,
         quality_filters=bool(ctx.config.get("quality_filters", False)),
     ))
@@ -92,7 +92,7 @@ def html_trafilatura(ctx: TaskContext) -> SliceResult:
         if not blob.body:
             return []
         html = blob.body.decode("utf-8", errors="replace")
-        result = extract_page(html, blob.uri, recipe)
+        result = extract_page(html, blob.uri, policy)
         if result is None:
             return []
         canonical = canonicalize(blob.uri)
@@ -104,16 +104,16 @@ def html_trafilatura(ctx: TaskContext) -> SliceResult:
                 canonical = candidate
         payload = blob.meta.get("payload") or {}
         seed = str(payload.get("seed") or blob.uri)
-        if ctx.source == "hf" and blob.ref.store == "post":
+        if ctx.search_name == "hf" and blob.ref.store == "post":
             suffix = f"blog/{blob.ref.key}"
-        elif ctx.source == "smallweb":
+        elif ctx.search_name == "smallweb":
             suffix = hashlib.sha1(canonical.encode()).hexdigest()[:20]
         else:
-            suffix = doc_suffix(canonical, seed)
+            suffix = document_suffix(canonical, seed)
         outlet = (urlsplit(canonical).hostname or "").lower()
         fields = {"outlet": outlet}
         payload_out = {"outlet": outlet}
-        if ctx.source == "hf" and blob.ref.store == "post":
+        if ctx.search_name == "hf" and blob.ref.store == "post":
             fields.update({"kind": "blog", "root": "blog", "version": "",
                            "license": ""})
             payload_out.update({"kind": "blog", "root": "blog"})
@@ -239,8 +239,8 @@ def feed_inline_docs(ctx: TaskContext) -> SliceResult:
         newest_entries,
     )
 
-    max_items = int(ctx.params.get("max_items", 20))
-    min_chars = int(ctx.params.get("min_chars", 200))
+    max_items = int(ctx.effective_config.get("max_items", 20))
+    min_chars = int(ctx.effective_config.get("min_chars", 200))
 
     def parse(blob: RawBlob) -> list[ExtractedDoc]:
         raw = blob_bytes(blob)
@@ -478,7 +478,7 @@ def warc_datatrove(ctx: TaskContext) -> SliceResult:
         digest = hashlib.sha256(
             f"{ctx.run_id}:{ctx.task_id}:{blob.ref.key}".encode()
         ).hexdigest()[:24]
-        base = Settings().staging_dir / "_recipe_extract" / str(ctx.run_id) / digest
+        base = Settings().staging_dir / "_pipeline_extract" / str(ctx.run_id) / digest
         output = base / "parquet"
         logs = base / "logs"
         shutil.rmtree(base, ignore_errors=True)

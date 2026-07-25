@@ -18,17 +18,17 @@ from psycopg.types.json import Jsonb
 from windex.ccnews.dedup import text_hash
 from windex.config import Settings
 from windex.modules.common import finish_batch, pending_batches, require_type
-from windex.recipe.ports import ExtractedDoc
+from windex.pipeline.ports import ExtractedDoc
 from windex.sanitize import strip_smuggled
 from windex.textguard import is_empty_text
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 _BATCH = 1_000
-log = logging.getLogger("windex.recipe.load")
+log = logging.getLogger("windex.pipeline.load")
 
 
 def _prefix(ctx: TaskContext) -> str:
-    return str((ctx.spec.get("corpus") or {}).get("id_prefix") or f"{ctx.source}:")
+    return ctx.id_prefix or f"{ctx.search_name}:"
 
 
 def _sanitize(doc: ExtractedDoc) -> ExtractedDoc:
@@ -50,7 +50,7 @@ def _iso(value):
 def _parquet_row(ctx: TaskContext, doc: ExtractedDoc) -> dict:
     doc_id = _doc_id(ctx, doc)
     fields = doc.fields
-    source = ctx.source
+    source = ctx.search_name
     base = {
         "id": doc_id,
         "url": doc.url,
@@ -150,7 +150,7 @@ def _parquet_row(ctx: TaskContext, doc: ExtractedDoc) -> dict:
 def _text_ref(ctx: TaskContext, key: str) -> tuple[str, Path]:
     digest = hashlib.sha256(
         f"{ctx.run_id}:{ctx.task_id}:{key}".encode()).hexdigest()[:24]
-    relative = f"{ctx.source}/recipe/{ctx.run_id}/{digest}.parquet"
+    relative = f"{ctx.search_name}/pipeline/{ctx.run_id}/{digest}.parquet"
     return relative, Settings().staging_dir / relative
 
 
@@ -196,9 +196,10 @@ def _ledger_rows(ctx: TaskContext, docs: list[ExtractedDoc],
         elif is_empty_text(doc.title + "\n\n" + doc.text):
             status, ref = "empty", None
         else:
-            status, ref = "deduped", text_ref
+            status, ref = "staged", text_ref
         rows.append((
-            doc_id, ctx.source, doc.url, doc.canonical_url, doc.title,
+            doc_id, ctx.source_id, ctx.run_id, ctx.search_name, doc.url,
+            doc.canonical_url, doc.title,
             doc.published_at, doc.lang, digest, status, duplicate, ref,
         ))
     return sorted(rows)
@@ -211,10 +212,13 @@ def _upsert_ledger(ctx: TaskContext, rows: list[tuple]) -> None:
         cur.executemany(
             """
             INSERT INTO documents
-                   (id, source, url, canonical_url, title, published_at, lang,
+                   (id, source_id, owner_run_id, source, url, canonical_url, title,
+                    published_at, lang,
                     text_hash, status, duplicate_of, text_ref)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
+                source_id = EXCLUDED.source_id,
+                owner_run_id = EXCLUDED.owner_run_id,
                 source = EXCLUDED.source,
                 url = EXCLUDED.url,
                 canonical_url = EXCLUDED.canonical_url,
@@ -246,7 +250,7 @@ def _coverage_path(ctx: TaskContext, key: str) -> tuple[str, Path]:
     digest = hashlib.sha256(
         f"coverage:{ctx.run_id}:{ctx.task_id}:{key}".encode()
     ).hexdigest()
-    relative = f"_recipe_runs/coverage/{ctx.run_id}/{ctx.task_id}/{digest}.txt.gz"
+    relative = f"_pipeline_runs/coverage/{ctx.run_id}/{ctx.task_id}/{digest}.txt.gz"
     return relative, Settings().staging_dir / relative
 
 
@@ -313,7 +317,7 @@ def _tombstone_missing(ctx: TaskContext, *, scope: str,
                  ORDER BY id
                  FOR UPDATE
                 """,
-                (ctx.source, sorted(current)),
+                (ctx.search_name, sorted(current)),
             )
             vector_ids = [row[0] for row in cur.fetchall()]
             cur.execute(
@@ -324,7 +328,7 @@ def _tombstone_missing(ctx: TaskContext, *, scope: str,
                    AND NOT (id = ANY(%s))
                 RETURNING id
                 """,
-                (ctx.source, sorted(current)),
+                (ctx.search_name, sorted(current)),
             )
         else:
             cur.execute(
@@ -365,7 +369,7 @@ def _delete_vectors(ctx: TaskContext, doc_ids: set[str]) -> None:
         from windex.index import qdrant as qidx
 
         collection = str(
-            (ctx.spec.get("corpus") or {}).get("collection") or ctx.source)
+            ctx.collection_key or ctx.search_name)
         client = QdrantClient(url=Settings().qdrant_url, timeout=30)
         try:
             client.delete(
@@ -377,11 +381,11 @@ def _delete_vectors(ctx: TaskContext, doc_ids: set[str]) -> None:
         finally:
             client.close()
     except Exception as exc:  # absent/unreachable index: ledger remains authoritative
-        log.warning("recipe tombstone: qdrant delete skipped (%s)", exc)
+        log.warning("Pipeline tombstone: qdrant delete skipped (%s)", exc)
 
 
 def _advance_refs(ctx: TaskContext, docs: list[ExtractedDoc]) -> None:
-    source = ctx.recipe or ctx.source
+    source = ctx.state_namespace or ctx.search_name
     refs = {(doc.ref.store, doc.ref.key) for doc in docs}
     attrs: dict[tuple[str, str], dict] = defaultdict(dict)
     for doc in docs:
@@ -398,7 +402,7 @@ def _advance_refs(ctx: TaskContext, docs: list[ExtractedDoc]) -> None:
                        attrs = attrs || %s,
                        processed_at = now(), claimed_at = NULL,
                        last_run_id = %s, updated_at = now()
-                 WHERE source = %s AND store = %s AND unit_key = %s
+                 WHERE state_namespace = %s AND store = %s AND unit_key = %s
                 """,
                 (Jsonb(attrs[(store, key)]), ctx.run_id, source, store, key),
             )
@@ -495,7 +499,7 @@ def ledger_stage(ctx: TaskContext) -> SliceResult:
                         # (emptying a chat).
                         guard=(
                             "none"
-                            if ctx.source == "memory" and coverage_docs
+                            if ctx.search_name == "memory" and coverage_docs
                             else guard
                         ))
                     tombstoned.update(removed)
@@ -503,7 +507,7 @@ def ledger_stage(ctx: TaskContext) -> SliceResult:
             # A fixed-anchor model comparison is intentionally a partial source
             # replay. It must not claim that the parent root/post watermark was
             # fully ingested, or a later ordinary crawl would skip the rest.
-            if not ctx.params.get("anchor_ids"):
+            if not ctx.effective_config.get("anchor_ids"):
                 _advance_refs(ctx, docs + coverage_docs)
         else:
             coverage = ""

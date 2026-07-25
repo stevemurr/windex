@@ -1,7 +1,7 @@
 """One typed, bounded, self-describing parameter — the shape every form renders.
 
 Three things in this codebase independently grew the same idea: `settings_schema.Field`
-(editable settings), `api.jobs.Param` (job arguments), and `crawl.recipe`'s hand-written
+(editable settings), job arguments, and Pipeline Module configuration
 clamp helpers (crawl limits). They agree on the important part — *a value is typed,
 bounded, and clamped to the operator's ceiling rather than rejected* — and disagree on
 everything else, so a client has to know three shapes to render three forms.
@@ -17,10 +17,10 @@ Two rules carried over verbatim because they were learned the hard way:
   faster or bigger than the operator's bound. Failing a whole form submit over a
   typo'd number is worse than silently honouring the ceiling — but the client is
   told, via `clamp`/`clampNote`, so "I typed 0.5 and got 1.0" is never a mystery.
-* **`ceiling` / `floor` name an operator Settings key, not a number.** A recipe
+* **`ceiling` / `floor` name an operator Settings key, not a number.** A Pipeline
   author writes `hi: 20000`; the operator's `crawl_max_pages_ceiling` is what
   actually caps it. The bound a caller sees is `min(hi, operator_ceiling)`. This is
-  what lets an untrusted recipe declare generous bounds safely, and it is why
+  what lets an untrusted Pipeline declare generous bounds safely, and it is why
   ceiling keys are themselves absent from every editable allowlist.
 """
 
@@ -102,13 +102,13 @@ class Param:
     clamp_note: str = ""        # shown when the value would be clamped
 
     # How an out-of-range value is handled. "clamp" is the windex default and the
-    # right one for settings and recipe config. "reject" is for a value someone
+    # right one for settings and Pipeline config. "reject" is for a value someone
     # typed as an explicit instruction — a job argument — where silently running
     # something other than what was asked is worse than an error. The client needs
     # to know which, or it will helpfully adjust a value the server then refuses.
     enforce: str = "clamp"      # clamp | reject
 
-    # --- recipe-only ---
+    # --- Pipeline-only ---
     stage: str = "runtime"      # install | runtime
     allow: tuple[str, ...] = field(default=())   # secret_ref: nameable operator keys
 
@@ -143,7 +143,7 @@ class Param:
         Distinct from `describe()` on purpose. `describe()` is for a client
         rendering a control: it resolves bounds against the operator's settings,
         camelCases for JS, and omits `ceiling`/`floor` because those name operator
-        keys a client has no business seeing. None of that round-trips. A recipe's
+        keys a client has no business seeing. None of that round-trips. A Pipeline's
         frozen spec must reconstruct the identical Param or a re-run is not a
         re-run, so this emits the declared values verbatim and omits defaults.
         """
@@ -228,7 +228,7 @@ class Param:
     def bounds(self, effective: object = None) -> tuple[float | None, float | None]:
         """Declared bounds tightened by the operator's ceiling/floor keys.
 
-        A missing Settings attribute is ignored rather than fatal: a recipe naming a
+        A missing Settings attribute is ignored rather than fatal: a Pipeline naming a
         ceiling key that a later windex removed should lose the extra tightening, not
         refuse to load. The declared `lo`/`hi` still bound it.
         """
@@ -275,7 +275,7 @@ class Param:
                 raise ValueError(f"{key}: expected a string")
             name = value.strip()
             # A secret_ref carries the NAME of an operator-provisioned key, never a
-            # value, and only from a declared allowlist — so a recipe can neither
+            # value, and only from a declared allowlist — so a Pipeline can neither
             # smuggle a credential in nor name one it was not offered.
             if self.allow and name not in self.allow:
                 raise ValueError(f"{key}: must be one of {', '.join(self.allow)}")

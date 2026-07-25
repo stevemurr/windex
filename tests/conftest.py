@@ -45,18 +45,12 @@ def pg(pg_dsn):
     conn = psycopg.connect(pg_dsn)
     with conn.cursor() as cur:
         cur.execute(
-            "TRUNCATE documents, warc_files, repos, gharchive_files, gh_shards, minhash_bands, "
-            "control, wiki_dumps, arxiv_windows, feeds, docsets, hn_windows, "
-            "hf_roots, hf_posts, search_metrics, custom_sources, "
-            # crawl_urls FKs crawl_runs; both are listed so the truncate needs no
-            # CASCADE (which would silently reach tables not named here).
-            "crawl_runs, crawl_urls, "
-            # Source-recipes tables. Listed alongside the legacy ones (not via
-            # CASCADE) for the same reason: naming every table keeps a truncate
-            # from silently reaching one nobody meant to clear. Children before
-            # parents so the FKs inside this set resolve.
-            "run_tasks, runs, task_units, run_events, source_units, "
-            "recipe_revisions, recipes, recipe_config, pauses, triggers, source_sched"
+            """TRUNCATE
+                   run_outputs, run_artifacts, task_units, operational_events,
+                   run_tasks, runs, documents, repos, minhash_bands, source_units,
+                   operation_confirmations, module_versions, module_definitions,
+                   search_metrics
+               RESTART IDENTITY CASCADE"""
         )
     conn.commit()
     yield conn

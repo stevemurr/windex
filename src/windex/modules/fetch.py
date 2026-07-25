@@ -35,7 +35,7 @@ from windex.modules.common import (
     pending_batches,
     require_type,
 )
-from windex.recipe.ports import PartitionRef, RawBlob, WorkUnit
+from windex.pipeline.ports import PartitionRef, RawBlob, WorkUnit
 from windex.smallweb.poll import HostRateLimiter, RobotsCache
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
@@ -62,15 +62,15 @@ def _unit_url(ctx: TaskContext, unit: WorkUnit) -> str:
     # A root's stored URL is its human-facing landing page. The enumeration
     # contract is llms.txt; page children carry `path` plus their own URL and
     # must still take the ordinary payload branch below.
-    if (ctx.source == "hf" and unit.ref.store == "root"
+    if (ctx.search_name == "hf" and unit.ref.store == "root"
             and not unit.payload.get("path")):
         key = unit.ref.key.strip("/")
         return f"https://huggingface.co/{key}/llms.txt"
     if unit.payload.get("url"):
         return str(unit.payload["url"])
-    if ctx.source == "hf" and unit.ref.key == "sitemap":
+    if ctx.search_name == "hf" and unit.ref.key == "sitemap":
         return "https://huggingface.co/sitemap.xml"
-    if ctx.source == "hf":
+    if ctx.search_name == "hf":
         key = unit.ref.key.strip("/")
         if unit.ref.store == "post":
             return f"https://huggingface.co/blog/{key}"
@@ -84,10 +84,10 @@ def _template_url(ctx: TaskContext, unit: WorkUnit) -> str:
     template = str(ctx.config.get("url_template", ""))
     if not template:
         raise PermanentTaskError("http.download requires url_template")
-    # Installed recipe config is frozen in run params. Templates need both that
+    # Effective Pipeline configuration is frozen in the Run. Templates need both that
     # partition-invariant context (for example wiki's ``dump``) and the unit's
     # catalog payload (``dump_date``).
-    values = {**ctx.params, "key": unit.ref.key, **unit.payload}
+    values = {**ctx.effective_config, "key": unit.ref.key, **unit.payload}
     try:
         return template.format_map(values)
     except (KeyError, ValueError) as exc:
@@ -101,7 +101,7 @@ def _download_path(ctx: TaskContext, unit: WorkUnit, url: str) -> Path:
         f"{ctx.task_id}:{unit.ref.store}:{unit.ref.key}:{url}".encode()
     ).hexdigest()
     return (
-        Settings().downloads_dir / "_recipe_runs" / str(ctx.run_id)
+        Settings().downloads_dir / "_pipeline_runs" / str(ctx.run_id)
         / str(ctx.task_id) / f"{digest}{suffixes}"
     )
 
@@ -129,10 +129,10 @@ def _request_download(ctx: TaskContext, unit: WorkUnit,
     url = _template_url(ctx, unit)
     allowed = _hosts(ctx.config.get("allowed_hosts"))
     _assert_host(url, allowed)
-    if ctx.source == "wiki" and unit.ref.key == "dump-index":
+    if ctx.search_name == "wiki" and unit.ref.key == "dump-index":
         from windex.wiki.sync import latest_complete
 
-        wiki = str(ctx.params.get("dump", "enwiki"))
+        wiki = str(ctx.effective_config.get("dump", "enwiki"))
         dump_date, files = latest_complete(client, wiki)
         listing = ""
         if dump_date:
@@ -397,7 +397,7 @@ def _page_limiter(source: str, interval: float) -> HostRateLimiter:
 
 
 def _node_config(ctx: TaskContext, module: str) -> dict:
-    flow_name = ctx.params.get("flow")
+    flow_name = ctx.effective_config.get("flow")
     flows = (ctx.spec.get("flows") or {})
     choices = [flows.get(flow_name)] if flow_name else list(flows.values())
     for flow in choices:
@@ -407,7 +407,7 @@ def _node_config(ctx: TaskContext, module: str) -> dict:
     return {}
 
 
-def _crawl_recipe(ctx: TaskContext, seed: str):
+def _crawl_policy(ctx: TaskContext, seed: str):
     links = _node_config(ctx, "crawl.links")
     prefix = links.get("path_prefix")
     if prefix is None:
@@ -676,13 +676,13 @@ def _crawl_http_get(
             skipped += 1
         else:
             if blob.body:
-                recipe, max_depth = _crawl_recipe(ctx, seed)
+                policy, max_depth = _crawl_policy(ctx, seed)
                 if depth < max_depth and "html" in blob.media_type:
                     for found in extract_links(
                             blob.body.decode("utf-8", errors="replace"),
                             blob.uri):
                         candidate = canonicalize(found)
-                        allowed, _ = in_scope(candidate, recipe, seed)
+                        allowed, _ = in_scope(candidate, policy, seed)
                         if allowed:
                             inserted = _crawl_insert_url(
                                 ctx,
@@ -778,7 +778,7 @@ def _hf_sync_blob(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
         raise RuntimeError(f"invalid Hugging Face sitemap index: {exc}") from exc
     wanted_roots = {
         value.strip().strip("/")
-        for value in str(ctx.params.get("roots") or "").split(",")
+        for value in str(ctx.effective_config.get("roots") or "").split(",")
         if value.strip()
     }
     entries = []
@@ -854,7 +854,7 @@ def _hf_root_pages(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
     root = unit.ref.key.strip("/")
     pages = parse_llms(
         listing.body.decode("utf-8", errors="replace"), root)
-    raw_anchors = ctx.params.get("anchor_ids")
+    raw_anchors = ctx.effective_config.get("anchor_ids")
     anchors = {
         value.strip()
         for value in (
@@ -938,7 +938,7 @@ def _smallweb_feed(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
     if not feed.body or feed.meta.get("not_modified"):
         return feed
     parsed = feedparser.parse(feed.body)
-    maximum = int(ctx.params.get("max_items", 20))
+    maximum = int(ctx.effective_config.get("max_items", 20))
     minimum = int(getattr(Settings(), "smallweb_inline_summary_min", 600))
     outlet = (urlsplit(feed.uri).hostname or "").lower()
     items = []
@@ -996,8 +996,8 @@ def http_get(ctx: TaskContext) -> SliceResult:
             getattr(settings, "crawl_robots_ttl", 86_400),
             user_agent=_USER_AGENT,
         )
-        limiter = _page_limiter(ctx.source, interval)
-        if ctx.source == "crawl":
+        limiter = _page_limiter(ctx.search_name, interval)
+        if ctx.search_name == "crawl":
             return _crawl_http_get(ctx, client, robots, limiter)
         batches, more = pending_batches(ctx, limit=_INPUT_BATCH)
         processed = []
@@ -1006,13 +1006,13 @@ def http_get(ctx: TaskContext) -> SliceResult:
             emitted = []
             for value in batch.values:
                 unit = require_type(value, WorkUnit, ctx.module)
-                if ctx.source == "hf" and unit.ref.key == "sitemap":
+                if ctx.search_name == "hf" and unit.ref.key == "sitemap":
                     emitted.append(
                         _hf_sync_blob(ctx, unit, client, robots, limiter))
-                elif ctx.source == "hf" and unit.ref.store == "root":
+                elif ctx.search_name == "hf" and unit.ref.store == "root":
                     emitted.extend(
                         _hf_root_pages(ctx, unit, client, robots, limiter))
-                elif ctx.source == "smallweb":
+                elif ctx.search_name == "smallweb":
                     emitted.append(
                         _smallweb_feed(ctx, unit, client, robots, limiter))
                 else:
@@ -1112,7 +1112,7 @@ def _github_search(ctx: TaskContext, unit: WorkUnit,
     if not tokens:
         raise PermanentTaskError("github_search_pages requires a GitHub token")
     threshold = int(unit.payload.get(
-        "star_threshold", ctx.params.get("star_threshold", 10)))
+        "star_threshold", ctx.effective_config.get("star_threshold", 10)))
     start = date.fromisoformat(str(unit.payload.get("from", "2008-01-01")))
     end = date.fromisoformat(str(unit.payload.get("to", date.today().isoformat())))
     page_size = int(ctx.config.get("page_size", 100))

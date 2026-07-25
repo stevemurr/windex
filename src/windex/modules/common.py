@@ -1,4 +1,4 @@
-"""Shared mechanics for non-root recipe module runners.
+"""Shared mechanics for non-root Pipeline Module runners.
 
 Values crossing a DAG edge are durable, but document bodies do not belong in
 Postgres. Small batches stay inline in ``task_units.outputs``; large batches are
@@ -22,8 +22,8 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from windex.config import Settings
-from windex.recipe import wire
-from windex.recipe.ports import RawBlob
+from windex.pipeline import wire
+from windex.pipeline.ports import RawBlob
 from windex.worker.protocol import PermanentTaskError, TaskContext
 
 T = TypeVar("T", bound=wire.WireValue)
@@ -40,7 +40,7 @@ class InputBatch:
 
 
 def _artifact_root() -> Path:
-    root = Settings().staging_dir / "_recipe_runs"
+    root = Settings().staging_dir / "_pipeline_runs"
     root.mkdir(parents=True, exist_ok=True)
     return root
 

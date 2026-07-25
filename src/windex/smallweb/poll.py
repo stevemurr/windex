@@ -62,7 +62,7 @@ CLEAN_SCHEMA = pa.schema(
 
 
 def doc_id(canon: str) -> str:
-    """Same recipe as the news doc_id, ``smallweb:`` prefixed."""
+    """Same identity scheme as the news document ID, ``smallweb:`` prefixed."""
     return "smallweb:" + hashlib.sha1(canon.encode()).hexdigest()[:20]
 
 

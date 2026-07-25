@@ -15,6 +15,7 @@ from windex.config import Settings
 from windex.embed.rerank import Reranker, build_reranker
 from windex.index import qdrant as qidx
 from windex.index.embed_breaker import EmbedBreakerOpen, breaker
+from windex.index.sparse import bm25_model as _bm25_model
 from windex.metrics import QUERY_EMBED_DURATION, QUERY_EMBED_FAILURES
 
 log = logging.getLogger("windex.search")
@@ -68,9 +69,6 @@ def _qdrant(settings: Settings) -> QdrantClient:
 def _sparse_vector(q: str) -> qm.SparseVector:
     sparse = next(iter(_bm25_model().query_embed(q)))
     return qm.SparseVector(indices=sparse.indices.tolist(), values=sparse.values.tolist())
-
-from windex.index.sparse import bm25_model as _bm25_model
-
 
 def _news_filter(published_after: datetime | None, published_before: datetime | None):
     conds = []
@@ -191,12 +189,6 @@ def _memory_filter(conversation_id: str | None, published_after: datetime | None
     return conds
 
 
-# Built-in search sources (corpus vocabulary + `all`). Any name outside this set
-# is a registered custom source, served from its own <name>_current alias.
-_STATIC_SOURCES = {"news", "github", "wiki", "arxiv", "smallweb", "docs", "hn",
-                   "hf", "memory", "all"}
-
-
 def _custom_filter(published_after: datetime | None, published_before: datetime | None):
     # A custom source's collection indexes only doc_id + published_at
     # (qdrant.CUSTOM_PAYLOAD_INDEXES), so the sole search filter is the date
@@ -241,7 +233,6 @@ def _query_collection(
     query_dense: list[float] | None,
     query_sparse: qm.SparseVector | None = None,
 ) -> list[dict]:
-    prefetch = []
     flt = qm.Filter(must=conditions) if conditions else None
     # rescore=False: with original f32 vectors on disk, the default rescoring
     # re-reads them per query from the saturated drive; int8 recall at 4096-dim
@@ -366,41 +357,46 @@ def search(
                 embed_ms = (time.monotonic() - t_embed) * 1000
                 QUERY_EMBED_DURATION.observe(embed_ms / 1000.0)
 
+    from windex import db
+
+    with db.pooled(settings.pg_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT search_name, collection_key, search_profile, include_in_all
+                 FROM sources
+                WHERE archived_at IS NULL AND enabled
+                  AND (%s = 'all' AND include_in_all OR search_name = %s)
+                ORDER BY search_name""",
+            (source, source),
+        )
+        bindings = cur.fetchall()
+
+    def conditions(profile: str):
+        if profile == "news":
+            return _news_filter(published_after, published_before)
+        if profile == "repos":
+            return _repo_filter(min_stars, language)
+        if profile == "wiki":
+            return _wiki_filter(published_after, published_before)
+        if profile == "arxiv":
+            return _arxiv_filter(category, published_after, published_before)
+        if profile == "smallweb":
+            return _smallweb_filter(outlet, published_after, published_before)
+        if profile == "docs":
+            return _docs_filter(framework)
+        if profile == "hn":
+            return _hn_filter(min_points, published_after, published_before)
+        if profile == "hf":
+            return _hf_filter(root, kind, published_after, published_before)
+        if profile == "memory":
+            return _memory_filter(
+                conversation_id, published_after, published_before)
+        return _custom_filter(published_after, published_before)
+
     results = []
-    targets = []
-    if source in ("news", "all"):
-        targets.append(("news", qidx.alias_name("news"), _news_filter(published_after, published_before)))
-    if source in ("github", "all"):
-        targets.append(("github", qidx.alias_name("repos"), _repo_filter(min_stars, language)))
-    if source in ("wiki", "all"):
-        targets.append(("wiki", qidx.alias_name("wiki"), _wiki_filter(published_after, published_before)))
-    if source in ("arxiv", "all"):
-        targets.append(("arxiv", qidx.alias_name("arxiv"),
-                        _arxiv_filter(category, published_after, published_before)))
-    if source in ("smallweb", "all"):
-        targets.append(("smallweb", qidx.alias_name("smallweb"),
-                        _smallweb_filter(outlet, published_after, published_before)))
-    if source in ("docs", "all"):
-        targets.append(("docs", qidx.alias_name("docs"), _docs_filter(framework)))
-    if source in ("hn", "all"):
-        targets.append(("hn", qidx.alias_name("hn"),
-                        _hn_filter(min_points, published_after, published_before)))
-    if source in ("hf", "all"):
-        targets.append(("hf", qidx.alias_name("hf"),
-                        _hf_filter(root, kind, published_after, published_before)))
-    # memory is DELIBERATELY not part of "all": web-search fan-outs must never
-    # silently pull personal chat history into their results, and it sidesteps
-    # the per-source query-prefix conflict. Recall always asks for it explicitly.
-    if source == "memory":
-        targets.append(("memory", qidx.alias_name("memory"),
-                        _memory_filter(conversation_id, published_after, published_before)))
-    # A registered custom source (any non-static name — validated at the route)
-    # is served from its own alias. Like memory, it is DELIBERATELY excluded from
-    # "all" (that branch is a static name, so this never fires for it): a
-    # web-search fan-out must never silently pull a user's private index in.
-    if source not in _STATIC_SOURCES:
-        targets.append((source, qidx.alias_name(source),
-                        _custom_filter(published_after, published_before)))
+    targets = [
+        (search_name, qidx.alias_name(collection_key), conditions(profile))
+        for search_name, collection_key, profile, _include in bindings
+    ]
     # Encode the query once, not once per target collection (source=all fans out
     # to 8 collections and re-encoded the same string for each).
     query_sparse = _sparse_vector(q) if mode in ("hybrid", "lexical") else None

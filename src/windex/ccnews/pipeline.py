@@ -1,6 +1,6 @@
 """Extraction + quality filtering for a batch of downloaded CC-News WARCs.
 
-FineWeb recipe via datatrove blocks, with one substitution: stock Trafilatura
+FineWeb processing policy via datatrove blocks, with one substitution: stock Trafilatura
 drops article titles, so NewsExtractor uses trafilatura.bare_extraction to keep
 title/date metadata alongside the text.
 """

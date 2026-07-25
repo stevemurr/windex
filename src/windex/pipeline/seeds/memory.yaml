@@ -1,0 +1,42 @@
+schema: windex.pipeline/1
+parameters:
+- key: max_chunks
+  kind: int
+  lo: 1
+  hi: 10000
+  default: 500
+  label: Chunks per push
+state: {}
+flows:
+  receive:
+    inputs:
+    - id: documents
+      type: DocumentBatch
+      required: true
+      max_items: 10000
+      max_bytes: 67108864
+    outputs: []
+    nodes:
+      push:
+        kind: receive
+        uses: push.docs
+        with:
+          mode: full_set
+          max_docs: '@param.max_chunks'
+      stage:
+        kind: load
+        uses: ledger.stage
+        with:
+          replace: true
+          replace_scope: partition
+          replace_guard: census
+    edges:
+    - from:
+        input: documents
+      to:
+        node: push
+    - from:
+        node: push
+      to:
+        node: stage
+refresh: []

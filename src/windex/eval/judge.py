@@ -11,7 +11,6 @@ degrades to an empty leg, never fails the eval (mirrors the embed breaker)."""
 
 from __future__ import annotations
 
-import json
 import logging
 
 import httpx

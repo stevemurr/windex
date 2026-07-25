@@ -1,4 +1,4 @@
-"""Generic recipe store sinks."""
+"""Generic Pipeline state-store sinks."""
 
 from __future__ import annotations
 
@@ -13,14 +13,14 @@ from psycopg.types.json import Jsonb
 
 from windex.config import Settings
 from windex.modules.common import finish_batch, pending_batches, require_type
-from windex.recipe.ports import PartitionRecord
+from windex.pipeline.ports import PartitionRecord
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 _BATCH = 500
 
 
 def _advance_refs(ctx: TaskContext, records: list[PartitionRecord]) -> None:
-    source = ctx.recipe or ctx.source
+    state_namespace = ctx.state_namespace or ctx.search_name
     refs = {
         (record.ref.store, record.ref.key)
         for record in records
@@ -36,9 +36,9 @@ def _advance_refs(ctx: TaskContext, records: list[PartitionRecord]) -> None:
                    SET ingested = upstream, status = 'done',
                        processed_at = now(), claimed_at = NULL,
                        last_run_id = %s, updated_at = now()
-                 WHERE source = %s AND store = %s AND unit_key = %s
+                 WHERE state_namespace = %s AND store = %s AND unit_key = %s
                 """,
-                (ctx.run_id, source, store, key),
+                (ctx.run_id, state_namespace, store, key),
             )
 
 
@@ -57,17 +57,17 @@ def _increment(base: dict, delta: dict) -> dict:
 
 
 def _write(ctx: TaskContext, record: PartitionRecord, policy: str) -> None:
-    source = ctx.recipe or ctx.source
+    state_namespace = ctx.state_namespace or ctx.search_name
     if policy == "skip":
         with ctx.conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO source_units
-                       (source, store, unit_key, upstream, stage, attrs, last_run_id)
+                       (state_namespace, store, unit_key, upstream, stage, attrs, last_run_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (source, store, unit_key) DO NOTHING
+                ON CONFLICT (state_namespace, store, unit_key) DO NOTHING
                 """,
-                (source, record.store, record.key, Jsonb(record.upstream),
+                (state_namespace, record.store, record.key, Jsonb(record.upstream),
                  record.stage, Jsonb(record.payload), ctx.run_id),
             )
         return
@@ -77,10 +77,10 @@ def _write(ctx: TaskContext, record: PartitionRecord, policy: str) -> None:
             cur.execute(
                 """
                 SELECT attrs FROM source_units
-                 WHERE source = %s AND store = %s AND unit_key = %s
+                 WHERE state_namespace = %s AND store = %s AND unit_key = %s
                  FOR UPDATE
                 """,
-                (source, record.store, record.key),
+                (state_namespace, record.store, record.key),
             )
             row = cur.fetchone()
             attrs = _increment(dict(row[0] or {}) if row else {}, record.delta)
@@ -90,9 +90,9 @@ def _write(ctx: TaskContext, record: PartitionRecord, policy: str) -> None:
         cur.execute(
             """
             INSERT INTO source_units
-                   (source, store, unit_key, upstream, stage, attrs, last_run_id)
+                   (state_namespace, store, unit_key, upstream, stage, attrs, last_run_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (source, store, unit_key) DO UPDATE
+            ON CONFLICT (state_namespace, store, unit_key) DO UPDATE
                SET upstream = EXCLUDED.upstream,
                    stage = coalesce(EXCLUDED.stage, source_units.stage),
                    attrs = source_units.attrs || EXCLUDED.attrs,
@@ -100,13 +100,13 @@ def _write(ctx: TaskContext, record: PartitionRecord, policy: str) -> None:
                    last_run_id = EXCLUDED.last_run_id,
                    updated_at = now()
             """,
-            (source, record.store, record.key, Jsonb(record.upstream),
+            (state_namespace, record.store, record.key, Jsonb(record.upstream),
              record.stage, Jsonb(attrs), ctx.run_id),
         )
 
 
 def store_upsert(ctx: TaskContext) -> SliceResult:
-    """Consume PartitionRecords into the recipe's permanent store namespace."""
+    """Consume PartitionRecords into the Source's permanent state namespace."""
     store = str(ctx.config.get("store", ""))
     if not store:
         raise PermanentTaskError("store.upsert requires a store")
@@ -184,7 +184,7 @@ def _stage_readmes(ctx: TaskContext, batch_key: str,
         f"{ctx.run_id}:{ctx.task_id}:{batch_key}".encode()).hexdigest()[:24]
     directory = Settings().repos_staging_dir / "readme"
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"recipe-{ctx.run_id}-{digest}.parquet"
+    path = directory / f"pipeline-{ctx.run_id}-{digest}.parquet"
     temp = path.with_suffix(".parquet.tmp")
     table = pa.table({
         "repo_id": pa.array([row[0] for row in rows], pa.int64()),
@@ -209,6 +209,7 @@ def _write_repo(ctx: TaskContext, record: PartitionRecord) -> None:
             f"store.repos record {repo_id} has no full_name")
     delta = int(record.delta.get("star_events", 0))
     params = (
+        ctx.source_id,
         repo_id,
         full_name,
         payload.get("stars"),
@@ -223,12 +224,12 @@ def _write_repo(ctx: TaskContext, record: PartitionRecord) -> None:
     )
     statement = """
         INSERT INTO repos
-               (repo_id, full_name, stars, star_events, description, topics,
+               (source_id, repo_id, full_name, stars, star_events, description, topics,
                 primary_language, default_branch, pushed_at, status,
                 readme_fetched_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 CASE WHEN %s THEN now() ELSE NULL END)
-        ON CONFLICT (repo_id) DO UPDATE SET
+        ON CONFLICT (source_id, repo_id) DO UPDATE SET
             full_name = EXCLUDED.full_name,
             stars = coalesce(EXCLUDED.stars, repos.stars),
             star_events = coalesce(repos.star_events, 0)
@@ -246,18 +247,18 @@ def _write_repo(ctx: TaskContext, record: PartitionRecord) -> None:
                 EXCLUDED.readme_fetched_at, repos.readme_fetched_at)
     """
     with ctx.conn.cursor() as cur:
-        cur.execute("SAVEPOINT recipe_repo")
+        cur.execute("SAVEPOINT pipeline_repo")
         try:
             cur.execute(statement, params)
         except psycopg.errors.UniqueViolation:
-            cur.execute("ROLLBACK TO SAVEPOINT recipe_repo")
+            cur.execute("ROLLBACK TO SAVEPOINT pipeline_repo")
             cur.execute(
                 "UPDATE repos SET full_name = full_name || '#stale:' || repo_id "
-                "WHERE full_name = %s AND repo_id <> %s",
-                (full_name, repo_id),
+                "WHERE source_id = %s AND full_name = %s AND repo_id <> %s",
+                (ctx.source_id, full_name, repo_id),
             )
             cur.execute(statement, params)
-        cur.execute("RELEASE SAVEPOINT recipe_repo")
+        cur.execute("RELEASE SAVEPOINT pipeline_repo")
 
 
 def store_repos(ctx: TaskContext) -> SliceResult:

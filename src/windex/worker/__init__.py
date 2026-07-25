@@ -3,8 +3,7 @@
     supervisor.py   forks and reaps slots, sweeps leases, publishes control state
     slot.py         one slot's loop: claim → slice → repeat → exit to be recycled
     execute.py      running one slice of one leased task
-    claim.py        the claim/lease/release SQL — pauses, lanes, fair share
-    dag.py          which tasks become claimable, and when a run is over
+    canonical_claim.py  claim/lease/release SQL — pauses, lanes, fair share
     memory.py       RSS accounting, the layer that prevents a whole-box reset
     preconditions.py  fleet-level facts a task can require before it is claimable
     control.py      the supervisor → slot channel
@@ -19,10 +18,9 @@ level up so that *every* source shares it — and so that the answer to "why is
 nothing happening" is a row in ``run_tasks`` rather than a log file inside
 whichever container wrote it.
 
-The module registry that maps ``run_tasks.module`` to executable code belongs to
-the recipe engine (Phase 6). The pool never imports it: it takes a
-``resolve: Callable[[str], Runner]``, which is what lets the two halves be built,
-tested and merged independently. ``default_resolve`` below is the seam.
+The Pipeline runtime maps ``run_tasks.module`` to executable code. The pool takes
+a ``resolve: Callable[[str], Runner]`` so its lease protocol stays independently
+testable. ``default_resolve`` below is the seam.
 """
 
 from __future__ import annotations
@@ -47,33 +45,29 @@ __all__ = [
 
 
 def default_resolve(module: str) -> Runner:
-    """Look a module up in the recipe registry, if this build has one.
-
-    Imported lazily and by name so the pool has no build-time dependency on the
-    recipe engine: a checkout with no ``windex.recipe`` still starts a pool,
-    still claims tasks, and fails each one with a message that names the actual
-    problem. The alternative — an ImportError at startup — would make the pool
-    untestable until the far end shipped, and would report "windex-worker is
-    down" for a missing registry.
-
-    Two shapes are accepted because Phase 6 has not fixed one yet: a
-    ``resolve(module) -> Runner`` callable, or a ``RUNNERS`` mapping. Whichever
-    it turns out to be, nothing here changes.
-    """
+    """Resolve one exact built-in or approved local Module implementation."""
     try:
-        from windex import recipe as _recipe          # noqa: PLC0415
+        from windex import pipeline as _pipeline          # noqa: PLC0415
     except Exception as exc:                          # noqa: BLE001
         raise PermanentTaskError(
-            f"no runner registry for module {module!r}: the recipe engine "
-            f"(windex.recipe) is not available ({exc})") from None
+            f"no runner registry for Module {module!r}: the Pipeline runtime "
+            f"is not available ({exc})") from None
 
-    # ``registry`` is the declarative editor catalog. The executable resolver is
-    # exported by the recipe package (and implemented by recipe.compile). Looking
-    # on the catalog made the worker disagree with the API's ``implemented`` flag.
-    resolver = getattr(_recipe, "resolve", None)
+    resolver = getattr(_pipeline, "resolve", None)
     if callable(resolver):
-        return resolver(module)
-    runners = getattr(_recipe, "RUNNERS", None)
+        try:
+            return resolver(module)
+        except LookupError:
+            # Worker processes do not share the API's in-memory registry cache.
+            # Refresh approved descriptors from canonical storage on a miss.
+            from windex import db
+            from windex.config import get_settings
+            from windex.pipeline import registry
+
+            with db.connect(get_settings().pg_dsn) as conn:
+                registry.load_custom(conn)
+            return resolver(module)
+    runners = getattr(_pipeline, "RUNNERS", None)
     if isinstance(runners, dict) and module in runners:
         return runners[module]
     raise PermanentTaskError(f"module {module!r} is not registered")

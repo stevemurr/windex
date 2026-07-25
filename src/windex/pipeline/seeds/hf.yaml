@@ -1,0 +1,151 @@
+schema: windex.pipeline/1
+parameters:
+- key: request_interval
+  kind: float
+  lo: 3.0
+  hi: 60
+  default: 3.0
+  unit: s
+- key: roots
+  kind: csv
+  default: ''
+  stage: install
+  label: Doc roots
+  help: Empty means every root in the sitemap.
+state:
+  root:
+    key: doc root
+    order: key
+  post:
+    key: blog slug
+    order: lastmod
+flows:
+  sync:
+    inputs: []
+    outputs: []
+    nodes:
+      once:
+        kind: discover
+        uses: static.once
+        with:
+          key: sitemap
+      site:
+        kind: fetch
+        uses: http.get
+        with:
+          host_interval: '@param.request_interval'
+      roots:
+        kind: catalog
+        uses: list.sitemap
+        with:
+          shard_allow: sitemap-doc.xml
+      posts:
+        kind: catalog
+        uses: list.sitemap
+        with:
+          shard_allow: sitemap-blog.xml
+      rec_roots:
+        kind: collect
+        uses: store.upsert
+        with:
+          store: root
+      rec_posts:
+        kind: collect
+        uses: store.upsert
+        with:
+          store: post
+    edges:
+    - from:
+        node: once
+      to:
+        node: site
+    - from:
+        node: site
+      to:
+        node: roots
+    - from:
+        node: site
+      to:
+        node: posts
+    - from:
+        node: roots
+      to:
+        node: rec_roots
+    - from:
+        node: posts
+      to:
+        node: rec_posts
+  crawl:
+    inputs: []
+    outputs: []
+    nodes:
+      roots:
+        kind: discover
+        uses: state.pending
+        with:
+          store: root
+          predicate: token_moved
+          order: key
+          batch: 4
+      root_md:
+        kind: fetch
+        uses: http.get
+        with:
+          host_interval: '@param.request_interval'
+      md:
+        kind: extract
+        uses: markdown.passthrough
+        with: {}
+      posts:
+        kind: discover
+        uses: state.pending
+        with:
+          store: post
+          predicate: token_moved
+          order: ord
+          batch: 20
+      post_html:
+        kind: fetch
+        uses: http.get
+        with:
+          host_interval: '@param.request_interval'
+      html:
+        kind: extract
+        uses: html.trafilatura
+        with:
+          min_chars: 200
+      stage:
+        kind: load
+        uses: ledger.stage
+        with:
+          replace: true
+          replace_scope: partition
+          replace_guard: census
+    edges:
+    - from:
+        node: roots
+      to:
+        node: root_md
+    - from:
+        node: root_md
+      to:
+        node: md
+    - from:
+        node: md
+      to:
+        node: stage
+    - from:
+        node: posts
+      to:
+        node: post_html
+    - from:
+        node: post_html
+      to:
+        node: html
+    - from:
+        node: html
+      to:
+        node: stage
+refresh:
+- sync
+- crawl

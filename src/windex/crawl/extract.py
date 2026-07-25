@@ -114,11 +114,11 @@ def declared_canonical(html: str) -> str | None:
     return None
 
 
-def extract_page(html: str, url: str, recipe) -> dict | None:
+def extract_page(html: str, url: str, policy) -> dict | None:
     """Page HTML → ``{title, text, published_at}``, or None if unusable.
 
     trafilatura first (it also yields title/date); the structural fallback only
-    where that produced nothing. Quality filters are OFF unless the recipe asks —
+    where that produced nothing. Quality filters are off unless the policy asks —
     a curated cluster's scope decision IS its quality gate, the same call
     ``hf/crawl.py`` and ``docs_source`` made, and FineWeb/C4-style gates
     over-reject exactly the short code-heavy pages a doc site is made of.
@@ -134,21 +134,21 @@ def extract_page(html: str, url: str, recipe) -> dict | None:
     else:
         text = ""
 
-    if len(text) < recipe.extract.min_chars:
+    if len(text) < policy.extract.min_chars:
         rescued = fallback_extract(html)
         if rescued is not None and len(rescued[0]) > len(text):
             text, fb_title = rescued
             title = title or fb_title
-    if len(text) < recipe.extract.min_chars:
+    if len(text) < policy.extract.min_chars:
         return None
 
-    if recipe.extract.quality_filters:
+    if policy.extract.quality_filters:
         from datatrove.data import Document
 
         from windex.smallweb.extract import build_quality_filters
 
         doc = Document(text=text, id=url, metadata={"url": url})
-        for _name, keep in build_quality_filters(min_chars=recipe.extract.min_chars):
+        for _name, keep in build_quality_filters(min_chars=policy.extract.min_chars):
             if not keep(doc):
                 return None
         text = doc.text
