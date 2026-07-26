@@ -123,6 +123,7 @@ def warc_datatrove(ctx: TaskContext) -> SliceResult:
             "warc_complete": complete,
         },
     )
+    shutil.rmtree(base, ignore_errors=True)
     ctx.conn.commit()
     ctx.heartbeat(1, 0, {
         "last": batch.key,
