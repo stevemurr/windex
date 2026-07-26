@@ -26,13 +26,16 @@ from windex.pipeline.store import (
 from windex.source.store import (
     SourceConflictError,
     StaleSourceError,
+    create_trigger,
     get_source,
     get_operator_settings,
     delete_operator_setting,
+    list_triggers,
     patch_settings,
     patch_operator_settings,
     settings_projection,
     module_statuses,
+    update_trigger,
     upgrade,
     upgrade_preview,
 )
@@ -287,6 +290,184 @@ def test_source_upgrade_accepts_edited_candidate_and_is_atomic(canonical_conn):
     )
     assert upgraded["pipeline_version"] == 2
     assert upgraded["values"]["install_profile"] == "standard"
+
+
+def _publish_hn_upgrade_target(
+    conn,
+    *,
+    target_flow: str = "harvest",
+):
+    pipeline = get_pipeline(conn, "hn")
+    assert pipeline
+    spec = copy.deepcopy(pipeline["spec"])
+    if target_flow != "harvest":
+        flow = spec["flows"].pop("harvest")
+        spec["flows"][target_flow] = flow
+        spec["refresh"] = [
+            target_flow if name == "harvest" else name
+            for name in spec["refresh"]
+        ]
+    else:
+        spec["parameters"].append({
+            "key": "upgrade_marker",
+            "kind": "str",
+            "default": "compatible",
+        })
+    return publish_revision(
+        conn,
+        "hn",
+        spec,
+        expected_version=pipeline["version"],
+        expected_hash=pipeline["spec_hash"],
+    )
+
+
+def _interval_trigger(conn, *, enabled: bool = True):
+    return create_trigger(conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "interval",
+        "trigger_spec": {"seconds": 60},
+        "enabled": enabled,
+    })
+
+
+def test_upgrade_preview_accepts_trigger_compatible_target(canonical_conn):
+    trigger = _interval_trigger(canonical_conn)
+    revision = _publish_hn_upgrade_target(canonical_conn)
+
+    preview = upgrade_preview(canonical_conn, "hn", revision["version"])
+
+    UpgradePreviewResponse.model_validate(preview)
+    assert preview["valid"] is True
+    assert preview["issues"] == []
+    assert preview["state_impact"]["trigger_bindings_checked"] == 1
+    assert (
+        preview["state_impact"]["trigger_bindings_policy"]
+        == "all_enabled_and_disabled"
+    )
+    assert preview["state_impact"]["trigger_bindings_hash"].startswith("sha256:")
+    assert list_triggers(canonical_conn, "hn")[0]["id"] == trigger["id"]
+
+
+def test_upgrade_preview_rejects_removed_trigger_flow(canonical_conn):
+    trigger = _interval_trigger(canonical_conn)
+    revision = _publish_hn_upgrade_target(
+        canonical_conn,
+        target_flow="replacement",
+    )
+
+    preview = upgrade_preview(canonical_conn, "hn", revision["version"])
+
+    UpgradePreviewResponse.model_validate(preview)
+    assert preview["valid"] is False
+    assert preview["confirmation_token"] is None
+    assert preview["issues"] == [{
+        "path": f"triggers.{trigger['id']}.flow_name",
+        "code": "trigger_flow_missing",
+        "severity": "error",
+        "message": (
+            f"Enabled trigger {trigger['id']} references Flow 'harvest', "
+            f"which target revision {revision['version']} does not define. "
+            "Rebind or delete the trigger before upgrading."
+        ),
+    }]
+    with pytest.raises(SourceConflictError) as raised:
+        upgrade(
+            canonical_conn,
+            "hn",
+            revision["version"],
+            preview["candidate"],
+            "not-a-valid-token",
+        )
+    assert raised.value.args[0]["issues"] == preview["issues"]
+    assert get_source(canonical_conn, "hn")["pipeline_version"] == 1
+
+
+def test_upgrade_preview_also_rejects_disabled_trigger_with_removed_flow(
+    canonical_conn,
+):
+    trigger = _interval_trigger(canonical_conn, enabled=False)
+    revision = _publish_hn_upgrade_target(
+        canonical_conn,
+        target_flow="replacement",
+    )
+
+    preview = upgrade_preview(canonical_conn, "hn", revision["version"])
+
+    assert preview["valid"] is False
+    assert preview["confirmation_token"] is None
+    issue = preview["issues"][0]
+    assert issue["path"] == f"triggers.{trigger['id']}.flow_name"
+    assert issue["code"] == "trigger_flow_missing"
+    assert issue["message"].startswith(
+        f"Disabled trigger {trigger['id']} references Flow 'harvest'")
+    assert "can be re-enabled" in issue["message"]
+
+
+def test_trigger_edit_after_upgrade_preview_invalidates_confirmation(
+    canonical_conn,
+):
+    trigger = _interval_trigger(canonical_conn)
+    revision = _publish_hn_upgrade_target(canonical_conn)
+    preview = upgrade_preview(canonical_conn, "hn", revision["version"])
+    assert preview["valid"] is True
+    token = preview["confirmation_token"]
+    assert token
+
+    environment = Settings()
+    dsn = (
+        environment.pg_dsn.rsplit("/", 1)[0]
+        + "/"
+        + canonical_conn.info.dbname
+    )
+    other = psycopg.connect(dsn)
+    try:
+        update_trigger(
+            other,
+            "hn",
+            trigger["id"],
+            {"trigger_spec": {"seconds": 120}},
+        )
+    finally:
+        other.close()
+
+    with pytest.raises(
+        SourceConflictError,
+        match="upgrade preview is stale",
+    ):
+        upgrade(
+            canonical_conn,
+            "hn",
+            revision["version"],
+            preview["candidate"],
+            token,
+        )
+    assert get_source(canonical_conn, "hn")["pipeline_version"] == 1
+    assert list_triggers(canonical_conn, "hn")[0]["trigger_spec"] == {
+        "seconds": 120,
+    }
+
+
+def test_source_upgrade_preserves_compatible_trigger(canonical_conn):
+    trigger = _interval_trigger(canonical_conn)
+    revision = _publish_hn_upgrade_target(canonical_conn)
+    preview = upgrade_preview(canonical_conn, "hn", revision["version"])
+    token = preview["confirmation_token"]
+    assert token
+
+    upgraded = upgrade(
+        canonical_conn,
+        "hn",
+        revision["version"],
+        preview["candidate"],
+        token,
+    )
+
+    assert upgraded["pipeline_version"] == revision["version"]
+    assert list_triggers(canonical_conn, "hn") == [{
+        **trigger,
+        "trigger_spec": {"seconds": 60},
+    }]
 
 
 def test_operator_settings_use_canonical_store_and_runtime_cache(canonical_conn):

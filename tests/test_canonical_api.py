@@ -109,6 +109,100 @@ def test_openapi_is_one_pipeline_source_contract_epoch():
     assert "issues" in schemas["UpgradePreviewResponse"]["required"]
 
 
+def test_upgrade_preview_exposes_structured_trigger_flow_issue(monkeypatch):
+    from windex.api import app as app_module
+    from windex.api import canonical
+    from windex.config import Settings
+
+    settings = Settings(
+        _env_file=None,
+        write_token="",
+        serve_host="127.0.0.1",
+    )
+    issue = {
+        "path": "triggers.17.flow_name",
+        "code": "trigger_flow_missing",
+        "severity": "error",
+        "message": (
+            "Enabled trigger 17 references Flow 'harvest', which target "
+            "revision 2 does not define. Rebind or delete the trigger before "
+            "upgrading."
+        ),
+    }
+    preview = {
+        "source_id": 7,
+        "from_version": 1,
+        "target_version": 2,
+        "target_hash": "sha256:target",
+        "expected_etag": "sha256:config",
+        "candidate_hash": "sha256:candidate",
+        "candidate": {},
+        "retained": {},
+        "defaulted": {},
+        "removed": [],
+        "clamped": {},
+        "missing": [],
+        "install_stage_changed": [],
+        "state_impact": {
+            "stores_preserved": [],
+            "requires_confirmation": False,
+            "trigger_bindings_checked": 1,
+            "trigger_bindings_policy": "all_enabled_and_disabled",
+            "trigger_bindings_hash": "sha256:triggers",
+        },
+        "issues": [issue],
+        "confirmation_token": None,
+        "valid": False,
+    }
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(canonical, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        canonical.db,
+        "pooled",
+        lambda _dsn: nullcontext(object()),
+    )
+    monkeypatch.setattr(
+        canonical.source_store,
+        "upgrade_preview",
+        lambda *_args, **_kwargs: preview,
+    )
+
+    response = TestClient(admin).post(
+        "/v1/sources/hn/upgrade/preview",
+        json={"target_version": 2},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["valid"] is False
+    assert response.json()["confirmation_token"] is None
+    assert response.json()["issues"] == [issue]
+
+    def reject_upgrade(*_args, **_kwargs):
+        raise canonical.source_store.SourceConflictError({
+            "message": "Source upgrade candidate is invalid",
+            "issues": [issue],
+        })
+
+    monkeypatch.setattr(
+        canonical.source_store,
+        "upgrade",
+        reject_upgrade,
+    )
+    response = TestClient(admin).post(
+        "/v1/sources/hn/upgrade",
+        json={
+            "target_version": 2,
+            "values": {},
+            "confirmation_token": "stale",
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "message": "Source upgrade candidate is invalid",
+        "issues": [issue],
+    }
+
+
 def test_registry_response_is_fully_typed():
     response = RegistryResponse.model_validate(registry.describe())
     assert response.contract == "windex.registry/3"
