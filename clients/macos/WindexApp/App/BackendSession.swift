@@ -849,12 +849,14 @@ final class BackendSession {
         _ documents: [IngestDocument],
         source: String,
         mode: String,
+        partition: String? = nil,
         idempotencyKey: String
     ) async throws {
         _ = try await client.ingest(
             documents,
             into: source,
             mode: mode,
+            partition: partition,
             idempotencyKey: idempotencyKey
         )
         await refreshAll()

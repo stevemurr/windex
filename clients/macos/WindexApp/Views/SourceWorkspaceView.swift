@@ -584,6 +584,11 @@ private struct SourceDeploymentDetail: View {
     @State private var ingestURL = ""
     @State private var ingestTitle = ""
     @State private var ingestText = ""
+    @State private var ingestConversationID = ""
+    @State private var ingestChunkIndex = 0
+    @State private var ingestMessageStart = 0
+    @State private var ingestMessageEnd = 1
+    @State private var isConfirmingMemoryDelete = false
     @Environment(BackendSession.self) private var session
     @Environment(\.windexTheme) private var theme
 
@@ -637,6 +642,21 @@ private struct SourceDeploymentDetail: View {
         .sheet(isPresented: $isUpgrading) {
             SourceUpgradeSheet(source: source)
                 .frame(minWidth: 680, minHeight: 720)
+        }
+        .confirmationDialog(
+            "Delete memory conversation?",
+            isPresented: $isConfirmingMemoryDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete conversation", role: .destructive) {
+                Task { await deleteMemoryConversation() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "A full empty push will remove every indexed chunk in conversation "
+                    + "“\(memoryConversationID)”."
+            )
         }
     }
 
@@ -963,7 +983,10 @@ private struct SourceDeploymentDetail: View {
                 dataRow("Authentication", ingress.authenticationRequired ? "Bearer write token" : "none")
                 dataRow("Maximum documents", ingress.maxDocuments.formatted())
                 dataRow("Maximum text bytes", ingress.maxTextBytes.formatted())
-                dataRow("Modes", ingress.modes.joined(separator: ", "))
+                dataRow(
+                    "Modes",
+                    isMemorySource ? "full" : ingress.modes.joined(separator: ", ")
+                )
             }
             Text("curl example")
                 .windexStyle(Typography.label)
@@ -975,6 +998,90 @@ private struct SourceDeploymentDetail: View {
                 .background(theme.palette.plate)
 
             Hairline()
+            if isMemorySource {
+                memoryIngestionForm
+            } else {
+                genericIngestionForm(ingress)
+            }
+        } else {
+            Text(
+                "This Pipeline revision does not expose push ingestion. Add a push.docs input module and publish a new revision to enable it."
+            )
+            .windexStyle(Typography.body)
+            .foregroundStyle(theme.palette.graphite)
+            .frame(maxWidth: Layout.proseMeasure, alignment: .leading)
+        }
+    }
+
+    private var memoryConversationID: String {
+        ingestConversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isMemorySource: Bool {
+        source.search.searchName == "memory"
+    }
+
+    private var memoryIngestionForm: some View {
+        VStack(alignment: .leading, spacing: .sm) {
+            StyledText("Replace one conversation", Typography.eyebrow)
+                .foregroundStyle(theme.palette.graphite)
+            Text(
+                "Memory ingestion always uses full replacement. This diagnostic form "
+                    + "replaces one conversation with one chunk; production clients "
+                    + "should send every chunk for that conversation in the same request."
+            )
+            .windexStyle(Typography.body)
+            .foregroundStyle(theme.palette.graphite)
+            .frame(maxWidth: Layout.proseMeasure, alignment: .leading)
+
+            TextField("Conversation ID", text: $ingestConversationID)
+            HStack {
+                TextField(
+                    "Chunk index",
+                    value: $ingestChunkIndex,
+                    format: .number
+                )
+                TextField(
+                    "Message range start",
+                    value: $ingestMessageStart,
+                    format: .number
+                )
+                TextField(
+                    "Message range end",
+                    value: $ingestMessageEnd,
+                    format: .number
+                )
+            }
+            TextField("Title", text: $ingestTitle)
+            TextEditor(text: $ingestText)
+                .frame(minHeight: 120)
+                .padding(.xs)
+                .background(theme.palette.plate)
+
+            HStack {
+                Button("Replace conversation") {
+                    Task { await replaceMemoryConversation() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    memoryConversationID.isEmpty
+                        || ingestText.isEmpty
+                        || ingestChunkIndex < 0
+                        || ingestMessageStart < 0
+                        || ingestMessageEnd < ingestMessageStart
+                        || isMutating
+                )
+
+                Button("Delete conversation", role: .destructive) {
+                    isConfirmingMemoryDelete = true
+                }
+                .disabled(memoryConversationID.isEmpty || isMutating)
+            }
+        }
+    }
+
+    private func genericIngestionForm(_ ingress: SourceIngress) -> some View {
+        VStack(alignment: .leading, spacing: .sm) {
             StyledText("Send one document", Typography.eyebrow)
                 .foregroundStyle(theme.palette.graphite)
             TextField("Document ID", text: $ingestID)
@@ -1008,15 +1115,62 @@ private struct SourceDeploymentDetail: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(ingestID.isEmpty || ingestURL.isEmpty || ingestText.isEmpty || isMutating)
-        } else {
-            Text(
-                "This Pipeline revision does not expose push ingestion. Add a push.docs input module and publish a new revision to enable it."
+            .disabled(
+                ingestID.isEmpty
+                    || ingestURL.isEmpty
+                    || ingestText.isEmpty
+                    || isMutating
             )
-            .windexStyle(Typography.body)
-            .foregroundStyle(theme.palette.graphite)
-            .frame(maxWidth: Layout.proseMeasure, alignment: .leading)
         }
+    }
+
+    private func replaceMemoryConversation() async {
+        await perform {
+            let chunk = try MemoryConversationChunk(
+                chunkIndex: ingestChunkIndex,
+                messageRangeStart: ingestMessageStart,
+                messageRangeEnd: ingestMessageEnd,
+                text: ingestText,
+                title: ingestTitle
+            )
+            let batch = try MemoryIngestBatch.replacement(
+                conversationID: memoryConversationID,
+                chunks: [chunk]
+            )
+            try await session.ingest(
+                batch.documents,
+                source: source.name,
+                mode: batch.mode,
+                partition: batch.partition,
+                idempotencyKey: UUID().uuidString
+            )
+            resetMemoryIngestionForm()
+        }
+    }
+
+    private func deleteMemoryConversation() async {
+        await perform {
+            let batch = try MemoryIngestBatch.deletion(
+                conversationID: memoryConversationID
+            )
+            try await session.ingest(
+                batch.documents,
+                source: source.name,
+                mode: batch.mode,
+                partition: batch.partition,
+                idempotencyKey: UUID().uuidString
+            )
+            resetMemoryIngestionForm()
+        }
+    }
+
+    private func resetMemoryIngestionForm() {
+        ingestConversationID = ""
+        ingestChunkIndex = 0
+        ingestMessageStart = 0
+        ingestMessageEnd = 1
+        ingestTitle = ""
+        ingestText = ""
     }
 
     private func saveSettings(_ changes: [String: JSONValue]) async {
@@ -1059,10 +1213,15 @@ private struct SourceDeploymentDetail: View {
         if ingress.authenticationRequired {
             headers.append(#"-H 'Authorization: Bearer <write-token>'"#)
         }
+        let body = if isMemorySource {
+            #"{"schema_version":"windex.ingest/1","mode":"full","partition":"<conversation-id>","documents":[{"id":"<conversation-id>/00000","url":"llmchat://chat/<conversation-id>?chunk=0","title":"Example conversation","text":"Searchable conversation text","fields":{"conversation_id":"<conversation-id>","chunk_index":0,"message_range":[0,1]}}]}"#
+        } else {
+            #"{"schema_version":"windex.ingest/1","mode":"\#(ingress.modes.first ?? "delta")","documents":[{"id":"doc-1","url":"https://example.test/doc-1","title":"Example","text":"Searchable text"}]}"#
+        }
         return """
         curl -X POST '\(pushURL(ingress.path))' \\
           \(headers.joined(separator: " \\\n  ")) \\
-          --data '{"schema_version":"windex.ingest/1","mode":"\(ingress.modes.first ?? "delta")","documents":[{"id":"doc-1","url":"https://example.test/doc-1","title":"Example","text":"Searchable text"}]}'
+          --data '\(body)'
         """
     }
 

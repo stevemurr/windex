@@ -267,6 +267,175 @@ struct Epoch2TransportTests {
         #expect(result.runId == 11)
     }
 
+    @Test("a full memory push encodes its conversation partition")
+    func memoryIngestPartition() async throws {
+        let conversation = "0f9d2a41-3c7e-4b18-9a05-6d1f8c2e4b77"
+        let batch = try MemoryIngestBatch.replacement(
+            conversationID: conversation,
+            chunks: [
+                try MemoryConversationChunk(
+                    chunkIndex: 3,
+                    messageRangeStart: 4,
+                    messageRangeEnd: 8,
+                    text: "Searchable conversation"
+                ),
+            ]
+        )
+        let server = try MockWindexServer()
+        server.on("POST /v1/sources/memory/ingest") { request in
+            guard let body = try? JSONDecoder().decode(
+                    JSONValue.self,
+                    from: Data(request.body.utf8)
+                ).objectValue else {
+                Issue.record("memory request was not a JSON object")
+                return .detail("invalid test request", status: 500)
+            }
+            #expect(body["mode"] == .string("full"))
+            #expect(body["partition"] == .string(conversation))
+            guard let documents = body["documents"]?.arrayValue,
+                  let document = documents.first?.objectValue else {
+                Issue.record("memory request had no document object")
+                return .detail("invalid test request", status: 500)
+            }
+            #expect(document["id"] == .string("\(conversation)/00003"))
+            guard let fields = document["fields"]?.objectValue else {
+                Issue.record("memory request had no fields object")
+                return .detail("invalid test request", status: 500)
+            }
+            #expect(fields["conversation_id"] == .string(conversation))
+            #expect(fields["chunk_index"] == .int(3))
+            #expect(fields["message_range"] == .array([.int(4), .int(8)]))
+            return .json(
+                #"{"run_id":21,"queued":true,"coalesced":false,"rerun_of":null}"#,
+                status: 202
+            )
+        }
+        try await server.start()
+        defer { server.stop() }
+        let client = WindexClient(baseURL: server.baseURL, token: "token")
+
+        let result = try await client.ingest(
+            batch.documents,
+            into: "memory",
+            mode: batch.mode,
+            partition: batch.partition,
+            idempotencyKey: "conversation-full-0001"
+        )
+
+        #expect(result.runId == 21)
+    }
+
+    @Test("an empty full memory push preserves the deletion partition")
+    func memoryDeletionPartition() async throws {
+        let conversation = "7b2c5e90-1a44-4f63-8e21-3d9a0b6c5f18"
+        let batch = try MemoryIngestBatch.deletion(
+            conversationID: conversation
+        )
+        let server = try MockWindexServer()
+        server.on("POST /v1/sources/memory/ingest") { request in
+            guard let body = try? JSONDecoder().decode(
+                    JSONValue.self,
+                    from: Data(request.body.utf8)
+                ).objectValue else {
+                Issue.record("memory delete request was not a JSON object")
+                return .detail("invalid test request", status: 500)
+            }
+            #expect(body["mode"] == .string("full"))
+            #expect(body["partition"] == .string(conversation))
+            #expect(body["documents"] == .array([]))
+            return .json(
+                #"{"run_id":22,"queued":true,"coalesced":false,"rerun_of":null}"#,
+                status: 202
+            )
+        }
+        try await server.start()
+        defer { server.stop() }
+        let client = WindexClient(baseURL: server.baseURL, token: "token")
+
+        let result = try await client.ingest(
+            batch.documents,
+            into: "memory",
+            mode: batch.mode,
+            partition: batch.partition,
+            idempotencyKey: "conversation-delete-0001"
+        )
+
+        #expect(result.runId == 22)
+    }
+
+    @Test("memory ingest surfaces structured 422 attribution failures")
+    func memoryIngestValidation() async throws {
+        let server = try MockWindexServer()
+        server.on("POST /v1/sources/memory/ingest") { request in
+            if request.body.contains("\"partition\"") {
+                return .json(
+                    """
+                    {"detail":[{
+                      "loc":["body","documents",0,"id"],
+                      "msg":"document id lies outside the conversation partition",
+                      "type":"value_error"
+                    }]}
+                    """,
+                    status: 422
+                )
+            }
+            return .json(
+                """
+                {"detail":[{
+                  "loc":["body","partition"],
+                  "msg":"memory push requires a conversation partition",
+                  "type":"missing"
+                }]}
+                """,
+                status: 422
+            )
+        }
+        try await server.start()
+        defer { server.stop() }
+        let client = WindexClient(baseURL: server.baseURL, token: "token")
+
+        do {
+            _ = try await client.ingest(
+                [],
+                into: "memory",
+                mode: "full",
+                idempotencyKey: "missing-partition"
+            )
+            Issue.record("expected missing-partition validation")
+        } catch let error as WindexError {
+            guard case .validation(let failures, _) = error else {
+                Issue.record("wrong error: \(error)")
+                return
+            }
+            #expect(failures.map(\.field) == ["partition"])
+            #expect(error.localizedDescription.contains("conversation partition"))
+        }
+
+        do {
+            _ = try await client.ingest(
+                [
+                    IngestDocument(
+                        id: "another-conversation/00000",
+                        url: "llmchat://chat/another-conversation?chunk=0",
+                        text: "malformed"
+                    ),
+                ],
+                into: "memory",
+                mode: "full",
+                partition: "expected-conversation",
+                idempotencyKey: "malformed-document"
+            )
+            Issue.record("expected malformed-document validation")
+        } catch let error as WindexError {
+            guard case .validation(let failures, _) = error else {
+                Issue.record("wrong error: \(error)")
+                return
+            }
+            #expect(failures.map(\.field) == ["id"])
+            #expect(error.localizedDescription.contains("outside"))
+        }
+    }
+
     @Test("409, 412, and 428 remain distinct")
     func distinctConflictErrors() async throws {
         for (status, route) in [(409, "conflict"), (412, "stale"), (428, "required")] {

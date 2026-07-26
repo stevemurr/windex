@@ -431,6 +431,112 @@ struct AppModelTests {
         #expect(editor.confirmation?.token == "candidate-v6")
     }
 
+    @Test("BackendSession forwards a memory partition to WindexClient")
+    func backendSessionForwardsIngestPartition() async throws {
+        IngestRecordingURLProtocol.configure()
+        defer { IngestRecordingURLProtocol.reset() }
+        let profile = try ConnectionProfile("http://windex.test")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [IngestRecordingURLProtocol.self]
+        let client = WindexClient(
+            configuration: .init(baseURL: profile.baseURL),
+            token: "token",
+            session: URLSession(configuration: configuration)
+        )
+        let session = BackendSession(
+            client: client,
+            backend: ConnectedBackend(
+                profile: profile,
+                evidence: Self.evidence,
+                hasStoredToken: true
+            )
+        )
+        let conversation = "0f9d2a41-3c7e-4b18-9a05-6d1f8c2e4b77"
+        let batch = try MemoryIngestBatch.replacement(
+            conversationID: conversation,
+            chunks: [
+                try MemoryConversationChunk(
+                    chunkIndex: 4,
+                    messageRangeStart: 8,
+                    messageRangeEnd: 12,
+                    text: "Remember this"
+                ),
+            ]
+        )
+
+        try await session.ingest(
+            batch.documents,
+            source: "memory",
+            mode: batch.mode,
+            partition: batch.partition,
+            idempotencyKey: "backend-session-memory"
+        )
+
+        let request = try #require(
+            IngestRecordingURLProtocol.requests.first {
+                $0.method == "POST"
+                    && $0.path == "/v1/sources/memory/ingest"
+            }
+        )
+        let body = try #require(
+            try JSONDecoder().decode(
+                JSONValue.self,
+                from: request.body
+            ).objectValue
+        )
+        #expect(body["mode"] == .string("full"))
+        #expect(body["partition"] == .string(conversation))
+        #expect(body["documents"]?.arrayValue?.count == 1)
+    }
+
+    @Test("BackendSession preserves structured memory validation errors")
+    func backendSessionSurfacesMemoryValidation() async throws {
+        IngestRecordingURLProtocol.configure(
+            status: 422,
+            body: """
+            {"detail":[{
+              "loc":["body","partition"],
+              "msg":"memory push requires a conversation partition",
+              "type":"missing"
+            }]}
+            """
+        )
+        defer { IngestRecordingURLProtocol.reset() }
+        let profile = try ConnectionProfile("http://windex.test")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [IngestRecordingURLProtocol.self]
+        let client = WindexClient(
+            configuration: .init(baseURL: profile.baseURL),
+            token: "token",
+            session: URLSession(configuration: configuration)
+        )
+        let session = BackendSession(
+            client: client,
+            backend: ConnectedBackend(
+                profile: profile,
+                evidence: Self.evidence,
+                hasStoredToken: true
+            )
+        )
+
+        do {
+            try await session.ingest(
+                [],
+                source: "memory",
+                mode: "full",
+                idempotencyKey: "backend-session-invalid"
+            )
+            Issue.record("expected validation failure")
+        } catch let error as WindexError {
+            guard case .validation(let failures, _) = error else {
+                Issue.record("wrong error: \(error)")
+                return
+            }
+            #expect(failures.map(\.field) == ["partition"])
+            #expect(error.localizedDescription.contains("conversation partition"))
+        }
+    }
+
     private static let evidence = PairingEvidence(
         version: "0.1.0",
         uptimeSeconds: 128,
@@ -525,6 +631,105 @@ struct AppModelTests {
             )
         )
     }
+}
+
+private struct RecordedIngestRequest: Sendable {
+    let method: String
+    let path: String
+    let body: Data
+}
+
+private final class IngestRecordingURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var recorded: [RecordedIngestRequest] = []
+    nonisolated(unsafe) private static var responseStatus = 202
+    nonisolated(unsafe) private static var responseBody = Data()
+
+    static var requests: [RecordedIngestRequest] {
+        lock.withLock { recorded }
+    }
+
+    static func configure(
+        status: Int = 202,
+        body: String = #"{"run_id":31,"queued":true,"coalesced":false,"rerun_of":null}"#
+    ) {
+        lock.withLock {
+            recorded = []
+            responseStatus = status
+            responseBody = Data(body.utf8)
+        }
+    }
+
+    static func reset() {
+        lock.withLock {
+            recorded = []
+            responseStatus = 202
+            responseBody = Data()
+        }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(
+        for request: URLRequest
+    ) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        let body = Self.bodyData(for: request)
+        let snapshot = Self.lock.withLock { () -> (Int, Data) in
+            Self.recorded.append(
+                RecordedIngestRequest(
+                    method: request.httpMethod ?? "GET",
+                    path: request.url?.path ?? "",
+                    body: body
+                )
+            )
+            if request.httpMethod == "POST",
+               request.url?.path == "/v1/sources/memory/ingest" {
+                return (Self.responseStatus, Self.responseBody)
+            }
+            return (404, Data(#"{"detail":"not configured"}"#.utf8))
+        }
+        guard let url = request.url,
+              let response = HTTPURLResponse(
+                url: url,
+                statusCode: snapshot.0,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+              ) else {
+            client?.urlProtocol(
+                self,
+                didFailWithError: URLError(.badServerResponse)
+            )
+            return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: snapshot.1)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    private static func bodyData(for request: URLRequest) -> Data {
+        if let body = request.httpBody {
+            return body
+        }
+        guard let stream = request.httpBodyStream else {
+            return Data()
+        }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count > 0 else { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
+
+    override func stopLoading() {}
 }
 
 private final class PairingRecorder: @unchecked Sendable {

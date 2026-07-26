@@ -57,4 +57,35 @@ struct GeneratedConformanceTests {
         #expect(!source.contains("struct Recipe"))
         #expect(!source.contains("Marketplace"))
     }
+
+    @Test("the public ingest contract declares an optional partition")
+    func publicIngestPartition() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("openapi.json")
+        let root = try JSONDecoder().decode(
+            JSONValue.self,
+            from: Data(contentsOf: url)
+        )
+        let schemas = try #require(
+            root.objectValue?["components"]?.objectValue?["schemas"]?.objectValue
+        )
+        let request = try #require(
+            schemas["IngestRequest"]?.objectValue
+        )
+        let properties = try #require(
+            request["properties"]?.objectValue
+        )
+        let partition = try #require(properties["partition"]?.objectValue)
+        let variants = try #require(partition["anyOf"]?.arrayValue)
+
+        #expect(request["required"]?.arrayValue?.contains(.string("partition")) != true)
+        #expect(variants.contains { variant in
+            variant.objectValue?["type"] == .string("string")
+        })
+        #expect(variants.contains { variant in
+            variant.objectValue?["type"] == .string("null")
+        })
+    }
 }
