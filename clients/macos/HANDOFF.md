@@ -42,7 +42,9 @@ document.
   independent ETags.
 - Generic Pipeline Runs select an explicit immutable revision and Flow, render
   declared Pipeline parameters with `SchemaForm`, collect one JSON value per
-  typed boundary input, and preserve Source Run latest as a different action.
+  typed boundary input, offer normal Run and Dry Run modes, and preserve Source
+  Run latest as a different action. Both modes enter the canonical queued Run
+  lifecycle and shared Run detail.
 - Source-capable Pipeline revisions expose `Use as Source`, carrying that exact
   immutable revision into Source creation.
 - Source validation and creation, schema-backed settings, upgrade preview and
@@ -54,11 +56,11 @@ document.
   configured secret names.
 - Upgrade can target any eligible Source-capable revision and renders retained,
   defaulted, removed, clamped, missing, installation-stage, and state-impact
-  details. An invalid candidate can be edited and checked locally. The current
-  epoch-2 upgrade request and validation routes do not carry an edited target
-  candidate, so the client can re-check its parameter schema but visibly blocks
-  server validation and confirmation after such an edit instead of submitting
-  a non-atomic or misleading request.
+  details plus structured validation issues. The server-returned candidate is
+  rendered as a schema-driven form. Operators can edit and re-preview that exact
+  candidate; confirmation stays disabled until the latest server response is
+  valid and supplies a token, then submits the matching values and token
+  atomically.
 - Shared Run list and detail with task/unit progress, Run Events, typed boundary
   outputs, artifact download, cancel, frozen historic Re-run, and Source
   Run latest as distinct actions. Each Source workspace pages its canonical Run
@@ -137,11 +139,6 @@ HTTPS. Marketplace remains out of scope.
 - The available LAN server is still pre-epoch-2. Strict contract enforcement
   intentionally prevents pairing, so the end-to-end mutation/SSE acceptance
   pass must wait for an epoch-2 deployment.
-- Server validation and atomic submission of an operator-edited upgrade
-  candidate require the authoritative validation/upgrade request schemas to
-  accept the target revision plus candidate values. The client supports
-  preview, editing, and schema-local checking, but only confirms the unchanged
-  server-generated candidate.
 
 ## Release-only external gates
 

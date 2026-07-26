@@ -37,6 +37,11 @@ private struct PipelineRunBody: Codable, Sendable {
     let inputs: [String: JSONValue]
     let parameters: [String: JSONValue]
     let priority: Int
+    let dryRun: Bool
+    enum CodingKeys: String, CodingKey {
+        case version, flow, inputs, parameters, priority
+        case dryRun = "dry_run"
+    }
 }
 
 extension WindexClient {
@@ -148,7 +153,8 @@ extension WindexClient {
     public func runPipeline(_ name: String, version: Int?, headETag: String? = nil,
                             flow: String? = nil, inputs: [String: JSONValue] = [:],
                             parameters: [String: JSONValue] = [:],
-                            priority: Int = 50) async throws -> QueuedRunWire {
+                            priority: Int = 50,
+                            dryRun: Bool = false) async throws -> QueuedRunWire {
         guard version != nil || headETag?.isEmpty == false else {
             throw WindexError.preconditionRequired(
                 message: "Running Pipeline head requires If-Match.")
@@ -157,7 +163,8 @@ extension WindexClient {
             "POST", "/v1/pipelines/\(Self.escapePath(name))/runs",
             surface: .admin,
             body: PipelineRunBody(version: version, flow: flow, inputs: inputs,
-                                  parameters: parameters, priority: priority),
+                                  parameters: parameters, priority: priority,
+                                  dryRun: dryRun),
             headers: headETag.map { ["If-Match": $0] } ?? [:],
             as: QueuedRunWire.self
         )

@@ -325,6 +325,66 @@ struct AppModelTests {
         #expect(!store.historyHasMore)
     }
 
+    @Test("Pipeline Run sheet mode distinguishes a normal Run from Dry Run")
+    func pipelineRunMode() {
+        #expect(!PipelineRunMode.run.isDryRun)
+        #expect(PipelineRunMode.run.queueTitle == "Queue Run")
+        #expect(PipelineRunMode.dryRun.isDryRun)
+        #expect(PipelineRunMode.dryRun.queueTitle == "Queue Dry Run")
+    }
+
+    @Test("Source upgrade editor confirms only the latest server candidate")
+    func editableSourceUpgradeCandidate() throws {
+        let parameter = try PipelineParameterDefinition(
+            key: "batch",
+            kind: .int,
+            title: "Batch",
+            required: true
+        ).parameter()
+        let editor = SourceUpgradeEditorModel()
+        editor.apply(
+            try Self.upgradePreview(
+                candidate: 20,
+                valid: true,
+                token: "candidate-20"
+            ),
+            parameters: [parameter]
+        )
+        #expect(editor.canConfirm)
+
+        editor.candidateForm?.set("batch", .int(24))
+        #expect(editor.hasUnpreviewedChanges)
+        #expect(editor.valuesForPreview == ["batch": 24])
+        #expect(editor.confirmation == nil)
+
+        let invalid = try Self.upgradePreview(
+            candidate: 24,
+            valid: false,
+            token: nil,
+            issueMessage: "Batch 24 is unavailable."
+        )
+        editor.apply(invalid, parameters: [parameter])
+        #expect(editor.candidateForm?.value(forKey: "batch") == .int(24))
+        #expect(editor.preview?.issues.first?.code == "candidate_invalid")
+        #expect(!editor.canConfirm)
+
+        editor.candidateForm?.set("batch", .int(16))
+        #expect(editor.valuesForPreview == ["batch": 16])
+        editor.apply(
+            try Self.upgradePreview(
+                candidate: 16,
+                valid: true,
+                token: "candidate-16"
+            ),
+            parameters: [parameter]
+        )
+
+        let confirmation = try #require(editor.confirmation)
+        #expect(confirmation.version == 5)
+        #expect(confirmation.values == ["batch": 16])
+        #expect(confirmation.token == "candidate-16")
+    }
+
     private static let evidence = PairingEvidence(
         version: "0.1.0",
         uptimeSeconds: 128,
@@ -368,6 +428,51 @@ struct AppModelTests {
                     "value": \(value),
                     "origin": "source"
                   }]
+                }
+                """.utf8
+            )
+        )
+    }
+
+    private static func upgradePreview(
+        candidate: Int,
+        valid: Bool,
+        token: String?,
+        issueMessage: String? = nil
+    ) throws -> SourceUpgradePreviewWire {
+        let confirmationToken = token.map { "\"\($0)\"" } ?? "null"
+        let issues = issueMessage.map {
+            """
+            [{
+              "code": "candidate_invalid",
+              "message": "\($0)",
+              "path": "values.batch",
+              "severity": "error"
+            }]
+            """
+        } ?? "[]"
+        return try JSONDecoder().decode(
+            SourceUpgradePreviewWire.self,
+            from: Data(
+                """
+                {
+                  "source_id": 1,
+                  "from_version": 4,
+                  "target_version": 5,
+                  "target_hash": "target-hash",
+                  "expected_etag": "source-v4",
+                  "candidate_hash": "candidate-\(candidate)",
+                  "candidate": {"batch": \(candidate)},
+                  "retained": {},
+                  "defaulted": {},
+                  "removed": [],
+                  "clamped": {},
+                  "missing": [],
+                  "install_stage_changed": [],
+                  "state_impact": {},
+                  "issues": \(issues),
+                  "valid": \(valid),
+                  "confirmation_token": \(confirmationToken)
                 }
                 """.utf8
             )

@@ -1193,44 +1193,6 @@ public enum Components {
                 case confirmationToken = "confirmation_token"
             }
         }
-        /// - Remark: Generated from `#/components/schemas/Body_source_upgrade`.
-        public struct BodySourceUpgrade: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/Body_source_upgrade/confirmation_token`.
-            public var confirmationToken: Swift.String
-            /// - Remark: Generated from `#/components/schemas/Body_source_upgrade/target_version`.
-            public var targetVersion: Swift.Int
-            /// Creates a new `BodySourceUpgrade`.
-            ///
-            /// - Parameters:
-            ///   - confirmationToken:
-            ///   - targetVersion:
-            public init(
-                confirmationToken: Swift.String,
-                targetVersion: Swift.Int
-            ) {
-                self.confirmationToken = confirmationToken
-                self.targetVersion = targetVersion
-            }
-            public enum CodingKeys: String, CodingKey {
-                case confirmationToken = "confirmation_token"
-                case targetVersion = "target_version"
-            }
-        }
-        /// - Remark: Generated from `#/components/schemas/Body_source_upgrade_preview`.
-        public struct BodySourceUpgradePreview: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/Body_source_upgrade_preview/target_version`.
-            public var targetVersion: Swift.Int
-            /// Creates a new `BodySourceUpgradePreview`.
-            ///
-            /// - Parameters:
-            ///   - targetVersion:
-            public init(targetVersion: Swift.Int) {
-                self.targetVersion = targetVersion
-            }
-            public enum CodingKeys: String, CodingKey {
-                case targetVersion = "target_version"
-            }
-        }
         /// - Remark: Generated from `#/components/schemas/Capabilities`.
         public struct Capabilities: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/Capabilities/generic_runs`.
@@ -4068,6 +4030,8 @@ public enum Components {
         }
         /// - Remark: Generated from `#/components/schemas/PipelineRunCreate`.
         public struct PipelineRunCreate: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PipelineRunCreate/dry_run`.
+            public var dryRun: Swift.Bool?
             /// - Remark: Generated from `#/components/schemas/PipelineRunCreate/flow`.
             public var flow: Swift.String?
             /// - Remark: Generated from `#/components/schemas/PipelineRunCreate/inputs`.
@@ -4117,18 +4081,21 @@ public enum Components {
             /// Creates a new `PipelineRunCreate`.
             ///
             /// - Parameters:
+            ///   - dryRun:
             ///   - flow:
             ///   - inputs:
             ///   - parameters:
             ///   - priority:
             ///   - version:
             public init(
+                dryRun: Swift.Bool? = nil,
                 flow: Swift.String? = nil,
                 inputs: Components.Schemas.PipelineRunCreate.InputsPayload? = nil,
                 parameters: Components.Schemas.PipelineRunCreate.ParametersPayload? = nil,
                 priority: Swift.Int? = nil,
                 version: Swift.Int? = nil
             ) {
+                self.dryRun = dryRun
                 self.flow = flow
                 self.inputs = inputs
                 self.parameters = parameters
@@ -4136,6 +4103,7 @@ public enum Components {
                 self.version = version
             }
             public enum CodingKeys: String, CodingKey {
+                case dryRun = "dry_run"
                 case flow
                 case inputs
                 case parameters
@@ -4144,6 +4112,10 @@ public enum Components {
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.dryRun = try container.decodeIfPresent(
+                    Swift.Bool.self,
+                    forKey: .dryRun
+                )
                 self.flow = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .flow
@@ -4165,6 +4137,7 @@ public enum Components {
                     forKey: .version
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "dry_run",
                     "flow",
                     "inputs",
                     "parameters",
@@ -6853,6 +6826,129 @@ public enum Components {
                 ])
             }
         }
+        /// - Remark: Generated from `#/components/schemas/SourceUpgradePreviewRequest`.
+        public struct SourceUpgradePreviewRequest: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SourceUpgradePreviewRequest/target_version`.
+            public var targetVersion: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/SourceUpgradePreviewRequest/values`.
+            public struct ValuesPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `ValuesPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/SourceUpgradePreviewRequest/values`.
+            public var values: Components.Schemas.SourceUpgradePreviewRequest.ValuesPayload?
+            /// Creates a new `SourceUpgradePreviewRequest`.
+            ///
+            /// - Parameters:
+            ///   - targetVersion:
+            ///   - values:
+            public init(
+                targetVersion: Swift.Int,
+                values: Components.Schemas.SourceUpgradePreviewRequest.ValuesPayload? = nil
+            ) {
+                self.targetVersion = targetVersion
+                self.values = values
+            }
+            public enum CodingKeys: String, CodingKey {
+                case targetVersion = "target_version"
+                case values
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.targetVersion = try container.decode(
+                    Swift.Int.self,
+                    forKey: .targetVersion
+                )
+                self.values = try container.decodeIfPresent(
+                    Components.Schemas.SourceUpgradePreviewRequest.ValuesPayload.self,
+                    forKey: .values
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "target_version",
+                    "values"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/SourceUpgradeRequest`.
+        public struct SourceUpgradeRequest: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SourceUpgradeRequest/confirmation_token`.
+            public var confirmationToken: Swift.String
+            /// - Remark: Generated from `#/components/schemas/SourceUpgradeRequest/target_version`.
+            public var targetVersion: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/SourceUpgradeRequest/values`.
+            public struct ValuesPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `ValuesPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/SourceUpgradeRequest/values`.
+            public var values: Components.Schemas.SourceUpgradeRequest.ValuesPayload
+            /// Creates a new `SourceUpgradeRequest`.
+            ///
+            /// - Parameters:
+            ///   - confirmationToken:
+            ///   - targetVersion:
+            ///   - values:
+            public init(
+                confirmationToken: Swift.String,
+                targetVersion: Swift.Int,
+                values: Components.Schemas.SourceUpgradeRequest.ValuesPayload
+            ) {
+                self.confirmationToken = confirmationToken
+                self.targetVersion = targetVersion
+                self.values = values
+            }
+            public enum CodingKeys: String, CodingKey {
+                case confirmationToken = "confirmation_token"
+                case targetVersion = "target_version"
+                case values
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.confirmationToken = try container.decode(
+                    Swift.String.self,
+                    forKey: .confirmationToken
+                )
+                self.targetVersion = try container.decode(
+                    Swift.Int.self,
+                    forKey: .targetVersion
+                )
+                self.values = try container.decode(
+                    Components.Schemas.SourceUpgradeRequest.ValuesPayload.self,
+                    forKey: .values
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "confirmation_token",
+                    "target_version",
+                    "values"
+                ])
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/SourcesResponse`.
         public struct SourcesResponse: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/SourcesResponse/sources`.
@@ -7529,6 +7625,26 @@ public enum Components {
         }
         /// - Remark: Generated from `#/components/schemas/UpgradePreviewResponse`.
         public struct UpgradePreviewResponse: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UpgradePreviewResponse/candidate`.
+            public struct CandidatePayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `CandidatePayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/UpgradePreviewResponse/candidate`.
+            public var candidate: Components.Schemas.UpgradePreviewResponse.CandidatePayload
             /// - Remark: Generated from `#/components/schemas/UpgradePreviewResponse/candidate_hash`.
             public var candidateHash: Swift.String
             /// - Remark: Generated from `#/components/schemas/UpgradePreviewResponse/clamped`.
@@ -7552,7 +7668,7 @@ public enum Components {
             /// - Remark: Generated from `#/components/schemas/UpgradePreviewResponse/clamped`.
             public var clamped: Components.Schemas.UpgradePreviewResponse.ClampedPayload
             /// - Remark: Generated from `#/components/schemas/UpgradePreviewResponse/confirmation_token`.
-            public var confirmationToken: Swift.String
+            public var confirmationToken: Swift.String?
             /// - Remark: Generated from `#/components/schemas/UpgradePreviewResponse/defaulted`.
             public struct DefaultedPayload: Codable, Hashable, Sendable {
                 /// A container of undocumented properties.
@@ -7579,6 +7695,8 @@ public enum Components {
             public var fromVersion: Swift.Int
             /// - Remark: Generated from `#/components/schemas/UpgradePreviewResponse/install_stage_changed`.
             public var installStageChanged: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/UpgradePreviewResponse/issues`.
+            public var issues: [Components.Schemas.ValidationIssueModel]
             /// - Remark: Generated from `#/components/schemas/UpgradePreviewResponse/missing`.
             public var missing: [Swift.String]
             /// - Remark: Generated from `#/components/schemas/UpgradePreviewResponse/removed`.
@@ -7634,6 +7752,7 @@ public enum Components {
             /// Creates a new `UpgradePreviewResponse`.
             ///
             /// - Parameters:
+            ///   - candidate:
             ///   - candidateHash:
             ///   - clamped:
             ///   - confirmationToken:
@@ -7641,6 +7760,7 @@ public enum Components {
             ///   - expectedEtag:
             ///   - fromVersion:
             ///   - installStageChanged:
+            ///   - issues:
             ///   - missing:
             ///   - removed:
             ///   - retained:
@@ -7650,13 +7770,15 @@ public enum Components {
             ///   - targetVersion:
             ///   - valid:
             public init(
+                candidate: Components.Schemas.UpgradePreviewResponse.CandidatePayload,
                 candidateHash: Swift.String,
                 clamped: Components.Schemas.UpgradePreviewResponse.ClampedPayload,
-                confirmationToken: Swift.String,
+                confirmationToken: Swift.String? = nil,
                 defaulted: Components.Schemas.UpgradePreviewResponse.DefaultedPayload,
                 expectedEtag: Swift.String,
                 fromVersion: Swift.Int,
                 installStageChanged: [Swift.String],
+                issues: [Components.Schemas.ValidationIssueModel],
                 missing: [Swift.String],
                 removed: [Swift.String],
                 retained: Components.Schemas.UpgradePreviewResponse.RetainedPayload,
@@ -7666,6 +7788,7 @@ public enum Components {
                 targetVersion: Swift.Int,
                 valid: Swift.Bool
             ) {
+                self.candidate = candidate
                 self.candidateHash = candidateHash
                 self.clamped = clamped
                 self.confirmationToken = confirmationToken
@@ -7673,6 +7796,7 @@ public enum Components {
                 self.expectedEtag = expectedEtag
                 self.fromVersion = fromVersion
                 self.installStageChanged = installStageChanged
+                self.issues = issues
                 self.missing = missing
                 self.removed = removed
                 self.retained = retained
@@ -7683,6 +7807,7 @@ public enum Components {
                 self.valid = valid
             }
             public enum CodingKeys: String, CodingKey {
+                case candidate
                 case candidateHash = "candidate_hash"
                 case clamped
                 case confirmationToken = "confirmation_token"
@@ -7690,6 +7815,7 @@ public enum Components {
                 case expectedEtag = "expected_etag"
                 case fromVersion = "from_version"
                 case installStageChanged = "install_stage_changed"
+                case issues
                 case missing
                 case removed
                 case retained
@@ -7701,6 +7827,10 @@ public enum Components {
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.candidate = try container.decode(
+                    Components.Schemas.UpgradePreviewResponse.CandidatePayload.self,
+                    forKey: .candidate
+                )
                 self.candidateHash = try container.decode(
                     Swift.String.self,
                     forKey: .candidateHash
@@ -7709,7 +7839,7 @@ public enum Components {
                     Components.Schemas.UpgradePreviewResponse.ClampedPayload.self,
                     forKey: .clamped
                 )
-                self.confirmationToken = try container.decode(
+                self.confirmationToken = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .confirmationToken
                 )
@@ -7728,6 +7858,10 @@ public enum Components {
                 self.installStageChanged = try container.decode(
                     [Swift.String].self,
                     forKey: .installStageChanged
+                )
+                self.issues = try container.decode(
+                    [Components.Schemas.ValidationIssueModel].self,
+                    forKey: .issues
                 )
                 self.missing = try container.decode(
                     [Swift.String].self,
@@ -7762,6 +7896,7 @@ public enum Components {
                     forKey: .valid
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "candidate",
                     "candidate_hash",
                     "clamped",
                     "confirmation_token",
@@ -7769,6 +7904,7 @@ public enum Components {
                     "expected_etag",
                     "from_version",
                     "install_stage_changed",
+                    "issues",
                     "missing",
                     "removed",
                     "retained",
@@ -18645,7 +18781,7 @@ public enum Operations {
             /// - Remark: Generated from `#/paths/v1/sources/{name}/upgrade/POST/requestBody`.
             @frozen public enum Body: Sendable, Hashable {
                 /// - Remark: Generated from `#/paths/v1/sources/{name}/upgrade/POST/requestBody/content/application\/json`.
-                case json(Components.Schemas.BodySourceUpgrade)
+                case json(Components.Schemas.SourceUpgradeRequest)
             }
             public var body: Operations.SourceUpgrade.Input.Body
             /// Creates a new `Input`.
@@ -18833,7 +18969,7 @@ public enum Operations {
             /// - Remark: Generated from `#/paths/v1/sources/{name}/upgrade/preview/POST/requestBody`.
             @frozen public enum Body: Sendable, Hashable {
                 /// - Remark: Generated from `#/paths/v1/sources/{name}/upgrade/preview/POST/requestBody/content/application\/json`.
-                case json(Components.Schemas.BodySourceUpgradePreview)
+                case json(Components.Schemas.SourceUpgradePreviewRequest)
             }
             public var body: Operations.SourceUpgradePreview.Input.Body
             /// Creates a new `Input`.

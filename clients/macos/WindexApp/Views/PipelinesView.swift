@@ -3,6 +3,16 @@ import SwiftUI
 import WindexKit
 import WindexUI
 
+enum PipelineRunMode: String, CaseIterable, Identifiable {
+    case run
+    case dryRun
+
+    var id: Self { self }
+    var isDryRun: Bool { self == .dryRun }
+    var title: String { self == .dryRun ? "Dry Run" : "Run" }
+    var queueTitle: String { self == .dryRun ? "Queue Dry Run" : "Queue Run" }
+}
+
 @MainActor
 @Observable
 final class PipelineCanvasViewport {
@@ -1507,6 +1517,7 @@ private struct PipelineRunSheet: View {
     @State private var inputValues: [String: String]
     @State private var parameterForm: FormModel
     @State private var priority = 50.0
+    @State private var mode: PipelineRunMode = .run
     @State private var isRunning = false
     @State private var errorMessage: String?
 
@@ -1550,6 +1561,21 @@ private struct PipelineRunSheet: View {
                 VStack(alignment: .leading, spacing: .lg) {
                     Text(
                         "This queues the selected immutable revision. It is distinct from running a Source, which adds Source origin and configuration."
+                    )
+                    .windexStyle(Typography.body)
+                    .foregroundStyle(theme.palette.graphite)
+
+                    Picker("Execution", selection: $mode) {
+                        ForEach(PipelineRunMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text(
+                        mode.isDryRun
+                            ? "Dry Run validates and plans the frozen revision without committing its normal output side effects. The queued item is still a regular Run with live status and detail."
+                            : "Run executes the frozen revision normally."
                     )
                     .windexStyle(Typography.body)
                     .foregroundStyle(theme.palette.graphite)
@@ -1617,7 +1643,7 @@ private struct PipelineRunSheet: View {
             Hairline()
             HStack {
                 Spacer()
-                Button(isRunning ? "Queuing…" : "Queue Run") {
+                Button(isRunning ? "Queuing…" : mode.queueTitle) {
                     Task { await queue() }
                 }
                 .buttonStyle(.borderedProminent)
@@ -1672,7 +1698,8 @@ private struct PipelineRunSheet: View {
                 flow: selectedFlow,
                 inputs: inputs,
                 parameters: parameterForm.values,
-                priority: Int(priority)
+                priority: Int(priority),
+                dryRun: mode.isDryRun
             )
             await session.refreshAll()
             dismiss()

@@ -70,13 +70,19 @@ private struct ResetBody: Codable, Sendable {
 }
 private struct UpgradePreviewBody: Codable, Sendable {
     let targetVersion: Int
-    enum CodingKeys: String, CodingKey { case targetVersion = "target_version" }
+    let values: [String: JSONValue]?
+    enum CodingKeys: String, CodingKey {
+        case targetVersion = "target_version"
+        case values
+    }
 }
 private struct UpgradeBody: Codable, Sendable {
     let targetVersion: Int
+    let values: [String: JSONValue]
     let confirmationToken: String
     enum CodingKeys: String, CodingKey {
         case targetVersion = "target_version"
+        case values
         case confirmationToken = "confirmation_token"
     }
 }
@@ -229,18 +235,22 @@ extension WindexClient {
                        surface: .admin, headers: ["If-Match": etag],
                        as: SourceSettingsWire.self)
     }
-    public func previewSourceUpgrade(_ name: String, version: Int) async throws
+    public func previewSourceUpgrade(_ name: String, version: Int,
+                                     values: [String: JSONValue]? = nil) async throws
         -> SourceUpgradePreviewWire {
         try await send("POST", "/v1/sources/\(Self.escapePath(name))/upgrade/preview",
-                       surface: .admin, body: UpgradePreviewBody(targetVersion: version),
+                       surface: .admin,
+                       body: UpgradePreviewBody(targetVersion: version, values: values),
                        as: SourceUpgradePreviewWire.self)
     }
     @discardableResult
     public func upgradeSource(_ name: String, version: Int,
+                              values: [String: JSONValue],
                               confirmationToken: String) async throws -> SourceWire {
         try await send("POST", "/v1/sources/\(Self.escapePath(name))/upgrade",
                        surface: .admin,
                        body: UpgradeBody(targetVersion: version,
+                                         values: values,
                                          confirmationToken: confirmationToken),
                        as: SourceWire.self)
     }

@@ -2,6 +2,68 @@ import SwiftUI
 import WindexKit
 import WindexUI
 
+@MainActor
+@Observable
+final class SourceUpgradeEditorModel {
+    private(set) var preview: SourceUpgradePreviewWire?
+    private(set) var candidateForm: FormModel?
+    private(set) var previewedValues: [String: JSONValue] = [:]
+
+    var hasUnpreviewedChanges: Bool {
+        guard preview != nil, let candidateForm else { return false }
+        return candidateForm.values != previewedValues
+    }
+
+    var canConfirm: Bool {
+        guard let preview, preview.valid,
+              preview.confirmationToken?.isEmpty == false,
+              let candidateForm else { return false }
+        return candidateForm.errors.isEmpty && !hasUnpreviewedChanges
+    }
+
+    var valuesForPreview: [String: JSONValue]? {
+        candidateForm?.values
+    }
+
+    var confirmation: (
+        version: Int,
+        values: [String: JSONValue],
+        token: String
+    )? {
+        guard canConfirm, let preview, let token = preview.confirmationToken else {
+            return nil
+        }
+        return (preview.targetVersion, previewedValues, token)
+    }
+
+    func apply(
+        _ response: SourceUpgradePreviewWire,
+        parameters: [Param]
+    ) {
+        let values = Self.object(response.candidate)
+        preview = response
+        previewedValues = values
+        candidateForm = FormModel(params: parameters, values: values)
+    }
+
+    func reset() {
+        preview = nil
+        candidateForm = nil
+        previewedValues = [:]
+    }
+
+    private static func object<T: Encodable>(
+        _ value: T
+    ) -> [String: JSONValue] {
+        guard let data = try? JSONEncoder().encode(value),
+              let result = try? JSONDecoder().decode(
+                [String: JSONValue].self,
+                from: data
+              ) else { return [:] }
+        return result
+    }
+}
+
 /// The canonical Source surface. A Source deploys one immutable Pipeline
 /// revision with origin, search identity, configuration, and runtime control.
 struct SourcesView: View {
@@ -1131,10 +1193,7 @@ private struct SourceUpgradeSheet: View {
     @Environment(\.windexTheme) private var theme
 
     @State private var targetVersion = 0
-    @State private var preview: SourceUpgradePreviewWire?
-    @State private var candidateForm: FormModel?
-    @State private var candidateBaseline: [String: JSONValue] = [:]
-    @State private var candidateWasChecked = false
+    @State private var editor = SourceUpgradeEditorModel()
     @State private var isWorking = false
     @State private var errorMessage: String?
 
@@ -1148,10 +1207,6 @@ private struct SourceUpgradeSheet: View {
 
     private var targetRevision: PipelineRevision? {
         eligibleRevisions.first { $0.reference.version == targetVersion }
-    }
-
-    private var candidateChanged: Bool {
-        candidateForm?.values != candidateBaseline
     }
 
     var body: some View {
@@ -1181,13 +1236,23 @@ private struct SourceUpgradeSheet: View {
                                 .tag(revision.reference.version)
                             }
                         }
-                        Button(isWorking ? "Previewing…" : "Preview") {
-                            Task { await loadPreview() }
+                        Button(
+                            isWorking
+                                ? "Previewing…"
+                                : (editor.preview == nil
+                                    ? "Preview"
+                                    : "Re-preview candidate")
+                        ) {
+                            Task {
+                                await loadPreview(
+                                    values: editor.valuesForPreview
+                                )
+                            }
                         }
                         .disabled(isWorking || targetVersion == 0)
                     }
 
-                    if let preview {
+                    if let preview = editor.preview {
                         HStack {
                             StatusBadge(
                                 preview.valid ? .healthy : .attention,
@@ -1211,22 +1276,55 @@ private struct SourceUpgradeSheet: View {
                         )
                         previewDictionary("State impact", object(preview.stateImpact))
 
+                        if !preview.issues.isEmpty {
+                            Hairline()
+                            StyledText("Validation issues", Typography.eyebrow)
+                                .foregroundStyle(theme.palette.graphite)
+                            ForEach(
+                                Array(preview.issues.enumerated()),
+                                id: \.offset
+                            ) { _, issue in
+                                VStack(alignment: .leading, spacing: .xxs) {
+                                    HStack {
+                                        StatusBadge(
+                                            issue.severity == .error
+                                                ? .fault
+                                                : .attention,
+                                            word: issue.severity.rawValue
+                                        )
+                                        Text(issue.code)
+                                            .windexStyle(Typography.dataSM)
+                                    }
+                                    Text(issue.path)
+                                        .windexStyle(Typography.dataSM)
+                                        .foregroundStyle(theme.palette.graphite)
+                                    Text(issue.message)
+                                        .windexStyle(Typography.body)
+                                }
+                            }
+                        }
+
                         Hairline()
                         StyledText("Candidate configuration", Typography.eyebrow)
                             .foregroundStyle(theme.palette.graphite)
-                        if let candidateForm, !candidateForm.params.isEmpty {
+                        if let candidateForm = editor.candidateForm,
+                           !candidateForm.params.isEmpty {
                             SchemaForm(
                                 model: candidateForm,
                                 configuredSecretReferences: session.sources.configuredSecrets
                             )
                             HStack {
-                                Button("Check candidate schema") {
-                                    candidateWasChecked = true
+                                Button("Re-preview edited candidate") {
+                                    Task {
+                                        await loadPreview(
+                                            values: candidateForm.values
+                                        )
+                                    }
                                 }
                                 .disabled(
-                                    isWorking || !candidateChanged
+                                    isWorking || !editor.hasUnpreviewedChanges
                                 )
-                                if candidateChanged {
+                                if editor.hasUnpreviewedChanges {
                                     StatusBadge(.attention, word: "edited")
                                 }
                             }
@@ -1235,13 +1333,8 @@ private struct SourceUpgradeSheet: View {
                                 .windexStyle(Typography.body)
                         }
 
-                        if candidateWasChecked, let candidateForm {
-                            StatusBadge(
-                                candidateForm.errors.isEmpty ? .healthy : .fault,
-                                word: candidateForm.errors.isEmpty
-                                    ? "schema valid"
-                                    : "schema invalid"
-                            )
+                        if let candidateForm = editor.candidateForm,
+                           !candidateForm.errors.isEmpty {
                             ForEach(candidateForm.errors, id: \.param.key) { issue in
                                 Text("\(issue.param.key): \(issue.message)")
                                     .windexStyle(Typography.dataSM)
@@ -1249,12 +1342,11 @@ private struct SourceUpgradeSheet: View {
                             }
                         }
 
-                        if candidateChanged {
+                        if editor.hasUnpreviewedChanges {
                             Text(
-                                "The epoch-2 upgrade operation does not accept candidate values. "
-                                    + "The edited candidate can be checked against its parameter "
-                                    + "schema here, but cannot be server-validated or submitted "
-                                    + "atomically until the backend contract carries it."
+                                "Re-preview the edited candidate before confirming. "
+                                    + "Only the latest server-validated candidate and its matching "
+                                    + "confirmation token can be submitted."
                             )
                             .windexStyle(Typography.body)
                             .foregroundStyle(theme.palette.amber)
@@ -1278,9 +1370,7 @@ private struct SourceUpgradeSheet: View {
                     Task { await confirm() }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(
-                    isWorking || preview?.valid != true || candidateChanged
-                )
+                .disabled(isWorking || !editor.canConfirm)
             }
             .padding(.lg)
         }
@@ -1289,32 +1379,24 @@ private struct SourceUpgradeSheet: View {
             targetVersion = eligibleRevisions.first?.reference.version ?? 0
         }
         .onChange(of: targetVersion) {
-            preview = nil
-            candidateForm = nil
-            candidateBaseline = [:]
-            candidateWasChecked = false
+            editor.reset()
             errorMessage = nil
         }
     }
 
-    private func loadPreview() async {
+    private func loadPreview(values: [String: JSONValue]? = nil) async {
         isWorking = true
         defer { isWorking = false }
         do {
             let value = try await session.previewSourceUpgrade(
                 source.name,
-                version: targetVersion
+                version: targetVersion,
+                values: values
             )
-            let retained = object(value.retained)
-            let defaulted = object(value.defaulted)
-            let candidate = retained.merging(defaulted) { _, new in new }
-            preview = value
-            candidateBaseline = candidate
-            candidateForm = FormModel(
-                params: targetRevision?.spec.parameters ?? [],
-                values: candidate
+            editor.apply(
+                value,
+                parameters: targetRevision?.spec.parameters ?? []
             )
-            candidateWasChecked = false
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -1322,14 +1404,15 @@ private struct SourceUpgradeSheet: View {
     }
 
     private func confirm() async {
-        guard let preview, preview.valid, !candidateChanged else { return }
+        guard let confirmation = editor.confirmation else { return }
         isWorking = true
         defer { isWorking = false }
         do {
             try await session.upgradeSource(
                 source.name,
-                version: preview.targetVersion,
-                confirmationToken: preview.confirmationToken
+                version: confirmation.version,
+                values: confirmation.values,
+                confirmationToken: confirmation.token
             )
             dismiss()
         } catch {

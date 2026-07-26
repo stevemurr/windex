@@ -753,19 +753,29 @@ final class BackendSession {
         await refreshAll()
     }
 
-    func previewSourceUpgrade(_ name: String, version: Int) async throws
+    func previewSourceUpgrade(
+        _ name: String,
+        version: Int,
+        values: [String: JSONValue]? = nil
+    ) async throws
         -> SourceUpgradePreviewWire {
-        try await client.previewSourceUpgrade(name, version: version)
+        try await client.previewSourceUpgrade(
+            name,
+            version: version,
+            values: values
+        )
     }
 
     func upgradeSource(
         _ name: String,
         version: Int,
+        values: [String: JSONValue],
         confirmationToken: String
     ) async throws {
         _ = try await client.upgradeSource(
             name,
             version: version,
+            values: values,
             confirmationToken: confirmationToken
         )
         await refreshAll()
@@ -842,8 +852,18 @@ final class BackendSession {
         await refreshAll()
     }
 
-    func runPipeline(name: String, version: Int, flow: String? = nil) async throws {
-        _ = try await client.runPipeline(name, version: version, flow: flow)
+    func runPipeline(
+        name: String,
+        version: Int,
+        flow: String? = nil,
+        dryRun: Bool = false
+    ) async throws {
+        _ = try await client.runPipeline(
+            name,
+            version: version,
+            flow: flow,
+            dryRun: dryRun
+        )
         await refreshAll()
     }
 

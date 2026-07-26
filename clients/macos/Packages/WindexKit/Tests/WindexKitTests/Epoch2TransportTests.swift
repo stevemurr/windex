@@ -108,6 +108,76 @@ struct Epoch2TransportTests {
         #expect(result.runId == 9)
     }
 
+    @Test("generic Pipeline dry-runs send dry_run in the queued Run body")
+    func genericPipelineDryRun() async throws {
+        let server = try MockWindexServer()
+        server.on("POST /admin/v1/pipelines/push/runs") { request in
+            #expect(request.body.contains("\"version\":4"))
+            #expect(request.body.contains("\"dry_run\":true"))
+            #expect(request.body.contains("\"parameters\":{\"batch\":20}"))
+            return .json(
+                #"{"run_id":13,"queued":true,"coalesced":false,"rerun_of":null}"#,
+                status: 202
+            )
+        }
+        try await server.start()
+        defer { server.stop() }
+        let client = WindexClient(baseURL: server.baseURL, token: "token")
+
+        let result = try await client.runPipeline(
+            "push",
+            version: 4,
+            parameters: ["batch": 20],
+            dryRun: true
+        )
+
+        #expect(result.runId == 13)
+        #expect(result.queued)
+    }
+
+    @Test("edited Source upgrade preview and confirmation send exact values")
+    func editedSourceUpgradeBodies() async throws {
+        let server = try MockWindexServer()
+        server.on("POST /admin/v1/sources/docs/upgrade/preview") { request in
+            #expect(request.body.contains("\"target_version\":5"))
+            #expect(request.body.contains("\"values\":{"))
+            #expect(request.body.contains("\"batch\":24"))
+            #expect(request.body.contains("\"mode\":\"safe\""))
+            return .detail("body checked", status: 422)
+        }
+        server.on("POST /admin/v1/sources/docs/upgrade") { request in
+            #expect(request.body.contains("\"target_version\":5"))
+            #expect(request.body.contains("\"values\":{"))
+            #expect(request.body.contains("\"batch\":24"))
+            #expect(request.body.contains("\"mode\":\"safe\""))
+            #expect(request.body.contains("\"confirmation_token\":\"candidate-token\""))
+            return .detail("body checked", status: 409)
+        }
+        try await server.start()
+        defer { server.stop() }
+        let client = WindexClient(baseURL: server.baseURL, token: "token")
+        let candidate: [String: JSONValue] = [
+            "batch": 24,
+            "mode": "safe",
+        ]
+
+        await #expect(throws: WindexError.self) {
+            _ = try await client.previewSourceUpgrade(
+                "docs",
+                version: 5,
+                values: candidate
+            )
+        }
+        await #expect(throws: WindexError.self) {
+            _ = try await client.upgradeSource(
+                "docs",
+                version: 5,
+                values: candidate,
+                confirmationToken: "candidate-token"
+            )
+        }
+    }
+
     @Test("historic re-run and Run latest use different routes")
     func distinctRunActions() async throws {
         let server = try MockWindexServer()
