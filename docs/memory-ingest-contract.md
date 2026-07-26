@@ -53,6 +53,10 @@ Idempotency-Key: <stable unique key, 8-128 characters>
 - **Every document id must sit under the `<conversation-id>/` prefix.**
   Replacement works by id scope; a document filed outside its own conversation
   can never be replaced or deleted afterwards.
+- **`fields.message_range` is optional, but its shape is fixed.** When present,
+  send the inclusive message indexes as exactly two non-negative integers,
+  `[start, end]`, with `start <= end`. The same array is returned as
+  `message_range` in search hits and document detail.
 - **Use a new idempotency key for each conversation revision.** Reuse a key only
   when retrying the identical payload — a repeated
   `(source, Idempotency-Key)` returns the existing run and ingests nothing.
@@ -80,6 +84,14 @@ Idempotency-Key: <stable unique key, 8-128 characters>
 An empty full push is a complete census of a conversation with no chunks, so the
 partition is tombstoned. `partition` is required here: with no documents there
 is nothing else to attribute the request to.
+
+## Reading message ranges
+
+New and re-pushed chunks retain `message_range` in parquet and Qdrant. Both
+`GET /v1/search` hits and `GET /v1/docs/{doc_id}` detail return the optional
+two-integer array. Chunks written before this retention fix do not have enough
+stored information for the backend to reconstruct the range; re-push each
+conversation's complete snapshot to backfill it.
 
 ## Historical repair
 

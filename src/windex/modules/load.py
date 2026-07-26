@@ -152,6 +152,7 @@ def _parquet_row(ctx: TaskContext, doc: ExtractedDoc) -> dict:
             **base,
             "conversation_id": fields.get("conversation_id") or "",
             "chunk_index": int(fields.get("chunk_index") or 0),
+            "message_range": fields.get("message_range"),
             "published_at": doc.published_at,
             "extra": json.dumps(
                 doc.payload, sort_keys=True, separators=(",", ":"),

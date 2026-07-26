@@ -41,10 +41,12 @@ PAYLOAD_INDEXES = {
            "published_at": qm.PayloadSchemaType.DATETIME},
     # Pushed chat-history excerpts. Filtered by conversation_id (recall scoped to
     # one chat) and published_at (date-windowed recall); chunk_index rides in the
-    # payload so a result can fetch its n±1 neighbours by id.
+    # payload so a result can fetch its n±1 neighbours by id. message_range is a
+    # two-integer array; Qdrant's integer payload index indexes each array member.
     "memory": {"doc_id": qm.PayloadSchemaType.KEYWORD,
                "conversation_id": qm.PayloadSchemaType.KEYWORD,
                "chunk_index": qm.PayloadSchemaType.INTEGER,
+               "message_range": qm.PayloadSchemaType.INTEGER,
                "published_at": qm.PayloadSchemaType.DATETIME},
 }
 

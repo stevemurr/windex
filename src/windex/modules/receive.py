@@ -83,6 +83,36 @@ class MemoryIdentity(NamedTuple):
     published_at: datetime | None
 
 
+def _message_range(value, index: int) -> list[int] | None:
+    """Normalize the optional inclusive memory-message range.
+
+    Keep one wire/storage representation throughout the pipeline: either the
+    field is absent, or it is a two-integer JSON array ``[start, end]`` with
+    ``0 <= start <= end``.  Validating at the receive boundary prevents a bad
+    producer value from poisoning parquet schema inference or a whole search
+    response later.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise PermanentTaskError(
+            f"push.docs document {index} message_range must be "
+            "[start, end]")
+    start, end = value
+    if (
+        isinstance(start, bool)
+        or isinstance(end, bool)
+        or not isinstance(start, int)
+        or not isinstance(end, int)
+        or start < 0
+        or end < start
+    ):
+        raise PermanentTaskError(
+            f"push.docs document {index} message_range must contain "
+            "non-negative integers with start <= end")
+    return [start, end]
+
+
 def custom_metadata(raw: dict, index: int) -> tuple[dict, dict]:
     """Keep public custom fields both for pipeline logic and search results."""
     raw_fields = raw.get("fields") or {}
@@ -114,6 +144,10 @@ def memory_identity(
         raise PermanentTaskError(
             f"push.docs document {index} fields must be an object")
     chunk_index = int(doc_fields.get("chunk_index", raw.get("index", index)))
+    message_range = _message_range(
+        doc_fields.get("message_range", raw.get("message_range")),
+        index,
+    )
     suffix = str(raw.get("id") or f"{partition}/{chunk_index:05d}")
     # Partition replacement tombstones by id scope. A document filed outside
     # its own conversation's scope would survive every later push of that
@@ -129,8 +163,7 @@ def memory_identity(
         fields={
             "conversation_id": partition,
             "chunk_index": chunk_index,
-            "message_range": doc_fields.get(
-                "message_range", raw.get("message_range")),
+            "message_range": message_range,
         },
         title=str(raw.get("title") or batch_title or ""),
         published_at=_datetime(
