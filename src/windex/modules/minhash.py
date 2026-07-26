@@ -34,12 +34,13 @@ def dedup_minhash(ctx: TaskContext) -> SliceResult:
             if signature_value is None:
                 outputs.append(doc)
                 continue
+            doc_id = _doc_id(ctx, doc)
             bands = band_hashes(signature_value)
             duplicate = next(
                 (
                     local[(index, value)]
                     for index, value in enumerate(bands)
-                    if (index, value) in local
+                    if (index, value) in local and local[(index, value)] != doc_id
                 ),
                 None,
             )
@@ -50,14 +51,20 @@ def dedup_minhash(ctx: TaskContext) -> SliceResult:
                         SELECT doc_id
                           FROM minhash_bands
                          WHERE source_id = %s
+                           AND doc_id <> %s
                            AND (band_idx, band_hash) IN (
                                SELECT * FROM unnest(%s::smallint[], %s::bigint[]))
                          ORDER BY day DESC LIMIT 1
                         """,
-                        (source_id, list(range(len(bands))), bands),
+                        (
+                            source_id,
+                            doc_id,
+                            list(range(len(bands))),
+                            bands,
+                        ),
                     )
                     row = cur.fetchone()
-                    duplicate = row[0] if row else None
+                    duplicate = row[0] if row and row[0] != doc_id else None
             if duplicate:
                 outputs.append(
                     replace(
@@ -66,7 +73,6 @@ def dedup_minhash(ctx: TaskContext) -> SliceResult:
                     )
                 )
                 continue
-            doc_id = _doc_id(ctx, doc)
             published = doc.published_at.date() if doc.published_at else date.today()
             with ctx.conn.cursor() as cur:
                 cur.executemany(

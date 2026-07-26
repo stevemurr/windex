@@ -249,6 +249,16 @@ _FETCH = (
             _p("conditional", "bool", default=True, label="Conditional GET",
                help="Send If-None-Match / If-Modified-Since when the store has them.",
                section="politeness"),
+            _p("root_pages_per_slice", "int", lo=1, hi=100, default=20,
+               label="Root pages per slice",
+               help="Maximum Hugging Face documentation pages fetched before "
+                    "persisting progress and yielding the worker slot.",
+               section="limits"),
+            _p("hf_root_census", "bool", default=False,
+               label="Hugging Face root census",
+               help="Use durable page slices while preserving one atomic "
+                    "documentation-root census.",
+               section="limits"),
         ),
     ),
     Module(
@@ -631,8 +641,21 @@ def implementation_digest(name: str) -> str:
     runner = runners.RUNNERS.get(name)
     if module is None or runner is None:
         return ""
-    path = inspect.getsourcefile(runner)
-    source = Path(path).read_bytes() if path else repr(runner).encode()
+    implementations = (
+        runner,
+        *getattr(runner, "__windex_digest_dependencies__", ()),
+    )
+    source = b""
+    for implementation in implementations:
+        path = inspect.getsourcefile(implementation)
+        source += (
+            b"\0"
+            + implementation.__module__.encode()
+            + b"\0"
+            + implementation.__qualname__.encode()
+            + b"\0"
+            + (Path(path).read_bytes() if path else repr(implementation).encode())
+        )
     payload = (
         name.encode() + b"\0" + module.version.encode() + b"\0"
         + runner.__module__.encode() + b"\0" + runner.__qualname__.encode()

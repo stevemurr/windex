@@ -87,6 +87,36 @@ def _record_ownership(
             )
 
 
+def _remove_stale_vectors(
+    ctx: TaskContext,
+    client: QdrantClient,
+    collection: str,
+    stale: list[str],
+) -> int:
+    """Remove vector rows whose document ledger entry is no longer searchable."""
+    if not stale:
+        return 0
+    client.delete(
+        collection_name=collection,
+        points_selector=qm.PointIdsList(
+            points=[point_id(doc_id) for doc_id in stale],
+        ),
+        wait=True,
+    )
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE documents
+               SET embedded_model = NULL, indexed_at = NULL,
+                   updated_at = now()
+             WHERE id = ANY(%s) AND status <> 'searchable'
+            """,
+            (stale,),
+        )
+    ctx.conn.commit()
+    return len(stale)
+
+
 def platform_index(ctx: TaskContext) -> SliceResult:
     """Make this Source's staged documents queryable before the Run succeeds."""
     if (
@@ -97,6 +127,19 @@ def platform_index(ctx: TaskContext) -> SliceResult:
         raise PermanentTaskError(
             "platform.index requires a frozen Source deployment binding")
     with ctx.conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id
+              FROM documents
+             WHERE source_id = %s
+               AND status <> 'searchable'
+               AND embedded_model IS NOT NULL
+             ORDER BY id
+             LIMIT %s
+            """,
+            (ctx.source_id, _BATCH),
+        )
+        stale = [row[0] for row in cur.fetchall()]
         cur.execute(
             """SELECT id, text_ref
                  FROM documents
@@ -115,30 +158,19 @@ def platform_index(ctx: TaskContext) -> SliceResult:
                 ([row[0] for row in pending],),
             )
     ctx.conn.commit()
-    if not pending:
+    if not pending and not stale:
         return SliceResult(
             exhausted=True, units_total=ctx.units_done if hasattr(ctx, "units_done") else -1,
             stats={"searchable": 0})
 
     ids = [row[0] for row in pending]
-    rows = _rows(ctx, ids, [row[1] for row in pending])
-    missing = sorted(set(ids) - set(rows))
-    if missing:
-        with ctx.conn.cursor() as cur:
-            cur.execute(
-                "UPDATE documents SET status = 'failed', updated_at = now() "
-                "WHERE id = ANY(%s)",
-                (missing,),
-            )
-        ctx.conn.commit()
-        raise PermanentTaskError(
-            f"{len(missing)} staged documents are missing from their artifact")
-
     settings = Settings()
     embedder = None
     client = None
+    searchable: list[str] = []
+    failed: list[str] = []
+    removed = 0
     try:
-        embedder = build_embedder(settings, bulk=True)
         client = QdrantClient(url=settings.qdrant_url, timeout=120)
         collection = qidx.ensure_collection(
             client, ctx.collection_key, settings.embed_model, settings.embed_dim)
@@ -149,6 +181,30 @@ def platform_index(ctx: TaskContext) -> SliceResult:
             model=settings.embed_model,
         )
         ctx.conn.commit()
+        removed = _remove_stale_vectors(ctx, client, collection, stale)
+        if not pending:
+            ctx.heartbeat(
+                0, 0, {"searchable": 0, "failed": 0, "vectors_removed": removed})
+            return SliceResult(
+                exhausted=len(stale) < _BATCH,
+                units_total=(
+                    ctx.units_done if hasattr(ctx, "units_done") else -1),
+                stats={"searchable": 0, "vectors_removed": removed})
+
+        rows = _rows(ctx, ids, [row[1] for row in pending])
+        missing = sorted(set(ids) - set(rows))
+        if missing:
+            with ctx.conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE documents SET status = 'failed', updated_at = now() "
+                    "WHERE id = ANY(%s)",
+                    (missing,),
+                )
+            ctx.conn.commit()
+            raise PermanentTaskError(
+                f"{len(missing)} staged documents are missing from their artifact")
+
+        embedder = build_embedder(settings, bulk=True)
         ordered = [rows[doc_id] for doc_id in ids]
         texts = [
             strip_smuggled(
@@ -165,8 +221,6 @@ def platform_index(ctx: TaskContext) -> SliceResult:
             text for text, okay in zip(texts, accepted) if okay]))
         points = []
         sparse_index = 0
-        searchable: list[str] = []
-        failed: list[str] = []
         for position, (row, vector, okay) in enumerate(
                 zip(ordered, dense, accepted)):
             doc_id = row["id"]
@@ -228,11 +282,16 @@ def platform_index(ctx: TaskContext) -> SliceResult:
         if client is not None:
             client.close()
     ctx.heartbeat(len(searchable), len(failed), {
-        "staged": len(ids), "searchable": len(searchable), "failed": len(failed)})
+        "staged": len(ids), "searchable": len(searchable), "failed": len(failed),
+        "vectors_removed": removed})
     return SliceResult(
         units_done=len(searchable), units_failed=len(failed),
-        exhausted=len(pending) < _BATCH,
-        stats={"searchable": len(searchable), "failed": len(failed)})
+        exhausted=len(pending) < _BATCH and len(stale) < _BATCH,
+        stats={
+            "searchable": len(searchable),
+            "failed": len(failed),
+            "vectors_removed": removed,
+        })
 
 
 __all__ = ["platform_index"]

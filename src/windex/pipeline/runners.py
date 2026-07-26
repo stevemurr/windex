@@ -49,10 +49,10 @@ from windex.modules.extract import (
 from windex.modules.fetch import (
     github_graphql_batch,
     http_download,
-    http_get,
     http_paginate,
     local_parquet_lookup,
 )
+from windex.modules.http_get import http_get
 from windex.modules.load import ledger_stage
 from windex.modules.minhash import dedup_minhash
 from windex.modules.receive import push_docs

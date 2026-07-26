@@ -92,6 +92,8 @@ flows:
         uses: http.get
         with:
           host_interval: '@param.request_interval'
+          hf_root_census: true
+          root_pages_per_slice: 20
       md:
         kind: extract
         uses: markdown.passthrough
