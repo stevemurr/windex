@@ -7,11 +7,24 @@ from collections.abc import Mapping
 from typing import Any
 
 from windex.config import Settings
-from windex.pipeline import registry
+from windex.pipeline import ports, registry
 from windex.pipeline.contracts import SEARCH_SOURCE_CONTRACT, ValidationIssue, issue
 from windex.pipeline.spec import Pipeline
 
 _SOURCE_NAME = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+
+
+def _reachable(starts: set[str], outgoing: Mapping[str, set[str]]) -> set[str]:
+    """Return nodes reached over the same node-to-node edges the compiler runs."""
+    reached: set[str] = set()
+    pending = list(starts)
+    while pending:
+        node_id = pending.pop()
+        if node_id in reached:
+            continue
+        reached.add(node_id)
+        pending.extend(outgoing.get(node_id, ()) - reached)
+    return reached
 
 
 def source_capability(pipeline: Pipeline) -> dict[str, Any]:
@@ -19,25 +32,33 @@ def source_capability(pipeline: Pipeline) -> dict[str, Any]:
     issues: list[ValidationIssue] = []
     ingress: set[str] = set()
     staged = 0
+    reachable_staging = 0
 
     for flow in pipeline.flows:
-        outgoing = {
-            edge.source.id
-            for edge in flow.edges
-            if edge.source.kind == "node" and edge.target.kind == "node"
+        outgoing: dict[str, set[str]] = {
+            node.id: set()
+            for node in flow.nodes
         }
+        for edge in flow.edges:
+            if edge.source.kind == "node" and edge.target.kind == "node":
+                outgoing[edge.source.id].add(edge.target.id)
         input_targets = {
             edge.target.id
             for edge in flow.edges
             if edge.source.kind == "input" and edge.target.kind == "node"
         }
+        ingress_nodes: set[str] = set()
+        staging_nodes: set[str] = set()
+        roles_by_node: dict[str, set[str]] = {}
         for node in flow.nodes:
             module = registry.get(node.uses)
             if module is None:
                 continue
             roles = set(module.contract_roles)
+            roles_by_node[node.id] = roles
             if "ingress.pull" in roles:
                 ingress.add("pull")
+                ingress_nodes.add(node.id)
             if "ingress.push" in roles:
                 ingress.add("push")
                 if node.id not in input_targets:
@@ -46,14 +67,41 @@ def source_capability(pipeline: Pipeline) -> dict[str, Any]:
                         "push_boundary_missing",
                         "push ingress must be connected to a typed Flow input",
                     ))
+                else:
+                    ingress_nodes.add(node.id)
             if "document.staging" in roles:
                 staged += 1
-            if node.id not in outgoing and node.kind == "load" \
-                    and "document.staging" not in roles:
+                staging_nodes.add(node.id)
+
+        reached = _reachable(ingress_nodes, outgoing)
+        for node_id in sorted(staging_nodes):
+            if node_id in reached:
+                reachable_staging += 1
+            else:
+                issues.append(issue(
+                    f"flows.{flow.name}.nodes.{node_id}",
+                    "disconnected_staging",
+                    "platform staging must be reachable from a pull or push ingress "
+                    "in the same Flow",
+                ))
+
+        for node in flow.nodes:
+            kind = ports.KINDS[node.kind]
+            roles = roles_by_node.get(node.id, set())
+            document_terminal = (
+                kind.out == "ExtractedDoc"
+                and not outgoing[node.id]
+            )
+            non_staging_sink = (
+                kind.inp == "ExtractedDoc"
+                and kind.out is None
+                and "document.staging" not in roles
+            )
+            if document_terminal or non_staging_sink:
                 issues.append(issue(
                     f"flows.{flow.name}.nodes.{node.id}",
                     "unsearchable_terminal",
-                    "document-producing terminal must reach platform staging",
+                    "document-producing path must terminate at platform staging",
                 ))
 
     if not ingress:
@@ -73,6 +121,12 @@ def source_capability(pipeline: Pipeline) -> dict[str, Any]:
             "flows",
             "missing_searchable_output",
             "Search Source Pipeline requires a document staging terminal",
+        ))
+    elif reachable_staging == 0:
+        issues.append(issue(
+            "flows",
+            "missing_searchable_path",
+            "Search Source Pipeline requires an ingress-to-platform-staging path",
         ))
     for index, flow_name in enumerate(pipeline.refresh):
         if flow_name not in {flow.name for flow in pipeline.flows}:
