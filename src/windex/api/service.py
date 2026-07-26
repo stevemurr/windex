@@ -43,6 +43,38 @@ def _extra_object(value: object) -> dict | None:
     return {"value": value}
 
 
+def _mode_label(requested: str, response: dict) -> str:
+    """Describe the mode actually served without conflating failure causes."""
+    if not response["degraded"]:
+        return requested
+
+    degradation = response.get("degradation")
+    if not isinstance(degradation, dict):
+        # Compatibility with older index_search implementations and focused
+        # test doubles that only expose the original boolean.
+        return "lexical (embedder busy — degraded from hybrid)"
+
+    embedder = bool(degradation.get("embedder"))
+    unavailable = sorted({
+        str(source) for source in degradation.get("unavailable_sources") or []
+    })
+    if embedder and not unavailable:
+        return "lexical (embedder busy — degraded from hybrid)"
+
+    actual = "lexical" if embedder and requested == "hybrid" else requested
+    reasons = []
+    if embedder:
+        reasons.append("embedder busy — degraded from hybrid")
+    if unavailable:
+        reasons.append(
+            "partial results; unavailable sources: " + ", ".join(unavailable))
+    if not reasons:
+        return f"{actual} (degraded)"
+    if not embedder:
+        return f"{actual} (degraded — {reasons[0]})"
+    return f"{actual} ({'; '.join(reasons)})"
+
+
 def run_search(
     settings: Settings,
     q: str,
@@ -86,10 +118,7 @@ def run_search(
     result = {
         "query": q,
         "results": results,
-        "mode": (
-            "lexical (embedder busy — degraded from hybrid)"
-            if response["degraded"] else mode
-        ),
+        "mode": _mode_label(mode, response),
         "timings": {**response["timings"], "total_ms": total_ms},
         "took_ms": total_ms,
     }

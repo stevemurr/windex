@@ -961,6 +961,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "description": "The selected Source index, or every eligible source=all index, is temporarily unavailable."
           }
         },
         "summary": "Search"

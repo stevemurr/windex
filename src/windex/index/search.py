@@ -28,6 +28,14 @@ _reranker_key: tuple | None = None
 _reranker_lock = threading.Lock()
 
 
+class SearchBackendUnavailable(RuntimeError):
+    """The requested search target could not produce a trustworthy answer.
+
+    Kept transport-neutral so REST can map it to HTTP 503 while MCP callers get
+    a real tool error instead of a successful-looking empty result.
+    """
+
+
 def _get_reranker(settings: Settings) -> Reranker | None:
     """Process-wide reranker (holds an httpx pool), rebuilt only if its config
     changes. Returns None when no reranker is configured (reranking skipped).
@@ -295,16 +303,20 @@ def search(
     root: str | None = None,
     kind: str | None = None,
     conversation_id: str | None = None,
-) -> list[dict]:
+) -> dict:
     client = _qdrant(settings)
-    existing = {c.name for c in client.get_collections().collections}
-    aliases = {a.alias_name for a in client.get_aliases().aliases}
+    try:
+        existing = {c.name for c in client.get_collections().collections}
+        aliases = {a.alias_name for a in client.get_aliases().aliases}
+    except Exception as exc:  # noqa: BLE001 - normalized at the search boundary
+        log.exception("search: Qdrant collection inventory is unavailable")
+        raise SearchBackendUnavailable("search backend is unavailable") from exc
 
     # Embed the query under a deadline: heavy indexing load on the embedding
     # server must degrade hybrid → lexical, never stall the search. The breaker
     # skips the round trip entirely once it's a known-lost cause (embed_breaker.py).
     query_dense = None
-    degraded = False
+    embed_degraded = False
     embed_ms = 0.0
     if mode in ("hybrid", "dense"):
         from windex.embed import build_embedder
@@ -321,7 +333,7 @@ def search(
                     "query embedder circuit breaker is open "
                     "(embedding server unavailable); mode=dense cannot be served"
                 )
-            degraded = True
+            embed_degraded = True
         else:
             t_embed = time.monotonic()
             embedder = None
@@ -340,7 +352,7 @@ def search(
                 QUERY_EMBED_FAILURES.inc()
                 if mode == "dense":
                     raise  # explicit dense request: fail loudly, don't change semantics
-                degraded = True
+                embed_degraded = True
             else:
                 breaker.record_success()
             finally:
@@ -405,9 +417,14 @@ def search(
     reranker = _get_reranker(settings)
     fetch_limit = max(settings.rerank_top_k, limit) if reranker else limit
     t_search = time.monotonic()
+    searched_sources: list[str] = []
+    unavailable_sources: list[str] = []
     for src, alias, conds in targets:
         if alias not in aliases and alias not in existing:
-            continue  # collection not built yet — serve what exists
+            unavailable_sources.append(src)
+            log.warning(
+                "search: collection for source %s (%s) is unavailable", src, alias)
+            continue
         try:
             results.extend(
                 _query_collection(client, alias, q, mode, fetch_limit, conds, settings,
@@ -419,7 +436,26 @@ def search(
             # must degrade gracefully, not 500 the whole source=all request — the
             # healthy collections still answer, same best-effort spirit as rerank.
             log.warning("search: collection %s (%s) failed, skipping: %r", src, alias, exc)
+            unavailable_sources.append(src)
+        else:
+            # A successful query with zero matches is still a successful query.
+            # Track target health independently from result count so a genuine
+            # empty response never becomes a false outage (or vice versa).
+            searched_sources.append(src)
     search_ms = (time.monotonic() - t_search) * 1000
+
+    if source != "all" and not targets:
+        # validate_source() normally catches unknown names before this layer,
+        # but an archive/disable race must not turn into a bogus empty success.
+        raise SearchBackendUnavailable(
+            f"search index is unavailable for source {source!r}")
+    if targets and not searched_sources:
+        if source == "all":
+            names = ", ".join(unavailable_sources)
+            raise SearchBackendUnavailable(
+                f"search index is unavailable for all eligible sources: {names}")
+        raise SearchBackendUnavailable(
+            f"search index is unavailable for source {source!r}")
 
     # Rerank the fused pool by true (query, passage) relevance. This is the
     # meaningful, cross-collection-comparable score (RRF reciprocals are not
@@ -439,7 +475,11 @@ def search(
     results.sort(key=lambda r: r["score"], reverse=True)
     return {
         "results": results[:limit],
-        "degraded": degraded,
+        "degraded": embed_degraded or bool(unavailable_sources),
+        "degradation": {
+            "embedder": embed_degraded,
+            "unavailable_sources": unavailable_sources,
+        },
         "timings": {"embed_query_ms": round(embed_ms), "search_ms": round(search_ms),
                     "rerank_ms": round(rerank_ms)},
     }

@@ -283,10 +283,10 @@ public struct SearchHit: Sendable, Hashable, Codable, Identifiable {
 public struct SearchResponse: Sendable, Hashable, Codable {
     public let query: String
     public let results: [SearchHit]
-    /// The mode actually used. Not always a `SearchMode` raw value: when the
-    /// embedder is busy the server degrades and reports the prose string
-    /// `"lexical (embedder busy — degraded from hybrid)"`, which is why this is
-    /// a `String` and ``isDegraded`` exists.
+    /// The mode actually used. Not always a `SearchMode` raw value: degraded
+    /// responses carry a prose reason, such as an unavailable embedder or
+    /// partial `source=all` results, which is why this is a `String` and
+    /// ``isDegraded`` exists.
     public let mode: String
     public let tookMs: Int
     public let timings: [String: Double]
@@ -296,8 +296,8 @@ public struct SearchResponse: Sendable, Hashable, Codable {
         case tookMs = "took_ms"
     }
 
-    /// Whether the search fell back to lexical because the embedder was
-    /// saturated. Worth surfacing — the results are real but not dense-ranked.
+    /// Whether the search was served with reduced capability. The results are
+    /// real, but may be lexical-only or omit an unavailable Source.
     public var isDegraded: Bool { SearchMode(rawValue: mode) == nil }
 }
 

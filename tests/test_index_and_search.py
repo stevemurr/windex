@@ -107,8 +107,11 @@ def test_hybrid_degrades_to_lexical_when_embedder_unreachable(
 
 def test_search_skips_missing_collections(settings, monkeypatch):
     monkeypatch.setattr(searchmod.qidx, "alias_name", lambda source: "does_not_exist")
-    resp = searchmod.search(settings, "anything", source="github", mode="lexical")
-    assert resp["results"] == []
+    with pytest.raises(
+        searchmod.SearchBackendUnavailable,
+        match="unavailable for source 'github'",
+    ):
+        searchmod.search(settings, "anything", source="github", mode="lexical")
 
 
 def test_query_embedder_is_closed_after_each_search(qclient, settings, seeded_collection, monkeypatch):
@@ -156,3 +159,5 @@ def test_search_survives_one_collection_error(qclient, settings, seeded_collecti
     resp = searchmod.search(settings, "transit bus lanes", source="all", mode="lexical", limit=3)
     assert resp["results"], "one collection error took down the whole fan-out"
     assert calls["n"] > 1, "did not continue past the failing collection"
+    assert resp["degraded"] is True
+    assert len(resp["degradation"]["unavailable_sources"]) == 1
