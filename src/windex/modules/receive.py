@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import NamedTuple
 
 from psycopg.types.json import Jsonb
 
@@ -21,6 +22,97 @@ def _datetime(value):
     except ValueError as exc:
         raise PermanentTaskError(
             f"push.docs received invalid timestamp {value!r}") from exc
+
+
+def _doc_conversation(raw: dict) -> str:
+    """The conversation a memory document belongs to.
+
+    Preferred source is `fields.conversation_id`; the leading segment of the
+    document id (`"<conversation>/00003"`) is the fallback, because that is what
+    the id scope used for partition replacement is built from.
+    """
+    fields = raw.get("fields")
+    if isinstance(fields, dict) and fields.get("conversation_id"):
+        return str(fields["conversation_id"])
+    doc_id = str(raw.get("id") or "")
+    head, sep, _ = doc_id.partition("/")
+    return head if sep else ""
+
+
+def memory_partition(payload: dict, raw_docs: list) -> str:
+    """Resolve the one conversation a memory push replaces.
+
+    `IngestRequest` forbids unknown top-level keys, so a memory push carries its
+    conversation id per document. An explicit batch `partition` still wins: an
+    empty full push is the delete path and has no document to read an id from.
+
+    A batch that mixes conversations is rejected rather than silently collapsed.
+    Partition replacement tombstones everything under `memory:<partition>/`, so
+    guessing wrong here does not lose one document — it empties a whole chat.
+    """
+    explicit = payload.get("partition") or payload.get("conversation_id")
+    if explicit:
+        return str(explicit)
+    found = {
+        conversation for raw in raw_docs
+        if isinstance(raw, dict) and (conversation := _doc_conversation(raw))
+    }
+    if len(found) > 1:
+        raise PermanentTaskError(
+            "push.docs memory batch mixes conversations ("
+            + ", ".join(sorted(found))
+            + "); one ingest run replaces exactly one conversation")
+    if not found:
+        raise PermanentTaskError(
+            "push.docs memory batch names no conversation; send "
+            "fields.conversation_id on each document or a batch partition")
+    return found.pop()
+
+
+class MemoryIdentity(NamedTuple):
+    suffix: str
+    url: str
+    fields: dict
+    title: str
+    published_at: datetime | None
+
+
+def memory_identity(
+    raw: dict, index: int, partition: str, batch_title=None,
+) -> MemoryIdentity:
+    """Derive one memory chunk's identity from an epoch-2 ingest document.
+
+    Identity comes from the document (`id`, `url`, `fields`, `published_at`).
+    The positional fallbacks accept the pre-epoch-2 shape (`index`, `ended_at`,
+    top-level `message_range`) so an older client is not silently mis-filed.
+    """
+    doc_fields = raw.get("fields") or {}
+    if not isinstance(doc_fields, dict):
+        raise PermanentTaskError(
+            f"push.docs document {index} fields must be an object")
+    chunk_index = int(doc_fields.get("chunk_index", raw.get("index", index)))
+    suffix = str(raw.get("id") or f"{partition}/{chunk_index:05d}")
+    # Partition replacement tombstones by id scope. A document filed outside
+    # its own conversation's scope would survive every later push of that
+    # conversation and never be reachable to delete.
+    if not suffix.startswith(f"{partition}/"):
+        raise PermanentTaskError(
+            f"push.docs document {index} id {suffix!r} lies outside "
+            f"conversation {partition!r}")
+    return MemoryIdentity(
+        suffix=suffix,
+        url=str(
+            raw.get("url") or f"llmchat://chat/{partition}?chunk={chunk_index}"),
+        fields={
+            "conversation_id": partition,
+            "chunk_index": chunk_index,
+            "message_range": doc_fields.get(
+                "message_range", raw.get("message_range")),
+        },
+        title=str(raw.get("title") or batch_title or ""),
+        published_at=_datetime(
+            raw.get("published_at") or raw.get("ended_at")),
+    )
 
 
 def push_docs(ctx: TaskContext) -> SliceResult:
@@ -47,26 +139,20 @@ def push_docs(ctx: TaskContext) -> SliceResult:
             f"push.docs received {len(raw_docs)} documents, max is {maximum}")
 
     mode = str(ctx.config.get("mode", "delta"))
-    partition = str(
-        payload.get("partition") or payload.get("conversation_id") or "push")
     source = ctx.search_name
+    if source == "memory":
+        partition = memory_partition(payload, raw_docs)
+    else:
+        partition = str(
+            payload.get("partition") or payload.get("conversation_id") or "push")
     outputs = []
     for index, raw in enumerate(raw_docs):
         if not isinstance(raw, dict):
             raise PermanentTaskError(
                 f"push.docs document {index} must be an object")
         if source == "memory":
-            suffix = f"{partition}/{int(raw.get('index', index)):05d}"
-            url = str(
-                raw.get("url")
-                or f"llmchat://chat/{partition}?chunk={int(raw.get('index', index))}")
-            fields = {
-                "conversation_id": partition,
-                "chunk_index": int(raw.get("index", index)),
-                "message_range": raw.get("message_range"),
-            }
-            title = str(raw.get("title") or payload.get("title") or "")
-            published = _datetime(raw.get("ended_at") or raw.get("published_at"))
+            suffix, url, fields, title, published = memory_identity(
+                raw, index, partition, batch_title=payload.get("title"))
         else:
             suffix = str(raw.get("id") or raw.get("suffix") or "")
             if not suffix:

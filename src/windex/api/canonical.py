@@ -258,6 +258,10 @@ class IngestDocument(Strict):
 class IngestRequest(Strict):
     schema_version: Literal["windex.ingest/1"] = "windex.ingest/1"
     mode: Literal["delta", "full"] = "delta"
+    # Names the replace scope for partition-replacing Sources. Ordinarily it is
+    # derivable from the documents themselves, but an empty full push — the
+    # delete path — has no document to read it from.
+    partition: str | None = Field(default=None, max_length=256)
     documents: list[IngestDocument] = Field(max_length=10_000)
 
 
@@ -1342,6 +1346,7 @@ def source_ingest(
                 conn, name, inputs={
                     "documents": {
                         "mode": body.mode,
+                        "partition": body.partition,
                         "documents": [item.model_dump() for item in body.documents],
                     },
                 }, settings=get_settings(), trigger_type="push",
