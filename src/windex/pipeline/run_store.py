@@ -13,7 +13,6 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from windex.config import Settings
-from windex.modules.common import _load_outputs
 from windex.pipeline import compile as pipeline_compile
 from windex.pipeline import registry
 from windex.pipeline.events import append
@@ -423,6 +422,11 @@ def _remove_download_outputs(
     downloads_dir: Path,
 ) -> int:
     """Remove spooled RawBlobs without permitting paths outside downloads."""
+    # Import lazily: modules.common loads worker.protocol, whose package exports
+    # load the supervisor and this module. A module-level import would make seed
+    # hashing depend on whichever side of that cycle happened to import first.
+    from windex.modules.common import _load_outputs
+
     root = downloads_dir.resolve()
     removed = 0
     seen: set[Path] = set()
