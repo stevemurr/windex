@@ -9,8 +9,10 @@ from windex.api.canonical import (
     IngestDocument,
     IngestRequest,
     ModuleHealthResponse,
+    PipelineRevisionCreate,
     RegistryResponse,
     module_health,
+    pipeline_revision_publish,
     source_ingest,
 )
 from windex.pipeline import registry
@@ -178,3 +180,100 @@ def test_generic_run_requires_frozen_revision_precondition(monkeypatch):
         json={"flow": "run", "inputs": {}, "parameters": {}},
     )
     assert response.status_code == 428
+
+
+def test_pipeline_revision_publish_requires_concurrency_guard(monkeypatch):
+    from windex.api import app as app_module
+    from windex.config import Settings
+
+    settings = Settings(_env_file=None, write_token="", serve_host="127.0.0.1")
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    response = TestClient(admin).post(
+        "/v1/pipelines/example/revisions",
+        json={"spec": {}},
+    )
+
+    assert response.status_code == 428
+    assert "parent_version, parent_hash, or If-Match" in response.json()["detail"]
+
+
+def test_pipeline_revision_header_and_body_hash_must_match(monkeypatch):
+    from windex.api import app as app_module
+    from windex.config import Settings
+
+    settings = Settings(_env_file=None, write_token="", serve_host="127.0.0.1")
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    response = TestClient(admin).post(
+        "/v1/pipelines/example/revisions",
+        headers={"If-Match": '"sha256:header"'},
+        json={"spec": {}, "parent_hash": "sha256:body"},
+    )
+
+    assert response.status_code == 409
+    assert "identify different Pipeline heads" in response.json()["detail"]
+
+
+def test_pipeline_revision_stale_guard_maps_to_precondition_failed(monkeypatch):
+    from windex.api import canonical
+
+    received: dict = {}
+    monkeypatch.setattr(
+        canonical.db, "pooled", lambda _dsn: nullcontext(object()))
+    monkeypatch.setattr(
+        canonical.registry, "load_custom", lambda _conn: None)
+
+    def stale(*_args, **kwargs):
+        received.update(kwargs)
+        raise canonical.pipeline_store.StalePipelineError("head moved")
+
+    monkeypatch.setattr(canonical.pipeline_store, "publish_revision", stale)
+    with pytest.raises(HTTPException) as raised:
+        pipeline_revision_publish(
+            "example",
+            PipelineRevisionCreate(
+                spec={}, parent_version=1, parent_hash="sha256:same"),
+            '"sha256:same"',
+        )
+
+    assert raised.value.status_code == 412
+    assert raised.value.detail == "head moved"
+    assert received["expected_version"] == 1
+    assert received["expected_hash"] == "sha256:same"
+
+
+def test_initial_pipeline_publication_uses_create_route_without_guard(monkeypatch):
+    from windex.api import app as app_module
+    from windex.api import canonical
+    from windex.config import Settings
+
+    settings = Settings(_env_file=None, write_token="", serve_host="127.0.0.1")
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        canonical.db, "pooled", lambda _dsn: nullcontext(object()))
+    monkeypatch.setattr(
+        canonical.registry, "load_custom", lambda _conn: None)
+    monkeypatch.setattr(
+        canonical.pipeline_store,
+        "create_pipeline",
+        lambda _conn, **body: {
+            "id": 99,
+            "name": body["name"],
+            "title": body["title"],
+            "description": body["description"],
+            "builtin": False,
+            "archived_at": None,
+            "created_at": "2026-07-26T00:00:00+00:00",
+            "updated_at": "2026-07-26T00:00:00+00:00",
+            "head_revision_id": 100,
+            "version": 1,
+            "spec_hash": "sha256:initial",
+            "spec": body["spec"],
+        },
+    )
+
+    response = TestClient(admin).post(
+        "/v1/pipelines",
+        json={"name": "new-pipeline", "spec": {}},
+    )
+    assert response.status_code == 201
+    assert response.json()["version"] == 1

@@ -95,7 +95,9 @@ bounded to the server maximum of 200.
 
 ## Concurrency invariants
 
-- Pipeline publication supplies the parent version and semantic hash.
+- Pipeline publication supplies the parent version and semantic hash. If a
+  caller also sends `If-Match`, it must identify that same semantic hash;
+  contradictory header/body guards are rejected by the backend.
 - Generic Pipeline Runs always pin an explicit immutable revision unless a
   caller deliberately supplies the head ETag.
 - Canvas layout writes use the layout’s independent ETag and preserve the

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import psycopg
 import pytest
@@ -11,8 +13,12 @@ from windex.api.canonical import UpgradePreviewResponse
 from windex.db.canonical import init_canonical_db
 from windex.pipeline.run_store import get_run, submit_source
 from windex.pipeline.store import (
+    PipelinePreconditionRequiredError,
+    StalePipelineError,
+    create_pipeline,
     get_layout,
     get_pipeline,
+    list_revisions,
     list_pipelines,
     publish_revision,
     put_layout,
@@ -85,6 +91,79 @@ def test_noop_publish_and_stale_settings(canonical_conn):
     with pytest.raises(StaleSourceError):
         patch_settings(
             canonical_conn, "hn", {"incremental_days": 4}, if_match=settings["etag"])
+
+
+def test_initial_pipeline_publication_needs_no_parent_guard(canonical_conn):
+    template = get_pipeline(canonical_conn, "hn")
+    created = create_pipeline(
+        canonical_conn,
+        name="initial-" + uuid.uuid4().hex[:8],
+        spec=template["spec"],
+        title="Initial publication",
+    )
+
+    assert created["version"] == 1
+    assert created["head_revision_id"] is not None
+
+
+def test_existing_pipeline_publication_requires_parent_guard(canonical_conn):
+    pipeline = get_pipeline(canonical_conn, "hn")
+
+    with pytest.raises(
+        PipelinePreconditionRequiredError,
+        match="requires parent_version, parent_hash, or If-Match",
+    ):
+        publish_revision(canonical_conn, "hn", pipeline["spec"])
+
+
+def test_two_writers_based_on_same_pipeline_head_reject_stale_writer(
+    canonical_conn,
+):
+    pipeline = get_pipeline(canonical_conn, "hn")
+    environment = Settings()
+    dsn = (
+        environment.pg_dsn.rsplit("/", 1)[0]
+        + "/"
+        + canonical_conn.info.dbname
+    )
+    gate = threading.Barrier(2)
+
+    def candidate(suffix: str) -> dict:
+        spec = copy.deepcopy(pipeline["spec"])
+        spec["parameters"].append({
+            "key": f"writer_{suffix}",
+            "kind": "str",
+            "default": suffix,
+        })
+        return spec
+
+    def publish(suffix: str) -> dict | Exception:
+        conn = psycopg.connect(dsn)
+        try:
+            gate.wait(timeout=10)
+            return publish_revision(
+                conn,
+                "hn",
+                candidate(suffix),
+                expected_version=pipeline["version"],
+                expected_hash=pipeline["spec_hash"],
+            )
+        except Exception as exc:
+            return exc
+        finally:
+            conn.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(publish, ("alpha", "beta")))
+
+    published = [item for item in outcomes if isinstance(item, dict)]
+    rejected = [item for item in outcomes if isinstance(item, Exception)]
+    assert len(published) == 1
+    assert published[0]["version"] == 2
+    assert len(rejected) == 1
+    assert isinstance(rejected[0], StalePipelineError)
+    assert get_pipeline(canonical_conn, "hn")["version"] == 2
+    assert [r["version"] for r in list_revisions(canonical_conn, "hn")] == [2, 1]
 
 
 def test_source_run_freezes_binding_and_index_continuation(canonical_conn):
