@@ -36,14 +36,22 @@ final class SourceUpgradeEditorModel {
         return (preview.targetVersion, previewedValues, token)
     }
 
-    func apply(
+    @discardableResult
+    func applyIfCurrent(
         _ response: SourceUpgradePreviewWire,
-        parameters: [Param]
-    ) {
+        parameters: [Param],
+        requestedVersion: Int,
+        selectedVersion: Int
+    ) -> Bool {
+        guard selectedVersion == requestedVersion,
+              response.targetVersion == requestedVersion else {
+            return false
+        }
         let values = Self.object(response.candidate)
         preview = response
         previewedValues = values
         candidateForm = FormModel(params: parameters, values: values)
+        return true
     }
 
     func reset() {
@@ -1205,10 +1213,6 @@ private struct SourceUpgradeSheet: View {
             }
     }
 
-    private var targetRevision: PipelineRevision? {
-        eligibleRevisions.first { $0.reference.version == targetVersion }
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -1236,6 +1240,7 @@ private struct SourceUpgradeSheet: View {
                                 .tag(revision.reference.version)
                             }
                         }
+                        .disabled(isWorking)
                         Button(
                             isWorking
                                 ? "Previewing…"
@@ -1385,20 +1390,27 @@ private struct SourceUpgradeSheet: View {
     }
 
     private func loadPreview(values: [String: JSONValue]? = nil) async {
+        let requestedVersion = targetVersion
+        let requestedParameters = eligibleRevisions.first {
+            $0.reference.version == requestedVersion
+        }?.spec.parameters ?? []
         isWorking = true
         defer { isWorking = false }
         do {
             let value = try await session.previewSourceUpgrade(
                 source.name,
-                version: targetVersion,
+                version: requestedVersion,
                 values: values
             )
-            editor.apply(
+            guard editor.applyIfCurrent(
                 value,
-                parameters: targetRevision?.spec.parameters ?? []
-            )
+                parameters: requestedParameters,
+                requestedVersion: requestedVersion,
+                selectedVersion: targetVersion
+            ) else { return }
             errorMessage = nil
         } catch {
+            guard targetVersion == requestedVersion else { return }
             errorMessage = error.localizedDescription
         }
     }

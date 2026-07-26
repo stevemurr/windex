@@ -342,14 +342,16 @@ struct AppModelTests {
             required: true
         ).parameter()
         let editor = SourceUpgradeEditorModel()
-        editor.apply(
+        #expect(editor.applyIfCurrent(
             try Self.upgradePreview(
                 candidate: 20,
                 valid: true,
                 token: "candidate-20"
             ),
-            parameters: [parameter]
-        )
+            parameters: [parameter],
+            requestedVersion: 5,
+            selectedVersion: 5
+        ))
         #expect(editor.canConfirm)
 
         editor.candidateForm?.set("batch", .int(24))
@@ -363,26 +365,70 @@ struct AppModelTests {
             token: nil,
             issueMessage: "Batch 24 is unavailable."
         )
-        editor.apply(invalid, parameters: [parameter])
+        #expect(editor.applyIfCurrent(
+            invalid,
+            parameters: [parameter],
+            requestedVersion: 5,
+            selectedVersion: 5
+        ))
         #expect(editor.candidateForm?.value(forKey: "batch") == .int(24))
         #expect(editor.preview?.issues.first?.code == "candidate_invalid")
         #expect(!editor.canConfirm)
 
         editor.candidateForm?.set("batch", .int(16))
         #expect(editor.valuesForPreview == ["batch": 16])
-        editor.apply(
+        #expect(editor.applyIfCurrent(
             try Self.upgradePreview(
                 candidate: 16,
                 valid: true,
                 token: "candidate-16"
             ),
-            parameters: [parameter]
-        )
+            parameters: [parameter],
+            requestedVersion: 5,
+            selectedVersion: 5
+        ))
 
         let confirmation = try #require(editor.confirmation)
         #expect(confirmation.version == 5)
         #expect(confirmation.values == ["batch": 16])
         #expect(confirmation.token == "candidate-16")
+    }
+
+    @Test("stale Source upgrade preview cannot replace a newly selected revision")
+    func staleSourceUpgradePreview() throws {
+        let parameter = try PipelineParameterDefinition(
+            key: "batch",
+            kind: .int,
+            title: "Batch"
+        ).parameter()
+        let editor = SourceUpgradeEditorModel()
+
+        #expect(editor.applyIfCurrent(
+            try Self.upgradePreview(
+                targetVersion: 6,
+                candidate: 16,
+                valid: true,
+                token: "candidate-v6"
+            ),
+            parameters: [parameter],
+            requestedVersion: 6,
+            selectedVersion: 6
+        ))
+
+        #expect(!editor.applyIfCurrent(
+            try Self.upgradePreview(
+                targetVersion: 5,
+                candidate: 24,
+                valid: true,
+                token: "stale-v5"
+            ),
+            parameters: [parameter],
+            requestedVersion: 5,
+            selectedVersion: 6
+        ))
+        #expect(editor.preview?.targetVersion == 6)
+        #expect(editor.candidateForm?.value(forKey: "batch") == .int(16))
+        #expect(editor.confirmation?.token == "candidate-v6")
     }
 
     private static let evidence = PairingEvidence(
@@ -435,6 +481,7 @@ struct AppModelTests {
     }
 
     private static func upgradePreview(
+        targetVersion: Int = 5,
         candidate: Int,
         valid: Bool,
         token: String?,
@@ -458,7 +505,7 @@ struct AppModelTests {
                 {
                   "source_id": 1,
                   "from_version": 4,
-                  "target_version": 5,
+                  "target_version": \(targetVersion),
                   "target_hash": "target-hash",
                   "expected_etag": "source-v4",
                   "candidate_hash": "candidate-\(candidate)",
