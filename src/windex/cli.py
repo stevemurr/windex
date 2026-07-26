@@ -60,6 +60,13 @@ def serve(host: str = "127.0.0.1", port: int = 8100) -> None:
     """Run the public and authenticated admin HTTP applications."""
     import uvicorn
 
+    # Seeding is idempotent and never moves Source pins. Doing it before the API
+    # accepts traffic ensures a changed in-tree Module always has a published
+    # revision and health can immediately identify Sources that need upgrading.
+    settings = get_settings()
+    with db.connect(settings.pg_dsn) as conn:
+        metadata = db.init_db(conn)
+    _ensure_generation(metadata["bootstrap_id"])
     uvicorn.run("windex.api.app:app", host=host, port=port)
 
 
@@ -80,15 +87,30 @@ def health(embed: bool = typer.Option(False, help="Also probe the embedder")) ->
     settings = get_settings()
     failed = False
     try:
+        from windex.source.store import module_statuses
+
         with db.connect(settings.pg_dsn) as conn, conn.cursor() as cur:
             metadata = inspect_generation(conn)
             cur.execute("SELECT count(*) FROM sources WHERE archived_at IS NULL")
             sources = cur.fetchone()[0]
+            statuses = module_statuses(conn, enabled_only=True)
         if metadata is None:
             raise RuntimeError("canonical schema metadata is absent")
         console.print(
             f"[green]postgres ok[/green] epoch={metadata['contract_epoch']} "
             f"sources={sources}")
+        stranded = [item for item in statuses if not item["available"]]
+        if stranded:
+            details = ", ".join(
+                f"{item['source']} ({','.join(item['unavailable_modules'])})"
+                for item in stranded
+            )
+            console.print(
+                f"[red]module locks degraded:[/red] {details}; "
+                "upgrade these Sources before accepting new runs")
+            failed = True
+        else:
+            console.print("[green]module locks ok[/green]")
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]postgres failed[/red] {exc}")
         failed = True

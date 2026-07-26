@@ -180,6 +180,23 @@ def snapshot(
         "storage": "unknown",
         "degraded": False,
     }
+    from windex.source.store import module_statuses
+
+    try:
+        stranded = [
+            item for item in module_statuses(conn, enabled_only=True)
+            if not item["available"]
+        ]
+        health["module_locks"] = "degraded" if stranded else "ok"
+        health["stranded_sources"] = [
+            item["source"] for item in stranded
+        ]
+        if stranded:
+            health["degraded"] = True
+    except Exception:  # noqa: BLE001 - Overview remains inspectable when degraded
+        health["module_locks"] = "error"
+        health["stranded_sources"] = []
+        health["degraded"] = True
     vector_count: int | None = None
     if settings is not None:
         try:

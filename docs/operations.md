@@ -53,6 +53,33 @@ curl -s localhost:8100/metrics | grep -E '^windex_(loop_up|job_up|gateway_up|db_
   alert rules (`ops/grafana/alerting/windex-rules.yml`). windex only exposes
   `/metrics`; the remote box scrapes it.
 
+### Module-safe backend deployments
+
+Pipeline revisions freeze the exact digest of every executable Module. A new
+image that changes a Module implementation cannot execute a Source still pinned
+to the old digest; new Runs fail closed with `module_revoked`.
+
+The API runs idempotent `init-db` seeding before it starts accepting traffic.
+This publishes new built-in Pipeline revisions but intentionally does not move
+Source pins. After rolling the API:
+
+1. Check `/admin/v1/module-health`. `status` must be `ok` and
+   `stranded_sources` must be zero. The generic Overview health projection also
+   reports `module_locks` and the stranded Source names.
+2. For each affected Source, inspect
+   `/admin/v1/sources/{name}/module-status`.
+   `unavailable_modules` names the changed Modules and
+   `latest_pipeline_version` is the revision to preview/upgrade to.
+3. Stop or drain workers before moving Source pins. Upgrade affected Sources,
+   then start workers from the new image. Existing Runs retain their original
+   locks and require a matching old worker or a deliberate cancel/rerun.
+4. Run `windex health`; it exits non-zero while an enabled Source is pinned to
+   an unavailable implementation.
+
+Never silently auto-upgrade Source pins during service startup. A revision can
+change install-stage parameters or state semantics, so the existing
+preview/confirmation workflow remains the safety boundary.
+
 ## Day-2 ops
 
 | Task | CLI | REST |

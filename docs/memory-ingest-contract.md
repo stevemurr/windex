@@ -62,8 +62,9 @@ Idempotency-Key: <stable unique key, 8-128 characters>
   still fail. Use the returned `run_id` to monitor completion if you need
   certainty; a client that accepts on 202 must treat "believed synced but never
   embedded" as a real state and offer a re-index path.
-- **Invalid, mixed, or unattributed batches now fail** instead of being stored
-  under the partition `push`.
+- **Invalid, mixed, or unattributed batches are rejected synchronously with
+  HTTP 422.** The worker repeats the same validation defensively, but the API
+  does not return 202 for a deterministic conversation-identity error.
 
 ## Deleting a conversation
 

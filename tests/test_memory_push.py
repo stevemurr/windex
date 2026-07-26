@@ -13,7 +13,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from windex.modules.receive import memory_identity, memory_partition
+from windex.modules.receive import (
+    custom_metadata,
+    memory_identity,
+    memory_partition,
+    validate_memory_batch,
+)
 from windex.worker.protocol import PermanentTaskError
 
 CONVERSATION = "0f9d2a41-3c7e-4b18-9a05-6d1f8c2e4b77"
@@ -53,6 +58,14 @@ def test_explicit_batch_partition_wins_and_carries_an_empty_delete():
     """The delete path pushes zero documents, so the batch key is the only
     thing naming the conversation being emptied."""
     assert memory_partition({"partition": CONVERSATION}, []) == CONVERSATION
+
+
+def test_explicit_partition_must_match_the_documents():
+    with pytest.raises(PermanentTaskError, match="does not match partition"):
+        validate_memory_batch(
+            {"partition": CONVERSATION},
+            [_doc(conversation=OTHER)],
+        )
 
 
 def test_two_conversations_in_one_batch_are_rejected():
@@ -139,3 +152,21 @@ def test_legacy_document_shape_still_maps():
 def test_non_object_fields_are_rejected():
     with pytest.raises(PermanentTaskError, match="fields must be an object"):
         memory_identity(_doc(fields=["conversation_id"]), 0, CONVERSATION)
+
+
+def test_custom_fields_are_preserved_as_search_metadata():
+    fields, metadata = custom_metadata({
+        "fields": {
+            "workspace_root": "/repo",
+            "kind": "decision",
+            "_text_hash": "internal",
+        },
+        "payload": {"producer": "agent", "kind": "old"},
+    }, 0)
+    assert fields["workspace_root"] == "/repo"
+    assert fields["_text_hash"] == "internal"
+    assert metadata == {
+        "producer": "agent",
+        "kind": "decision",
+        "workspace_root": "/repo",
+    }

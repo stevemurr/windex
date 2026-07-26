@@ -26,6 +26,7 @@ from windex.source.store import (
     patch_settings,
     patch_operator_settings,
     settings_projection,
+    module_statuses,
     upgrade,
     upgrade_preview,
 )
@@ -93,6 +94,36 @@ def test_source_run_freezes_binding_and_index_continuation(canonical_conn):
     assert run["pipeline_name"] == "hn"
     assert run["tasks"][-1]["node"] == "__index__"
     assert run["tasks"][-1]["depends_on"]
+
+
+def test_source_status_surfaces_unavailable_module_lock(
+    canonical_conn, monkeypatch,
+):
+    from windex.pipeline import registry
+
+    healthy = next(
+        item for item in module_statuses(canonical_conn)
+        if item["source"] == "memory")
+    assert healthy["available"] is True
+    assert healthy["upgrade_required"] is False
+
+    implementation_digest = registry.implementation_digest
+    monkeypatch.setattr(
+        registry,
+        "implementation_digest",
+        lambda name: (
+            "sha256:changed"
+            if name == "push.docs"
+            else implementation_digest(name)
+        ),
+    )
+
+    degraded = next(
+        item for item in module_statuses(canonical_conn)
+        if item["source"] == "memory")
+    assert degraded["available"] is False
+    assert degraded["upgrade_required"] is True
+    assert degraded["unavailable_modules"] == ["push.docs"]
 
 
 def test_multiflow_source_run_selects_only_its_flow_locks(canonical_conn):

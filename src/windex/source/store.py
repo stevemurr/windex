@@ -830,6 +830,48 @@ def status(conn: psycopg.Connection, name: str) -> dict[str, Any]:
     }
 
 
+def module_statuses(
+    conn: psycopg.Connection,
+    *,
+    enabled_only: bool = False,
+) -> list[dict[str, Any]]:
+    """Describe whether each Source's frozen revision is runnable here."""
+    from windex.pipeline import registry
+
+    where = (
+        "WHERE s.enabled AND s.archived_at IS NULL"
+        if enabled_only else
+        ""
+    )
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT s.name, r.id, r.version, r.module_locks,
+                   (SELECT max(head.version)
+                      FROM pipeline_revisions head
+                     WHERE head.pipeline_id = r.pipeline_id)
+              FROM sources s
+              JOIN pipeline_revisions r ON r.id = s.pipeline_revision_id
+              {where}
+             ORDER BY s.name
+            """
+        )
+        rows = cur.fetchall()
+    result = []
+    for source, revision_id, version, locks, latest_version in rows:
+        unavailable = registry.unavailable_modules(conn, locks or {})
+        result.append({
+            "source": source,
+            "pipeline_revision_id": revision_id,
+            "pipeline_version": version,
+            "latest_pipeline_version": latest_version,
+            "available": not unavailable,
+            "upgrade_required": bool(unavailable),
+            "unavailable_modules": unavailable,
+        })
+    return result
+
+
 def get_operator_settings(conn: psycopg.Connection) -> dict[str, Any]:
     with conn.cursor() as cur:
         cur.execute(
@@ -939,6 +981,7 @@ __all__ = [
     "set_paused",
     "settings_projection",
     "status",
+    "module_statuses",
     "update_trigger",
     "upgrade",
     "upgrade_preview",

@@ -1,5 +1,12 @@
 # Custom sources — handoff notes
 
+> **Contract-epoch 2 note (2026-07-26):** canonical push Sources ingest through
+> `POST /v1/sources/{name}/ingest`. Put arbitrary searchable/result metadata in
+> each `IngestDocument.fields` object. `push.docs` preserves those public fields
+> in the Qdrant `extra` result object; keys beginning with `_` remain
+> pipeline-internal and are not exposed. The strict public request does not
+> accept legacy top-level `extra` or `payload` properties.
+
 Branch `feat/custom-sources` (off `origin/main` @ 181671e, 2026-07-22) implements
 push-based **custom sources**: dynamic per-corpus indexes (email, notes, …) that
 the LLMChat app's agent creates and loads at runtime — no per-corpus migrations.

@@ -69,6 +69,14 @@ def test_metric_write_failure_never_breaks_search(settings, monkeypatch):
     _drain()
 
 
+def test_custom_metadata_json_is_returned_as_an_object():
+    assert service._extra_object('{"workspace_root":"/repo","rank":2}') == {
+        "workspace_root": "/repo",
+        "rank": 2,
+    }
+    assert service._extra_object("legacy text") == {"value": "legacy text"}
+
+
 def test_metric_projection_and_retention(settings, pg):
     _seed(pg, [
         (1, "all", "hybrid", True, "new", 4, 6, 10, 1),

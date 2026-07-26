@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
 import time
 from datetime import datetime
@@ -25,6 +26,21 @@ RESULT_FIELDS = (
 
 _source_cache: dict[str, tuple[float, set[str]]] = {}
 _SOURCE_TTL = 15.0
+
+
+def _extra_object(value: object) -> dict | None:
+    """Normalize the opaque custom-Source metadata stored in parquet/Qdrant."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return {"value": value}
+        return decoded if isinstance(decoded, dict) else {"value": decoded}
+    return {"value": value}
 
 
 def run_search(
@@ -63,6 +79,8 @@ def run_search(
         item = {"id": raw.get("doc_id"), "score": round(raw["score"], 4)}
         item.update({
             key: raw[key] for key in RESULT_FIELDS if raw.get(key) is not None})
+        if "extra" in item:
+            item["extra"] = _extra_object(item["extra"])
         results.append(item)
     total_ms = int((time.monotonic() - started) * 1000)
     result = {

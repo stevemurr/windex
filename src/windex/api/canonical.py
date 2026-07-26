@@ -513,6 +513,22 @@ class EventsResponse(Strict):
     next_cursor: int
 
 
+class SourceModuleStatus(Strict):
+    source: str
+    pipeline_revision_id: int
+    pipeline_version: int
+    latest_pipeline_version: int
+    available: bool
+    upgrade_required: bool
+    unavailable_modules: list[str]
+
+
+class ModuleHealthResponse(Strict):
+    status: Literal["ok", "degraded"]
+    stranded_sources: int
+    sources: list[SourceModuleStatus]
+
+
 class SourceStatusResponse(Strict):
     source: str
     enabled: bool
@@ -809,6 +825,18 @@ def sources(include_archived: bool = False) -> dict[str, Any]:
             conn, include_archived=include_archived)}
 
 
+@router.get("/module-health", response_model=ModuleHealthResponse)
+def module_health() -> dict[str, Any]:
+    with db.pooled(get_settings().pg_dsn) as conn:
+        statuses = source_store.module_statuses(conn, enabled_only=True)
+    stranded = [item for item in statuses if not item["available"]]
+    return {
+        "status": "degraded" if stranded else "ok",
+        "stranded_sources": len(stranded),
+        "sources": stranded,
+    }
+
+
 @router.post("/sources", status_code=201, response_model=SourceModel)
 def source_create(body: SourceCreate) -> dict[str, Any]:
     try:
@@ -1042,6 +1070,23 @@ def source_status(name: str) -> dict[str, Any]:
     try:
         with db.pooled(get_settings().pg_dsn) as conn:
             return source_store.status(conn, name)
+    except Exception as exc:
+        _raise(exc)
+
+
+@router.get(
+    "/sources/{name}/module-status",
+    response_model=SourceModuleStatus,
+)
+def source_module_status(name: str) -> dict[str, Any]:
+    try:
+        with db.pooled(get_settings().pg_dsn) as conn:
+            return next(
+                item for item in source_store.module_statuses(conn)
+                if item["source"] == name
+            )
+    except StopIteration:
+        raise HTTPException(404, "Source not found")
     except Exception as exc:
         _raise(exc)
 
@@ -1324,6 +1369,7 @@ def source_ingest(
     total = sum(len(item.text.encode()) for item in body.documents)
     if total > 64 * 1024 * 1024:
         raise HTTPException(413, "ingest payload exceeds 64 MiB")
+    documents = [item.model_dump() for item in body.documents]
     try:
         with db.pooled(get_settings().pg_dsn) as conn:
             source = source_store.get_source(conn, name, include_spec=True)
@@ -1342,12 +1388,23 @@ def source_ingest(
                 raise HTTPException(
                     413,
                     f"Source accepts at most {contract['max_documents']} documents")
+            if source["search_name"] == "memory":
+                # Memory full replacement is unusually destructive: accepting
+                # the wrong partition can tombstone another conversation.  The
+                # worker repeats this validation, but reject deterministic
+                # identity errors before returning an asynchronous 202.
+                from windex.modules.receive import validate_memory_batch
+
+                validate_memory_batch(
+                    {"partition": body.partition},
+                    documents,
+                )
             run_id = run_store.submit_source(
                 conn, name, inputs={
                     "documents": {
                         "mode": body.mode,
                         "partition": body.partition,
-                        "documents": [item.model_dump() for item in body.documents],
+                        "documents": documents,
                     },
                 }, settings=get_settings(), trigger_type="push",
                 trigger_by="data API", idempotency_key=idempotency_key,

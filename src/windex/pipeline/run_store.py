@@ -43,35 +43,11 @@ def _apply_revision_locks(
             "revision Module locks do not match its graph: missing "
             + ", ".join(missing))
 
-    unavailable: list[str] = []
     selected = {
         name: locks[name]
         for name in sorted(task_modules)
     }
-    for name, lock in selected.items():
-        executor = str(lock.get("executor") or "")
-        if executor == "sandbox":
-            with conn.cursor() as cur:
-                cur.execute(
-                    """SELECT v.source_digest, v.approval_state
-                         FROM module_versions v
-                         JOIN module_definitions d ON d.id = v.module_id
-                        WHERE d.name = %s AND v.version = %s""",
-                    (name, int(lock["version"])),
-                )
-                row = cur.fetchone()
-            available = (
-                row is not None
-                and row[1] == "available"
-                and row[0] == lock.get("digest")
-            )
-        else:
-            available = (
-                registry.implemented(name)
-                and registry.implementation_digest(name) == lock.get("digest")
-            )
-        if not available:
-            unavailable.append(name)
+    unavailable = registry.unavailable_modules(conn, selected)
     if unavailable:
         raise RunConflictError(
             "module_revoked: frozen Module unavailable or changed: "

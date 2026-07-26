@@ -21,8 +21,11 @@ import dataclasses
 import hashlib
 import inspect
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+import psycopg
 
 from windex.schema.param import Param
 
@@ -674,6 +677,50 @@ def module_lock(name: str) -> dict[str, str]:
         "digest": implementation_digest(name),
         "executor": "sandbox" if name in _CUSTOM_EXECUTORS else "builtin",
     }
+
+
+def unavailable_modules(
+    conn: psycopg.Connection,
+    locks: Mapping[str, Mapping[str, object]],
+) -> list[str]:
+    """Return frozen Modules that this runtime can no longer execute.
+
+    Pipeline revisions deliberately freeze exact implementation digests.  Keep
+    the availability test in one place so Run submission, Source status and
+    health all agree about whether a pinned revision is runnable.
+    """
+    load_custom(conn)
+    unavailable: list[str] = []
+    for name, lock in sorted(locks.items()):
+        executor = str(lock.get("executor") or "")
+        if executor == "sandbox":
+            try:
+                version = int(str(lock.get("version") or ""))
+            except ValueError:
+                unavailable.append(name)
+                continue
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT v.source_digest, v.approval_state
+                         FROM module_versions v
+                         JOIN module_definitions d ON d.id = v.module_id
+                        WHERE d.name = %s AND v.version = %s""",
+                    (name, version),
+                )
+                row = cur.fetchone()
+            available = (
+                row is not None
+                and row[1] == "available"
+                and row[0] == lock.get("digest")
+            )
+        else:
+            available = (
+                implemented(name)
+                and implementation_digest(name) == lock.get("digest")
+            )
+        if not available:
+            unavailable.append(name)
+    return unavailable
 
 
 def registry_digest() -> str:

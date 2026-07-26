@@ -50,9 +50,6 @@ def memory_partition(payload: dict, raw_docs: list) -> str:
     Partition replacement tombstones everything under `memory:<partition>/`, so
     guessing wrong here does not lose one document — it empties a whole chat.
     """
-    explicit = payload.get("partition") or payload.get("conversation_id")
-    if explicit:
-        return str(explicit)
     found = {
         conversation for raw in raw_docs
         if isinstance(raw, dict) and (conversation := _doc_conversation(raw))
@@ -62,6 +59,15 @@ def memory_partition(payload: dict, raw_docs: list) -> str:
             "push.docs memory batch mixes conversations ("
             + ", ".join(sorted(found))
             + "); one ingest run replaces exactly one conversation")
+    explicit = payload.get("partition") or payload.get("conversation_id")
+    if explicit:
+        partition = str(explicit)
+        if found and partition not in found:
+            raise PermanentTaskError(
+                "push.docs memory batch conversation "
+                f"{next(iter(found))!r} does not match partition "
+                f"{partition!r}")
+        return partition
     if not found:
         raise PermanentTaskError(
             "push.docs memory batch names no conversation; send "
@@ -75,6 +81,23 @@ class MemoryIdentity(NamedTuple):
     fields: dict
     title: str
     published_at: datetime | None
+
+
+def custom_metadata(raw: dict, index: int) -> tuple[dict, dict]:
+    """Keep public custom fields both for pipeline logic and search results."""
+    raw_fields = raw.get("fields") or {}
+    if not isinstance(raw_fields, dict):
+        raise PermanentTaskError(
+            f"push.docs document {index} fields must be an object")
+    fields = dict(raw_fields)
+    metadata = {
+        **dict(raw.get("extra") or raw.get("payload") or {}),
+        **{
+            key: value for key, value in fields.items()
+            if not str(key).startswith("_")
+        },
+    }
+    return fields, metadata
 
 
 def memory_identity(
@@ -115,6 +138,20 @@ def memory_identity(
     )
 
 
+def validate_memory_batch(payload: dict, raw_docs: list) -> str:
+    """Validate memory replacement semantics before accepting or executing it."""
+    if not isinstance(raw_docs, list):
+        raise PermanentTaskError("push.docs documents must be an array")
+    partition = memory_partition(payload, raw_docs)
+    for index, raw in enumerate(raw_docs):
+        if not isinstance(raw, dict):
+            raise PermanentTaskError(
+                f"push.docs document {index} must be an object")
+        memory_identity(
+            raw, index, partition, batch_title=payload.get("title"))
+    return partition
+
+
 def push_docs(ctx: TaskContext) -> SliceResult:
     """Consume one immutable run payload as a pushed document batch."""
     with ctx.conn.cursor() as cur:
@@ -141,7 +178,7 @@ def push_docs(ctx: TaskContext) -> SliceResult:
     mode = str(ctx.config.get("mode", "delta"))
     source = ctx.search_name
     if source == "memory":
-        partition = memory_partition(payload, raw_docs)
+        partition = validate_memory_batch(payload, raw_docs)
     else:
         partition = str(
             payload.get("partition") or payload.get("conversation_id") or "push")
@@ -153,13 +190,14 @@ def push_docs(ctx: TaskContext) -> SliceResult:
         if source == "memory":
             suffix, url, fields, title, published = memory_identity(
                 raw, index, partition, batch_title=payload.get("title"))
+            metadata = dict(raw.get("extra") or raw.get("payload") or {})
         else:
             suffix = str(raw.get("id") or raw.get("suffix") or "")
             if not suffix:
                 raise PermanentTaskError(
                     f"push.docs document {index} requires id")
             url = str(raw.get("url") or f"custom://{source}/{suffix}")
-            fields = dict(raw.get("fields") or {})
+            fields, metadata = custom_metadata(raw, index)
             title = str(raw.get("title") or "")
             published = _datetime(raw.get("published_at"))
         text = str(raw.get("text") or "")
@@ -185,7 +223,7 @@ def push_docs(ctx: TaskContext) -> SliceResult:
             published_at=published,
             lang=raw.get("lang"),
             fields=fields,
-            payload=dict(raw.get("extra") or raw.get("payload") or {}),
+            payload=metadata,
             deleted=bool(raw.get("deleted", False)),
             epoch=ctx.run_id,
         ))

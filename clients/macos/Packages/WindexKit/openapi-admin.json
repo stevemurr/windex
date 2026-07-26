@@ -615,6 +615,37 @@
         "title": "ModuleDescriptor",
         "type": "object"
       },
+      "ModuleHealthResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceModuleStatus"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "stranded_sources": {
+            "title": "Stranded Sources",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "stranded_sources",
+          "sources"
+        ],
+        "title": "ModuleHealthResponse",
+        "type": "object"
+      },
       "ModuleVersionModel": {
         "additionalProperties": false,
         "properties": {
@@ -2710,6 +2741,53 @@
         "title": "SourceModel",
         "type": "object"
       },
+      "SourceModuleStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "latest_pipeline_version": {
+            "title": "Latest Pipeline Version",
+            "type": "integer"
+          },
+          "pipeline_revision_id": {
+            "title": "Pipeline Revision Id",
+            "type": "integer"
+          },
+          "pipeline_version": {
+            "title": "Pipeline Version",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "unavailable_modules": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unavailable Modules",
+            "type": "array"
+          },
+          "upgrade_required": {
+            "title": "Upgrade Required",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "source",
+          "pipeline_revision_id",
+          "pipeline_version",
+          "latest_pipeline_version",
+          "available",
+          "upgrade_required",
+          "unavailable_modules"
+        ],
+        "title": "SourceModuleStatus",
+        "type": "object"
+      },
       "SourcePatch": {
         "additionalProperties": false,
         "properties": {
@@ -4322,6 +4400,52 @@
           }
         },
         "summary": "Log Events Stream"
+      }
+    },
+    "/v1/module-health": {
+      "get": {
+        "operationId": "module_health",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModuleHealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Module Health"
       }
     },
     "/v1/modules": {
@@ -6620,6 +6744,61 @@
           }
         },
         "summary": "Source Archive"
+      }
+    },
+    "/v1/sources/{name}/module-status": {
+      "get": {
+        "operationId": "source_module_status",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceModuleStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Source Module Status"
       }
     },
     "/v1/sources/{name}/pause": {
