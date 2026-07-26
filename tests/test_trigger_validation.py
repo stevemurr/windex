@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
+import time
 import uuid
 
 import psycopg
@@ -12,12 +14,16 @@ from psycopg.types.json import Jsonb
 from windex.api.app import admin
 from windex.config import Settings
 from windex.db.canonical import init_canonical_db
-from windex.pipeline.events import list_events
+from windex.pipeline.events import append, list_events
+from windex.pipeline.run_store import submit_source
+from windex.source import scheduler as scheduler_module
 from windex.source.scheduler import arm_unplanned, next_fire, tick
 from windex.source.store import (
     TriggerValidationError,
+    archive,
     create_trigger,
     list_triggers,
+    set_paused,
     update_trigger,
 )
 from windex.source.trigger_validation import validate_trigger
@@ -529,4 +535,468 @@ def test_tick_quarantines_due_invalid_row_without_blocking_healthy_run(
             (result.fired[0]["run_id"],),
         )
         assert cur.fetchone() == (1,)
+    canonical_conn.commit()
+
+
+def _append_test_event(
+    conn,
+    event: str,
+    *,
+    source: str | None = None,
+    run_id: int | None = None,
+) -> int:
+    with conn.cursor() as cur:
+        seq = append(
+            cur,
+            component="test",
+            event=event,
+            source_name=source,
+            run_id=run_id,
+        )
+    conn.commit()
+    assert seq is not None
+    return seq
+
+
+def _event_cursor(conn, trigger_id: int) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT after_seq FROM source_event_trigger_cursors
+                WHERE trigger_id = %s""",
+            (trigger_id,),
+        )
+        return cur.fetchone()[0]
+
+
+def _test_dsn(conn) -> str:
+    return (
+        "postgresql://windex:windex@127.0.0.1:5432/"
+        f"{conn.info.dbname}"
+    )
+
+
+def test_event_trigger_matches_exact_event_and_optional_source_without_rescan(
+    canonical_conn,
+):
+    trigger = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "event",
+        "trigger_spec": {"event": "document.changed", "source": "upstream"},
+    })
+    wrong_event = _append_test_event(
+        canonical_conn, "document.created", source="upstream")
+    wrong_source = _append_test_event(
+        canonical_conn, "document.changed", source="other")
+    matching = _append_test_event(
+        canonical_conn, "document.changed", source="upstream")
+
+    first = tick(canonical_conn, event_scan_limit=2)
+    assert first.fired == []
+    assert _event_cursor(canonical_conn, trigger["id"]) == wrong_source
+    assert wrong_event < wrong_source < matching
+
+    second = tick(canonical_conn, event_scan_limit=2)
+    assert len(second.fired) == 1
+    fired = second.fired[0]
+    assert fired["trigger_id"] == trigger["id"]
+    assert fired["event_seq"] == matching
+    assert _event_cursor(canonical_conn, trigger["id"]) == matching
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """SELECT trigger_type, trigger_by, idempotency_key
+                 FROM runs WHERE id = %s""",
+            (fired["run_id"],),
+        )
+        assert cur.fetchone() == (
+            "event",
+            f"event-trigger:{trigger['id']}:event:{matching}",
+            f"event-trigger:{trigger['id']}:{matching}",
+        )
+    canonical_conn.commit()
+
+
+def test_new_and_edited_event_triggers_start_at_current_journal_tail(
+    canonical_conn,
+):
+    historic = _append_test_event(
+        canonical_conn, "source.changed", source="upstream")
+    trigger = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "event",
+        "trigger_spec": {"event": "source.changed"},
+    })
+    assert _event_cursor(canonical_conn, trigger["id"]) >= historic
+    assert tick(canonical_conn).fired == []
+
+    stale_for_new_binding = _append_test_event(
+        canonical_conn, "source.changed", source="upstream")
+    trigger = update_trigger(canonical_conn, "hn", trigger["id"], {
+        "trigger_spec": {"event": "source.ready"},
+    })
+    assert _event_cursor(canonical_conn, trigger["id"]) >= stale_for_new_binding
+    assert tick(canonical_conn).fired == []
+
+    fresh = _append_test_event(
+        canonical_conn, "source.ready", source="upstream")
+    fired = tick(canonical_conn).fired
+    assert len(fired) == 1
+    assert fired[0]["trigger_id"] == trigger["id"]
+    assert fired[0]["event_seq"] == fresh
+
+
+def test_event_submission_and_cursor_are_atomic_and_retry_is_idempotent(
+    canonical_conn,
+    monkeypatch,
+):
+    trigger = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "event",
+        "trigger_spec": {"event": "index.requested"},
+    })
+    event_seq = _append_test_event(canonical_conn, "index.requested")
+    original_submit = scheduler_module.submit_source
+
+    def crash_after_insert(*args, **kwargs):
+        original_submit(*args, **kwargs)
+        raise RuntimeError("simulated scheduler crash")
+
+    monkeypatch.setattr(
+        scheduler_module, "submit_source", crash_after_insert)
+    failed = tick(canonical_conn)
+    assert len(failed.failed) == 1
+    assert failed.failed[0]["event_seq"] == event_seq
+    assert _event_cursor(canonical_conn, trigger["id"]) < event_seq
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM runs WHERE idempotency_key = %s",
+            (f"event-trigger:{trigger['id']}:{event_seq}",),
+        )
+        assert cur.fetchone()[0] == 0
+    error_events = list_events(
+        canonical_conn, component="scheduler", source="hn", limit=100)
+    assert any(
+        item["event"] == "trigger.event_error"
+        and item["data"]["event_seq"] == event_seq
+        for item in error_events
+    )
+
+    monkeypatch.setattr(scheduler_module, "submit_source", original_submit)
+    retried = tick(canonical_conn)
+    assert len(retried.fired) == 1
+    run_id = retried.fired[0]["run_id"]
+    assert _event_cursor(canonical_conn, trigger["id"]) == event_seq
+
+    # A restored/stale cursor cannot duplicate the Run: its stable
+    # idempotency key resolves the already-committed submission.
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """UPDATE source_event_trigger_cursors SET after_seq = %s
+                WHERE trigger_id = %s""",
+            (event_seq - 1, trigger["id"]),
+        )
+    canonical_conn.commit()
+    replay = tick(canonical_conn)
+    assert replay.fired[0]["run_id"] == run_id
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM runs WHERE idempotency_key = %s",
+            (f"event-trigger:{trigger['id']}:{event_seq}",),
+        )
+        assert cur.fetchone()[0] == 1
+    canonical_conn.commit()
+
+
+def test_event_cursor_waits_for_lower_uncommitted_journal_sequence(
+    canonical_conn,
+):
+    trigger = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "event",
+        "trigger_spec": {"event": "ordered.input"},
+    })
+    dsn = _test_dsn(canonical_conn)
+    lower = psycopg.connect(dsn)
+    higher = psycopg.connect(dsn)
+    dispatcher = psycopg.connect(dsn)
+    try:
+        with lower.cursor() as cur:
+            lower_seq = append(
+                cur, component="test", event="ordered.input")
+        assert lower_seq is not None
+
+        with higher.cursor() as cur:
+            higher_seq = append(
+                cur, component="test", event="unrelated.input")
+        higher.commit()
+        assert higher_seq is not None and higher_seq > lower_seq
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(tick, dispatcher)
+            time.sleep(0.1)
+            # The exclusive dispatch lock waits instead of advancing over the
+            # committed higher sequence while the lower one is still hidden.
+            assert not pending.done()
+            lower.commit()
+            result = pending.result(timeout=10)
+
+        assert len(result.fired) == 1
+        assert result.fired[0]["trigger_id"] == trigger["id"]
+        assert result.fired[0]["event_seq"] == lower_seq
+        assert _event_cursor(canonical_conn, trigger["id"]) == lower_seq
+    finally:
+        lower.rollback()
+        lower.close()
+        higher.close()
+        dispatcher.close()
+
+
+def test_legacy_cursor_seeding_locks_trigger_before_journal(canonical_conn):
+    trigger_id = _raw_trigger(
+        canonical_conn,
+        trigger_type="event",
+        spec={"event": "legacy.input"},
+    )
+    dsn = _test_dsn(canonical_conn)
+    locker = psycopg.connect(dsn)
+    writer = psycopg.connect(dsn)
+    dispatcher = psycopg.connect(
+        dsn, application_name="event-cursor-lock-order-test")
+    try:
+        with locker.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM source_triggers WHERE id = %s FOR UPDATE",
+                (trigger_id,),
+            )
+            assert cur.fetchone() == (trigger_id,)
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(tick, dispatcher)
+            for _ in range(40):
+                with canonical_conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT wait_event_type FROM pg_stat_activity
+                            WHERE pid = %s""",
+                        (dispatcher.info.backend_pid,),
+                    )
+                    state = cur.fetchone()
+                canonical_conn.commit()
+                if state == ("Lock",):
+                    break
+                time.sleep(0.05)
+            assert state == ("Lock",)
+
+            # Cursor seeding is waiting on the trigger row and therefore
+            # cannot already own the exclusive journal lock.  A normal event
+            # writer must remain free to commit.
+            with writer.cursor() as cur:
+                cur.execute("SET LOCAL lock_timeout = '750ms'")
+                seq = append(
+                    cur, component="test", event="legacy.input")
+            writer.commit()
+            assert seq is not None
+
+            locker.commit()
+            result = pending.result(timeout=10)
+
+        assert result.fired == []
+        assert _event_cursor(canonical_conn, trigger_id) >= seq
+    finally:
+        locker.rollback()
+        locker.close()
+        writer.rollback()
+        writer.close()
+        dispatcher.close()
+
+
+def test_legacy_invalid_event_trigger_is_quarantined_once(canonical_conn):
+    trigger_id = _raw_trigger(
+        canonical_conn,
+        trigger_type="event",
+        spec={},
+    )
+    # The first pass safely establishes a tail cursor for the legacy row.
+    tick(canonical_conn)
+    _append_test_event(canonical_conn, "anything")
+
+    result = tick(canonical_conn)
+    assert result.failed == [{
+        "trigger_id": trigger_id,
+        "source": "hn",
+        "error": "event trigger requires a non-empty event name",
+        "disabled": True,
+    }]
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            "SELECT enabled FROM source_triggers WHERE id = %s",
+            (trigger_id,),
+        )
+        assert cur.fetchone() == (False,)
+    canonical_conn.commit()
+    assert tick(canonical_conn).failed == []
+    invalid = list_events(
+        canonical_conn, component="scheduler", source="hn", limit=100)
+    assert sum(
+        item["event"] == "trigger.invalid"
+        and item["data"]["trigger_id"] == trigger_id
+        for item in invalid
+    ) == 1
+
+
+def test_event_triggers_skip_paused_archived_and_disabled_intervals(
+    canonical_conn,
+):
+    paused = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "event",
+        "trigger_spec": {"event": "paused.input"},
+    })
+    set_paused(canonical_conn, "hn", True, "maintenance")
+    paused_seq = _append_test_event(canonical_conn, "paused.input")
+    paused_result = tick(canonical_conn)
+    assert paused_result.skipped == [{
+        "trigger_id": paused["id"],
+        "source": "hn",
+        "event_seq": paused_seq,
+        "reason": "source paused",
+    }]
+    set_paused(canonical_conn, "hn", False)
+    assert tick(canonical_conn).fired == []
+
+    disabled = create_trigger(canonical_conn, "ccnews", {
+        "flow_name": "sync",
+        "trigger_type": "event",
+        "trigger_spec": {"event": "disabled.input"},
+    })
+    update_trigger(
+        canonical_conn, "ccnews", disabled["id"], {"enabled": False})
+    ignored = _append_test_event(canonical_conn, "disabled.input")
+    assert tick(canonical_conn).fired == []
+    update_trigger(
+        canonical_conn, "ccnews", disabled["id"], {"enabled": True})
+    assert _event_cursor(canonical_conn, disabled["id"]) >= ignored
+    assert tick(canonical_conn).fired == []
+    fresh = _append_test_event(canonical_conn, "disabled.input")
+    enabled_result = tick(canonical_conn)
+    assert any(
+        item["trigger_id"] == disabled["id"]
+        and item["event_seq"] == fresh
+        for item in enabled_result.fired
+    )
+
+    archived = create_trigger(canonical_conn, "docs", {
+        "flow_name": "sync",
+        "trigger_type": "event",
+        "trigger_spec": {"event": "archived.input"},
+    })
+    assert archive(canonical_conn, "docs") is True
+    archived_seq = _append_test_event(canonical_conn, "archived.input")
+    archived_result = tick(canonical_conn)
+    assert any(
+        item == {
+            "trigger_id": archived["id"],
+            "source": "docs",
+            "event_seq": archived_seq,
+            "reason": "source archived",
+        }
+        for item in archived_result.skipped
+    )
+
+
+def test_event_trigger_selection_is_fair_and_bounded_across_ticks(
+    canonical_conn,
+):
+    first = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "event",
+        "trigger_spec": {"event": "fair.input"},
+    })
+    second = create_trigger(canonical_conn, "ccnews", {
+        "flow_name": "sync",
+        "trigger_type": "event",
+        "trigger_spec": {"event": "fair.input"},
+    })
+    event_seq = _append_test_event(canonical_conn, "fair.input")
+
+    one = tick(canonical_conn, limit=1)
+    two = tick(canonical_conn, limit=1)
+    assert len(one.fired) == 1
+    assert len(two.fired) == 1
+    assert {
+        one.fired[0]["trigger_id"],
+        two.fired[0]["trigger_id"],
+    } == {first["id"], second["id"]}
+    assert one.fired[0]["event_seq"] == event_seq
+    assert two.fired[0]["event_seq"] == event_seq
+
+
+def test_active_source_run_coalesces_event_and_advances_cursor(
+    canonical_conn,
+):
+    trigger = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "event",
+        "trigger_spec": {"event": "coalesce.input"},
+    })
+    active = submit_source(canonical_conn, "hn", flow="harvest")
+    assert active is not None
+    event_seq = _append_test_event(canonical_conn, "coalesce.input")
+
+    result = tick(canonical_conn)
+    assert result.coalesced == [{
+        "trigger_id": trigger["id"],
+        "source": "hn",
+        "run_id": None,
+        "event_seq": event_seq,
+    }]
+    assert _event_cursor(canonical_conn, trigger["id"]) == event_seq
+    events = list_events(
+        canonical_conn, component="scheduler", source="hn", limit=100)
+    assert any(
+        item["event"] == "trigger.event_coalesced"
+        and item["data"]["event_seq"] == event_seq
+        for item in events
+    )
+
+
+def test_event_triggered_run_events_are_suppressed_after_one_hop(
+    canonical_conn,
+):
+    trigger = create_trigger(canonical_conn, "ccnews", {
+        "flow_name": "sync",
+        "trigger_type": "event",
+        "trigger_spec": {"event": "run.queued"},
+    })
+    seed_run = submit_source(
+        canonical_conn, "hn", flow="harvest", dedupe=False)
+    assert seed_run is not None
+
+    first = tick(canonical_conn)
+    assert len(first.fired) == 1
+    assert first.fired[0]["trigger_id"] == trigger["id"]
+    event_run = first.fired[0]["run_id"]
+
+    second = tick(canonical_conn)
+    assert any(
+        item["trigger_id"] == trigger["id"]
+        and item["reason"] == "loop suppressed"
+        for item in second.skipped
+    )
+    third = tick(canonical_conn)
+    assert third.fired == []
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """SELECT id FROM runs
+                WHERE trigger_type = 'event' AND trigger_by LIKE %s
+                ORDER BY id""",
+            (f"event-trigger:{trigger['id']}:%",),
+        )
+        assert [row[0] for row in cur.fetchall()] == [event_run]
+    skipped = list_events(
+        canonical_conn, component="scheduler", source="ccnews", limit=100)
+    assert any(
+        item["event"] == "trigger.event_skipped"
+        and item["data"]["reason"]
+        == "event-triggered run causality is limited to one hop"
+        for item in skipped
+    )
     canonical_conn.commit()

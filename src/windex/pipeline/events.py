@@ -15,6 +15,20 @@ _TOKEN = re.compile(
     r"([A-Za-z0-9._~+/=-]{8,})")
 _MAX_MESSAGE = 4096
 _MAX_DATA_BYTES = 32 * 1024
+# ASCII-ish "WINDEXEV" encoded as a signed-safe bigint.  Event writers take a
+# shared transaction lock; cursor readers take the exclusive form.  That makes
+# journal sequence watermarks safe even when an earlier nextval() would
+# otherwise commit after a later event.
+_JOURNAL_LOCK_KEY = 6289644409727763798
+
+
+def lock_journal(cur: psycopg.Cursor, *, exclusive: bool) -> None:
+    function = (
+        "pg_advisory_xact_lock"
+        if exclusive
+        else "pg_advisory_xact_lock_shared"
+    )
+    cur.execute(f"SELECT {function}(%s)", (_JOURNAL_LOCK_KEY,))
 
 
 def redact(value: Any, secrets: tuple[str, ...] = ()) -> Any:
@@ -55,6 +69,11 @@ def append(
     data: Mapping[str, Any] | None = None,
     secrets: tuple[str, ...] = (),
 ) -> int | None:
+    # Shared locks allow event-producing domain transactions to stay
+    # concurrent.  Dispatch briefly takes the exclusive form before selecting
+    # and advancing a cursor, so no lower sequence can appear after its
+    # watermark commits.
+    lock_journal(cur, exclusive=False)
     try:
         from windex.config import get_settings
 
@@ -184,4 +203,4 @@ def facets(conn: psycopg.Connection) -> dict[str, list[str]]:
     return result
 
 
-__all__ = ["append", "facets", "list_events", "redact"]
+__all__ = ["append", "facets", "list_events", "lock_journal", "redact"]
