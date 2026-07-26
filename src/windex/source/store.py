@@ -18,6 +18,10 @@ from windex.pipeline.contracts import SEARCH_SOURCE_CONTRACT
 from windex.pipeline.spec import parse
 from windex.pipeline.store import get_revision
 from windex.pipeline.validation import validate_deployment
+from windex.source.trigger_validation import (
+    TriggerValidationError,
+    validate_trigger,
+)
 
 
 class StaleSourceError(RuntimeError):
@@ -380,6 +384,15 @@ def create_trigger(
     flows = set(source["spec"]["flows"])
     if body.get("flow_name") not in flows:
         raise ValueError("trigger Flow does not exist in the active revision")
+    enabled = body.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise TriggerValidationError(
+            ("enabled",), "trigger enabled must be a boolean")
+    validate_trigger(
+        body.get("trigger_type"),
+        body.get("trigger_spec", {}),
+        next_fire_at=body.get("next_fire_at"),
+    )
     with conn.cursor() as cur:
         cur.execute(
             """INSERT INTO source_triggers
@@ -389,7 +402,7 @@ def create_trigger(
             (
                 source["id"], body["flow_name"], body["trigger_type"],
                 Jsonb(dict(body.get("trigger_spec") or {})),
-                bool(body.get("enabled", True)), body.get("next_fire_at"),
+                enabled, body.get("next_fire_at"),
             ),
         )
         trigger_id = cur.fetchone()[0]
@@ -408,17 +421,31 @@ def update_trigger(
     unknown = set(changes) - allowed
     if unknown:
         raise ValueError(f"unknown trigger fields: {', '.join(sorted(unknown))}")
+    source = get_source(conn, name, include_spec=True)
+    if source is None:
+        raise KeyError(name)
+    current = next(
+        (item for item in list_triggers(conn, name) if item["id"] == trigger_id),
+        None,
+    )
+    if current is None:
+        raise KeyError(trigger_id)
+    candidate = {**current, **changes}
+    if candidate["flow_name"] not in set(source["spec"]["flows"]):
+        raise ValueError("trigger Flow does not exist in the active revision")
+    if not isinstance(candidate["enabled"], bool):
+        raise TriggerValidationError(
+            ("enabled",), "trigger enabled must be a boolean")
+    validate_trigger(
+        candidate["trigger_type"],
+        candidate["trigger_spec"],
+        next_fire_at=candidate["next_fire_at"],
+    )
     assignments, args = [], []
     for key, value in changes.items():
         assignments.append(f"{key} = %s")
         args.append(Jsonb(dict(value)) if key == "trigger_spec" else value)
     if not assignments:
-        current = next(
-            (item for item in list_triggers(conn, name) if item["id"] == trigger_id),
-            None,
-        )
-        if current is None:
-            raise KeyError(trigger_id)
         return current
     args.extend([trigger_id, name])
     with conn.cursor() as cur:
@@ -966,6 +993,7 @@ def list_secrets(conn: psycopg.Connection) -> list[dict[str, Any]]:
 __all__ = [
     "SourceConflictError",
     "StaleSourceError",
+    "TriggerValidationError",
     "archive",
     "create_source",
     "create_trigger",

@@ -637,6 +637,8 @@ def _detail(exc: Exception) -> Any:
 
 
 def _raise(exc: Exception) -> None:
+    if isinstance(exc, source_store.TriggerValidationError):
+        raise HTTPException(422, exc.api_detail())
     if isinstance(exc, KeyError):
         raise HTTPException(404, "resource not found")
     if isinstance(exc, (

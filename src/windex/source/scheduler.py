@@ -12,6 +12,10 @@ from croniter import croniter
 from windex.config import Settings
 from windex.pipeline.events import append
 from windex.pipeline.run_store import RunConflictError, submit_source
+from windex.source.trigger_validation import (
+    TriggerValidationError,
+    validate_trigger,
+)
 
 
 @dataclass
@@ -25,19 +29,47 @@ class TickResult:
 def next_fire(
     trigger_type: str, spec: dict, after: datetime,
 ) -> datetime | None:
+    validate_trigger(trigger_type, spec)
     if trigger_type == "interval":
-        seconds = int(spec.get("seconds") or spec.get("interval_seconds") or 0)
-        if seconds < 1:
-            raise ValueError("interval trigger requires positive seconds")
-        return after + timedelta(seconds=seconds)
+        return after + timedelta(seconds=spec["seconds"])
     if trigger_type == "cron":
-        expression = str(spec.get("cron") or "")
-        if len(expression.split()) != 5:
-            raise ValueError("cron trigger requires a five-field expression")
-        timezone = ZoneInfo(str(spec.get("timezone") or "UTC"))
+        expression = spec["cron"]
+        timezone = ZoneInfo(spec["timezone"])
         local = after.astimezone(timezone)
         return croniter(expression, local).get_next(datetime).astimezone(UTC)
     return None
+
+
+def _quarantine_invalid(
+    cur: psycopg.Cursor,
+    *,
+    trigger_id: int,
+    source_name: str,
+    trigger_type: str,
+    error: TriggerValidationError,
+) -> None:
+    """Disable one legacy-invalid row and leave an operator-visible event."""
+
+    cur.execute(
+        """UPDATE source_triggers
+              SET enabled = false, next_fire_at = NULL, updated_at = now()
+            WHERE id = %s""",
+        (trigger_id,),
+    )
+    append(
+        cur,
+        component="scheduler",
+        event="trigger.invalid",
+        level="error",
+        source_name=source_name,
+        message=f"Disabled invalid {trigger_type} trigger: {error}",
+        data={
+            "trigger_id": trigger_id,
+            "trigger_type": trigger_type,
+            "error": str(error),
+            "action": "disabled",
+        },
+    )
 
 
 def tick(
@@ -80,7 +112,23 @@ def tick(
                         _id, source_name, flow, kind, spec, planned, paused,
                         enabled, archived,
                     ) = row
-                    following = next_fire(kind, spec, instant)
+                    try:
+                        following = next_fire(kind, spec, instant)
+                    except TriggerValidationError as exc:
+                        _quarantine_invalid(
+                            cur,
+                            trigger_id=trigger_id,
+                            source_name=source_name,
+                            trigger_type=kind,
+                            error=exc,
+                        )
+                        result.failed.append({
+                            "trigger_id": trigger_id,
+                            "source": source_name,
+                            "error": str(exc),
+                            "disabled": True,
+                        })
+                        continue
                     if paused or not enabled or archived:
                         cur.execute(
                             "UPDATE source_triggers SET next_fire_at = %s, "
@@ -124,18 +172,34 @@ def arm_unplanned(
     instant = now or datetime.now(UTC)
     with conn.cursor() as cur:
         cur.execute(
-            """SELECT id, trigger_type, trigger_spec FROM source_triggers
-                WHERE enabled AND trigger_type IN ('cron','interval')
-                  AND next_fire_at IS NULL FOR UPDATE SKIP LOCKED""")
+            """SELECT t.id, s.name, t.trigger_type, t.trigger_spec
+                 FROM source_triggers t
+                 JOIN sources s ON s.id = t.source_id
+                WHERE t.enabled AND t.trigger_type IN ('cron','interval')
+                  AND t.next_fire_at IS NULL
+                ORDER BY t.id FOR UPDATE OF t SKIP LOCKED""")
         rows = cur.fetchall()
-        for trigger_id, kind, spec in rows:
+        armed = 0
+        for trigger_id, source_name, kind, spec in rows:
+            try:
+                following = next_fire(kind, spec, instant)
+            except TriggerValidationError as exc:
+                _quarantine_invalid(
+                    cur,
+                    trigger_id=trigger_id,
+                    source_name=source_name,
+                    trigger_type=kind,
+                    error=exc,
+                )
+                continue
             cur.execute(
                 "UPDATE source_triggers SET next_fire_at = %s, updated_at = now() "
                 "WHERE id = %s",
-                (next_fire(kind, spec, instant), trigger_id),
+                (following, trigger_id),
             )
+            armed += 1
     conn.commit()
-    return len(rows)
+    return armed
 
 
 def maintain_partitions(
