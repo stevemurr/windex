@@ -5,6 +5,29 @@ import WindexUI
 
 @MainActor
 @Observable
+final class PipelineCanvasViewport {
+    private(set) var zoom: CGFloat = 1
+
+    func setZoom(_ value: CGFloat) {
+        zoom = min(2, max(0.5, value))
+    }
+
+    func zoomIn() { setZoom(zoom + 0.1) }
+    func zoomOut() { setZoom(zoom - 0.1) }
+
+    func translatedPosition(
+        origin: CGPoint,
+        translation: CGSize
+    ) -> CGPoint {
+        CGPoint(
+            x: origin.x + translation.width / zoom,
+            y: origin.y + translation.height / zoom
+        )
+    }
+}
+
+@MainActor
+@Observable
 final class PipelineComposerModel {
     private struct Presentation {
         let positions: [String: CGPoint]
@@ -34,9 +57,11 @@ final class PipelineComposerModel {
     var selectedCatalogueName: String?
     var selectedFlow = "main"
     var selectedNodeID: String?
-    var pendingConnectionSource: String?
+    var pendingConnectionSource: PipelinePortReference?
     var moduleFilter = ""
     var rightPane: RightPane = .modules
+    var focusedFieldKey: String?
+    var focusedParameterKey: String?
     var positions: [String: CGPoint] = [:]
     var groups: [PipelineLayoutGroup] = []
     var annotations: [PipelineLayoutAnnotation] = []
@@ -47,16 +72,23 @@ final class PipelineComposerModel {
     private(set) var semanticEditable = false
     private(set) var layoutDirty = false
     private(set) var recoveryRevision = 0
+    private(set) var semanticRevision = 0
+    private(set) var serverValidationMessage: String?
     private var presentations: [String: Presentation] = [:]
     private var dirtyFlows: Set<String> = []
 
-    private(set) var issues: [PipelineValidationIssue] = []
+    private(set) var localIssues: [PipelineValidationIssue] = []
+    private(set) var serverIssues: [PipelineValidationIssue] = []
     private(set) var nodeForm: FormModel?
     private var undoStack: [Snapshot] = []
     private var redoStack: [Snapshot] = []
 
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
+    var issues: [PipelineValidationIssue] {
+        var seen = Set<String>()
+        return (localIssues + serverIssues).filter { seen.insert($0.id).inserted }
+    }
 
     func newPipeline(registry: PipelineRegistry?) {
         draft = PipelineDraft(
@@ -80,6 +112,7 @@ final class PipelineComposerModel {
         nodeForm = nil
         undoStack = []
         redoStack = []
+        semanticRevision += 1
         validate(registry)
     }
 
@@ -109,6 +142,8 @@ final class PipelineComposerModel {
         nodeForm = nil
         undoStack = []
         redoStack = []
+        serverIssues = []
+        serverValidationMessage = nil
         validate(registry)
     }
 
@@ -206,6 +241,7 @@ final class PipelineComposerModel {
         nodeForm = nil
         undoStack = []
         redoStack = []
+        semanticRevision += 1
         validate(registry)
     }
 
@@ -421,7 +457,7 @@ final class PipelineComposerModel {
         }
     }
 
-    func addFlow() {
+    func addFlow(registry: PipelineRegistry? = nil) {
         guard var draft else { return }
         stashLayout(for: selectedFlow)
         checkpoint()
@@ -446,13 +482,14 @@ final class PipelineComposerModel {
                 groups: groups,
                 annotations: annotations
             )
+            validate(registry)
         } catch {
             undoStack.removeLast()
             errorMessage = error.localizedDescription
         }
     }
 
-    func duplicateFlow() {
+    func duplicateFlow(registry: PipelineRegistry? = nil) {
         guard var draft else { return }
         stashLayout(for: selectedFlow)
         checkpoint()
@@ -474,6 +511,30 @@ final class PipelineComposerModel {
                 groups: groups,
                 annotations: annotations
             )
+            validate(registry)
+        } catch {
+            undoStack.removeLast()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func renameSelectedFlow(to rawName: String, registry: PipelineRegistry?) {
+        guard var draft,
+              let flowIndex = draft.flows.firstIndex(where: { $0.name == selectedFlow })
+        else { return }
+        let previous = selectedFlow
+        checkpoint()
+        do {
+            stashLayout(for: previous)
+            try draft.renameFlow(named: previous, to: rawName)
+            let renamed = draft.flows[flowIndex].name
+            let presentation = presentations.removeValue(forKey: previous)
+            let wasDirty = dirtyFlows.remove(previous) != nil
+            if let presentation { presentations[renamed] = presentation }
+            if wasDirty { dirtyFlows.insert(renamed) }
+            self.draft = draft
+            selectedFlow = renamed
+            validate(registry)
         } catch {
             undoStack.removeLast()
             errorMessage = error.localizedDescription
@@ -576,18 +637,23 @@ final class PipelineComposerModel {
         }
     }
 
-    func beginConnection(from nodeID: String) {
-        pendingConnectionSource = nodeID
+    func beginConnection(from source: PipelinePortReference) {
+        pendingConnectionSource = source
         errorMessage = nil
     }
 
-    func finishConnection(to nodeID: String, registry: PipelineRegistry) {
-        guard let source = pendingConnectionSource, source != nodeID,
+    func finishConnection(
+        to target: PipelinePortReference,
+        registry: PipelineRegistry
+    ) {
+        guard let source = pendingConnectionSource,
+              source != target,
+              canConnect(to: target, registry: registry),
               var draft else { return }
         checkpoint()
         do {
             try draft.connect(
-                PipelineEdge(from: .node(source), to: .node(nodeID)),
+                PipelineEdge(from: source, to: target),
                 inFlow: selectedFlow,
                 registry: registry)
             self.draft = draft
@@ -597,6 +663,20 @@ final class PipelineComposerModel {
             undoStack.removeLast()
             errorMessage = error.localizedDescription
         }
+    }
+
+    func canConnect(
+        to target: PipelinePortReference,
+        registry: PipelineRegistry
+    ) -> Bool {
+        guard let source = pendingConnectionSource,
+              source != target,
+              var candidate = draft else { return false }
+        return (try? candidate.connect(
+            PipelineEdge(from: source, to: target),
+            inFlow: selectedFlow,
+            registry: registry
+        )) != nil
     }
 
     func disconnect(_ edge: PipelineEdge, registry: PipelineRegistry) {
@@ -706,10 +786,74 @@ final class PipelineComposerModel {
 
     func validate(_ registry: PipelineRegistry?) {
         guard let draft, let registry else {
-            issues = []
+            localIssues = []
             return
         }
-        issues = PipelineLocalValidator.validate(draft, registry: registry)
+        localIssues = PipelineLocalValidator.validate(draft, registry: registry)
+    }
+
+    func applyServerValidation(
+        _ validation: PipelineValidationWire,
+        revision: Int
+    ) {
+        guard revision == semanticRevision else { return }
+        serverIssues = validation.issues.map {
+            PipelineValidationIssue(
+                path: $0.path,
+                code: $0.code,
+                severity: $0.severity == .error ? .error : .warning,
+                message: $0.message
+            )
+        }
+        serverValidationMessage = nil
+    }
+
+    func failServerValidation(_ error: Error, revision: Int) {
+        guard revision == semanticRevision else { return }
+        serverValidationMessage = error.localizedDescription
+    }
+
+    @discardableResult
+    func focus(
+        _ issue: PipelineValidationIssue,
+        registry: PipelineRegistry?
+    ) -> String? {
+        guard let draft else { return nil }
+        focusedFieldKey = nil
+        focusedParameterKey = nil
+        let parts = issue.path.split(separator: ".").map(String.init)
+        guard let flowMarker = parts.firstIndex(of: "flows"),
+              parts.indices.contains(flowMarker + 1) else {
+            if let parameterMarker = parts.firstIndex(of: "parameters"),
+               parts.indices.contains(parameterMarker + 1) {
+                focusedParameterKey = parts[parameterMarker + 1]
+                rightPane = .parameters
+            }
+            return selectedFlow
+        }
+        let flowName = parts[flowMarker + 1]
+        guard draft.flows.contains(where: { $0.name == flowName }) else {
+            return selectedFlow
+        }
+        if flowName != selectedFlow {
+            stashLayout(for: selectedFlow)
+            selectedFlow = flowName
+        }
+        if let nodeMarker = parts.firstIndex(of: "nodes"),
+           parts.indices.contains(nodeMarker + 1) {
+            let nodeID = parts[nodeMarker + 1]
+            select(nodeID, registry: registry)
+            rightPane = .inspector
+            if let fieldMarker = parts.firstIndex(where: {
+                $0 == "with" || $0 == "config"
+            }), parts.indices.contains(fieldMarker + 1) {
+                focusedFieldKey = parts[fieldMarker + 1]
+            }
+        } else {
+            select(nil, registry: registry)
+            rightPane = .flow
+        }
+        return flowName
     }
 
     var currentFlow: PipelineFlow? {
@@ -745,6 +889,9 @@ final class PipelineComposerModel {
         }
         redoStack = []
         recoveryRevision += 1
+        semanticRevision += 1
+        serverIssues = []
+        serverValidationMessage = nil
     }
 
     private func markLayoutDirty() {
@@ -769,6 +916,9 @@ final class PipelineComposerModel {
         errorMessage = nil
         validate(registry)
         recoveryRevision += 1
+        semanticRevision += 1
+        serverIssues = []
+        serverValidationMessage = nil
     }
 }
 
@@ -817,6 +967,21 @@ struct PipelinesView: View {
                 return
             } catch {
                 // Recovery is best-effort. Publication remains the durable path.
+            }
+        }
+        .task(id: model.semanticRevision) {
+            guard model.semanticEditable,
+                  let spec = model.draft?.spec else { return }
+            let revision = model.semanticRevision
+            do {
+                try await Task.sleep(for: .milliseconds(450))
+                guard !Task.isCancelled else { return }
+                let validation = try await session.client.validatePipeline(spec)
+                model.applyServerValidation(validation, revision: revision)
+            } catch is CancellationError {
+                return
+            } catch {
+                model.failServerValidation(error, revision: revision)
             }
         }
         .sheet(isPresented: $isPresentingRun) {
@@ -1013,10 +1178,10 @@ struct PipelinesView: View {
 
                 Menu {
                     Button("New Flow") {
-                        model.addFlow()
+                        model.addFlow(registry: session.registry.registry)
                     }
                     Button("Duplicate Flow") {
-                        model.duplicateFlow()
+                        model.duplicateFlow(registry: session.registry.registry)
                     }
                     Button(
                         draft.refreshFlows.contains(model.selectedFlow)
@@ -1070,7 +1235,7 @@ struct PipelinesView: View {
             Spacer()
 
             if let source = model.pendingConnectionSource {
-                Text("Connecting from \(source)")
+                Text("Connecting from \(source.owner.rawValue):\(source.id)")
                     .windexStyle(Typography.dataSM)
                     .foregroundStyle(theme.palette.cyan)
                 Button("Cancel") {
@@ -1079,10 +1244,32 @@ struct PipelinesView: View {
                 .buttonStyle(.plain)
             }
 
-            if model.errorCount == 0 {
+            if model.issues.isEmpty {
                 StatusBadge(.healthy, word: "valid")
             } else {
-                StatusBadge(.fault, word: "\(model.errorCount) errors")
+                Menu {
+                    ForEach(model.issues) { issue in
+                        Button {
+                            focusDiagnostic(issue)
+                        } label: {
+                            Label(
+                                issue.message,
+                                systemImage: issue.severity == .error
+                                    ? "exclamationmark.circle"
+                                    : "exclamationmark.triangle"
+                            )
+                        }
+                    }
+                } label: {
+                    StatusBadge(
+                        model.errorCount == 0 ? .attention : .fault,
+                        word: model.errorCount == 0
+                            ? "\(model.issues.count) warnings"
+                            : "\(model.errorCount) errors"
+                    )
+                }
+                .menuStyle(.borderlessButton)
+                .help("Choose a diagnostic to focus its Flow, Node, or field.")
             }
 
             if model.baseVersion != nil, !model.semanticEditable {
@@ -1154,6 +1341,21 @@ struct PipelinesView: View {
             pipeline: revision.reference.pipeline,
             version: revision.reference.version,
             flow: model.selectedFlow
+        ))
+    }
+
+    private func focusDiagnostic(_ issue: PipelineValidationIssue) {
+        let previousFlow = model.selectedFlow
+        guard let flow = model.focus(
+            issue,
+            registry: session.registry.registry
+        ), flow != previousFlow,
+           let draft = model.draft,
+           let version = model.baseVersion else { return }
+        model.apply(session.pipelines.layout(
+            pipeline: draft.name,
+            version: version,
+            flow: flow
         ))
     }
 
@@ -1518,6 +1720,7 @@ private struct PipelineSummaryRow: View {
 private struct PipelineCanvas: View {
     @Bindable var model: PipelineComposerModel
     let registry: PipelineRegistry?
+    @State private var viewport = PipelineCanvasViewport()
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -1573,34 +1776,124 @@ private struct PipelineCanvas: View {
                 }
 
                 if let flow = model.currentFlow {
+                    ForEach(Array(flow.inputs.enumerated()), id: \.element.id) { index, input in
+                        PipelineCanvasBoundary(
+                            boundary: input,
+                            owner: .input,
+                            position: boundaryPosition(owner: .input, index: index),
+                            connecting: model.pendingConnectionSource == .input(input.name),
+                            compatible: nil,
+                            semanticEditable: model.semanticEditable,
+                            action: {
+                                model.beginConnection(from: .input(input.name))
+                            }
+                        )
+                    }
+
                     ForEach(Array(flow.nodes.enumerated()), id: \.element.id) { index, node in
                         let position = model.position(for: node.id, index: index)
+                        let compatibility = registry.map {
+                            model.pendingConnectionSource == nil ? nil
+                                : model.canConnect(to: .node(node.id), registry: $0)
+                        } ?? nil
                         PipelineCanvasNode(
                             node: node,
                             kind: registry?.kind(node.kind),
                             module: registry?.module(node.module),
                             position: position,
                             selected: model.selectedNodeID == node.id,
-                            connecting: model.pendingConnectionSource == node.id,
+                            connecting: model.pendingConnectionSource == .node(node.id),
+                            targetCompatibility: compatibility,
                             semanticEditable: model.semanticEditable,
+                            translate: { origin, translation in
+                                viewport.translatedPosition(
+                                    origin: origin,
+                                    translation: translation
+                                )
+                            },
                             select: {
                                 model.select(node.id, registry: registry)
                                 model.rightPane = .inspector
                             },
                             beginConnection: {
-                                model.beginConnection(from: node.id)
+                                model.beginConnection(from: .node(node.id))
                             },
                             finishConnection: {
                                 guard let registry else { return }
-                                model.finishConnection(to: node.id, registry: registry)
+                                model.finishConnection(
+                                    to: .node(node.id),
+                                    registry: registry
+                                )
                             },
                             move: { model.move(node.id, to: $0) })
+                    }
+
+                    ForEach(Array(flow.outputs.enumerated()), id: \.element.id) { index, output in
+                        let compatibility = registry.map {
+                            model.pendingConnectionSource == nil ? nil
+                                : model.canConnect(to: .output(output.name), registry: $0)
+                        } ?? nil
+                        PipelineCanvasBoundary(
+                            boundary: output,
+                            owner: .output,
+                            position: boundaryPosition(owner: .output, index: index),
+                            connecting: false,
+                            compatible: compatibility,
+                            semanticEditable: model.semanticEditable,
+                            action: {
+                                guard let registry else { return }
+                                model.finishConnection(
+                                    to: .output(output.name),
+                                    registry: registry
+                                )
+                            }
+                        )
                     }
                 }
             }
             .frame(width: 1600, height: 1000)
+            .scaleEffect(viewport.zoom, anchor: .topLeading)
+            .frame(
+                width: 1600 * viewport.zoom,
+                height: 1000 * viewport.zoom,
+                alignment: .topLeading
+            )
         }
         .background(theme.palette.ink)
+        .overlay(alignment: .bottomTrailing) {
+            HStack(spacing: .xs) {
+                Button {
+                    viewport.zoomOut()
+                } label: {
+                    Image(systemName: "minus")
+                        .accessibilityLabel("Zoom out")
+                }
+                Slider(
+                    value: Binding(
+                        get: { viewport.zoom },
+                        set: { viewport.setZoom($0) }
+                    ),
+                    in: 0.5...2,
+                    step: 0.05
+                )
+                    .frame(width: 110)
+                    .accessibilityLabel("Canvas zoom")
+                Text("\(Int(viewport.zoom * 100))%")
+                    .windexStyle(Typography.dataSM)
+                    .frame(width: 40, alignment: .trailing)
+                Button {
+                    viewport.zoomIn()
+                } label: {
+                    Image(systemName: "plus")
+                        .accessibilityLabel("Zoom in")
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.sm)
+            .background(theme.palette.plate.opacity(0.95))
+            .overlay(Rectangle().stroke(theme.palette.rule))
+            .padding(.md)
+        }
     }
 
     private func drawGrid(context: inout GraphicsContext, size: CGSize) {
@@ -1621,14 +1914,18 @@ private struct PipelineCanvas: View {
         let indexes = Dictionary(
             uniqueKeysWithValues: flow.nodes.enumerated().map { ($0.element.id, $0.offset) })
 
-        for edge in flow.edges
-        where edge.from.owner == .node && edge.to.owner == .node {
-            guard let fromIndex = indexes[edge.from.id],
-                  let toIndex = indexes[edge.to.id] else { continue }
-            let startCenter = model.position(for: edge.from.id, index: fromIndex)
-            let endCenter = model.position(for: edge.to.id, index: toIndex)
-            let start = CGPoint(x: startCenter.x + 106, y: startCenter.y)
-            let end = CGPoint(x: endCenter.x - 106, y: endCenter.y)
+        for edge in flow.edges {
+            guard let start = endpoint(
+                edge.from,
+                flow: flow,
+                nodeIndexes: indexes,
+                isSource: true
+            ), let end = endpoint(
+                edge.to,
+                flow: flow,
+                nodeIndexes: indexes,
+                isSource: false
+            ) else { continue }
             let control = max(60, abs(end.x - start.x) * 0.45)
             var path = Path()
             path.move(to: start)
@@ -1639,6 +1936,102 @@ private struct PipelineCanvas: View {
             context.stroke(path, with: .color(theme.palette.cyan), lineWidth: 1.5)
         }
     }
+
+    private func endpoint(
+        _ reference: PipelinePortReference,
+        flow: PipelineFlow,
+        nodeIndexes: [String: Int],
+        isSource: Bool
+    ) -> CGPoint? {
+        switch reference.owner {
+        case .input:
+            guard let index = flow.inputs.firstIndex(where: {
+                $0.name == reference.id
+            }) else { return nil }
+            let center = boundaryPosition(owner: .input, index: index)
+            return CGPoint(x: center.x + 66, y: center.y)
+        case .node:
+            guard let index = nodeIndexes[reference.id] else { return nil }
+            let center = model.position(for: reference.id, index: index)
+            return CGPoint(
+                x: center.x + (isSource ? 106 : -106),
+                y: center.y
+            )
+        case .output:
+            guard let index = flow.outputs.firstIndex(where: {
+                $0.name == reference.id
+            }) else { return nil }
+            let center = boundaryPosition(owner: .output, index: index)
+            return CGPoint(x: center.x - 66, y: center.y)
+        }
+    }
+
+    private func boundaryPosition(
+        owner: PipelinePortReference.Owner,
+        index: Int
+    ) -> CGPoint {
+        CGPoint(
+            x: owner == .input ? 80 : 1520,
+            y: 110 + CGFloat(index) * 86
+        )
+    }
+}
+
+private struct PipelineCanvasBoundary: View {
+    let boundary: PipelineBoundary
+    let owner: PipelinePortReference.Owner
+    let position: CGPoint
+    let connecting: Bool
+    let compatible: Bool?
+    let semanticEditable: Bool
+    let action: () -> Void
+    @Environment(\.windexTheme) private var theme
+
+    var body: some View {
+        ZStack {
+            VStack(alignment: owner == .input ? .leading : .trailing, spacing: .xxs) {
+                Text(boundary.displayTitle)
+                    .windexStyle(Typography.label)
+                    .lineLimit(1)
+                Text(boundary.type)
+                    .windexStyle(Typography.dataSM)
+                    .foregroundStyle(theme.palette.graphite)
+            }
+            .padding(.sm)
+            .frame(width: 120, height: 58, alignment: owner == .input ? .leading : .trailing)
+            .background(theme.palette.plate)
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(strokeColour, lineWidth: connecting || compatible == true ? 2 : 1)
+            }
+
+            Button(action: action) {
+                Circle()
+                    .fill(connecting ? theme.palette.cyan : theme.palette.ink)
+                    .overlay(Circle().stroke(strokeColour, lineWidth: 2))
+                    .frame(width: 14, height: 14)
+            }
+            .buttonStyle(.plain)
+            .disabled(
+                !semanticEditable
+                    || (owner == .output && compatible != true)
+            )
+            .accessibilityLabel(
+                owner == .input
+                    ? "Connect from Flow input \(boundary.name)"
+                    : "Connect to Flow output \(boundary.name)"
+            )
+            .offset(x: owner == .input ? 60 : -60)
+        }
+        .opacity(compatible == false ? 0.45 : 1)
+        .position(position)
+    }
+
+    private var strokeColour: Color {
+        if compatible == true { return theme.palette.cyan }
+        if compatible == false { return theme.palette.graphite }
+        return connecting ? theme.palette.cyan : theme.palette.rule
+    }
 }
 
 private struct PipelineCanvasNode: View {
@@ -1648,7 +2041,9 @@ private struct PipelineCanvasNode: View {
     let position: CGPoint
     let selected: Bool
     let connecting: Bool
+    let targetCompatibility: Bool?
     let semanticEditable: Bool
+    let translate: (CGPoint, CGSize) -> CGPoint
     let select: () -> Void
     let beginConnection: () -> Void
     let finishConnection: () -> Void
@@ -1697,9 +2092,7 @@ private struct PipelineCanvasNode: View {
                     .onChanged { value in
                         let origin = dragOrigin ?? position
                         dragOrigin = origin
-                        move(CGPoint(
-                            x: origin.x + value.translation.width,
-                            y: origin.y + value.translation.height))
+                        move(translate(origin, value.translation))
                     }
                     .onEnded { _ in dragOrigin = nil })
 
@@ -1711,6 +2104,7 @@ private struct PipelineCanvasNode: View {
                         .frame(width: 14, height: 14)
                 }
                 .buttonStyle(.plain)
+                .disabled(targetCompatibility != true)
                 .accessibilityLabel("Connect to \(node.id)")
                 .offset(x: -100)
             }
@@ -1727,6 +2121,7 @@ private struct PipelineCanvasNode: View {
                 .offset(x: 100)
             }
         }
+        .opacity(targetCompatibility == false ? 0.55 : 1)
         .position(position)
     }
 }
@@ -1813,6 +2208,7 @@ private struct PipelineNodeInspector: View {
     let registry: PipelineRegistry?
     @Environment(BackendSession.self) private var session
     @State private var nodeName = ""
+    @FocusState private var focusedBindingField: String?
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -1933,14 +2329,30 @@ private struct PipelineNodeInspector: View {
                     StyledText("Validation", Typography.eyebrow)
                         .foregroundStyle(theme.palette.graphite)
                     ForEach(model.issues) { issue in
-                        HStack(alignment: .top, spacing: .xs) {
-                            StatusBadge(
-                                issue.severity == .error ? .fault : .attention,
-                                word: issue.severity.rawValue)
-                            Text(issue.message)
-                                .windexStyle(Typography.body)
+                        Button {
+                            focus(issue)
+                        } label: {
+                            HStack(alignment: .top, spacing: .xs) {
+                                StatusBadge(
+                                    issue.severity == .error ? .fault : .attention,
+                                    word: issue.severity.rawValue)
+                                VStack(alignment: .leading, spacing: .xxs) {
+                                    Text(issue.message)
+                                        .windexStyle(Typography.body)
+                                    Text(issue.path)
+                                        .windexStyle(Typography.dataSM)
+                                        .foregroundStyle(theme.palette.graphite)
+                                }
+                            }
                         }
+                        .buttonStyle(.plain)
                     }
+                }
+
+                if let message = model.serverValidationMessage {
+                    Text("Server validation unavailable: \(message)")
+                        .windexStyle(Typography.dataSM)
+                        .foregroundStyle(theme.palette.amber)
                 }
 
                 if let error = model.errorMessage {
@@ -1953,6 +2365,9 @@ private struct PipelineNodeInspector: View {
         }
         .task(id: model.selectedNodeID) {
             nodeName = model.selectedNodeID ?? ""
+        }
+        .task(id: model.focusedFieldKey) {
+            focusedBindingField = model.focusedFieldKey
         }
     }
 
@@ -2006,6 +2421,7 @@ private struct PipelineNodeInspector: View {
                 }
             }
             .pickerStyle(.segmented)
+            .focused($focusedBindingField, equals: field.key)
             .disabled(!model.semanticEditable)
 
             switch value {
@@ -2054,11 +2470,25 @@ private struct PipelineNodeInspector: View {
         .padding(.sm)
         .background(theme.palette.ink)
     }
+
+    private func focus(_ issue: PipelineValidationIssue) {
+        let previousFlow = model.selectedFlow
+        guard let flow = model.focus(issue, registry: registry),
+              flow != previousFlow,
+              let draft = model.draft,
+              let version = model.baseVersion else { return }
+        model.apply(session.pipelines.layout(
+            pipeline: draft.name,
+            version: version,
+            flow: flow
+        ))
+    }
 }
 
 private struct PipelineFlowInspector: View {
     @Bindable var model: PipelineComposerModel
     let registry: PipelineRegistry?
+    @State private var flowName = ""
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -2072,6 +2502,25 @@ private struct PipelineFlowInspector: View {
                         )
                         .windexStyle(Typography.dataSM)
                         .foregroundStyle(theme.palette.graphite)
+                        HStack {
+                            TextField("Flow name", text: $flowName)
+                                .textFieldStyle(.roundedBorder)
+                                .disabled(!model.semanticEditable)
+                            Button("Rename") {
+                                model.renameSelectedFlow(
+                                    to: flowName,
+                                    registry: registry
+                                )
+                                flowName = model.selectedFlow
+                            }
+                            .disabled(
+                                !model.semanticEditable
+                                    || flowName.trimmingCharacters(
+                                        in: .whitespacesAndNewlines
+                                    ).isEmpty
+                                    || flowName == flow.name
+                            )
+                        }
                     }
 
                     Toggle(
@@ -2138,6 +2587,9 @@ private struct PipelineFlowInspector: View {
                 }
             }
             .padding(.md)
+        }
+        .task(id: model.selectedFlow) {
+            flowName = model.selectedFlow
         }
     }
 
@@ -2466,6 +2918,13 @@ private struct PipelineParameterInspector: View {
                 }
             }
             .padding(.md)
+        }
+        .task(id: model.focusedParameterKey) {
+            guard let key = model.focusedParameterKey,
+                  let parameter = model.draft?.parameters.first(where: {
+                      $0.key == key
+                  }) else { return }
+            edit(parameter)
         }
     }
 

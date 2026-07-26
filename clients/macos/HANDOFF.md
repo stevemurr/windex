@@ -31,9 +31,11 @@ document.
   revision generic Runs.
 - Visual Pipeline graph composer with typed connections, registry palette,
   Pipeline parameter-definition editing, literal/Pipeline-parameter/secret Node
-  bindings, semantic validation, undo/redo, auto-layout, and local draft
-  recovery. Published revisions are semantically read-only until the operator
-  explicitly starts a new revision.
+  bindings, Flow rename, Flow-input/Node/Flow-output connections, compatible
+  target highlighting, bounded canvas zoom, diagnostic focus, debounced server
+  validation, undo/redo, auto-layout, and local draft recovery. Published
+  revisions are semantically read-only until the operator explicitly starts a
+  new revision.
 - Revision- and Flow-specific layout editing, including Node positions, groups,
   and annotations. All open layout object fields round-trip without changing
   array shapes. Layouts remain editable on immutable revisions and use their
@@ -46,9 +48,10 @@ document.
 - Source validation and creation, schema-backed settings, upgrade preview and
   confirmation, enable/disable, pause/resume, reset preview with typed
   confirmation, archive, schedule/event triggers, Run latest, push contract
-  instructions, and in-app push ingestion. Pipeline values are rendered from
-  the selected revision schema; secret-reference controls use configured
-  secret names.
+  instructions, and in-app push ingestion. Interval, cron, and event triggers
+  can be created and edited independently from enable/disable. Pipeline values
+  are rendered from the selected revision schema; secret-reference controls use
+  configured secret names.
 - Upgrade can target any eligible Source-capable revision and renders retained,
   defaulted, removed, clamped, missing, installation-stage, and state-impact
   details. An invalid candidate can be edited and checked locally. The current
@@ -58,12 +61,15 @@ document.
   a non-atomic or misleading request.
 - Shared Run list and detail with task/unit progress, Run Events, typed boundary
   outputs, artifact download, cancel, frozen historic Re-run, and Source
-  Run latest as distinct actions.
+  Run latest as distinct actions. Each Source workspace pages its canonical Run
+  history and routes every row to shared Run detail.
 - Canonical Overview projection: corpus totals, searchable/vector counts,
   indexed-last-hour, Run pressure, active/recent Runs, worker lanes and blocked
   preconditions, Source schedules, recent documents, and service health.
-- Global and Source settings with independent ETags. A 412 presents the
-  operator’s edits beside current server values and offers reload or reapply.
+- Global and Source settings with independent ETags. One session-owned
+  configuration draft per Source is shared by Source detail and global
+  Settings, including unsaved edits. A 412 presents the operator’s edits beside
+  current server values and offers reload or reapply.
 - Cursor-based control and log SSE reconnect using `Last-Event-ID`. If either
   stream degrades, REST reconciliation runs at a bounded 2–15 second cadence
   and stops when both streams are live.
@@ -117,7 +123,7 @@ For a live epoch-2 acceptance pass: pair, load every store, publish a Pipeline
 revision, save layouts across multiple Flows, create a Source, edit its
 settings, enable/disable it, pause/resume it, add/toggle a trigger,
 preview/confirm an upgrade and reset only against disposable data,
-queue/cancel/re-run a Run, reconnect both SSE streams, and confirm Overview and
+edit an event trigger, queue/cancel/re-run a Run, reconnect both SSE streams, and confirm Overview and
 Console update without manual refresh.
 
 ## Deferred deliberately

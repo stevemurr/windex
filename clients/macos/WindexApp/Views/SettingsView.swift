@@ -20,17 +20,24 @@ final class SettingsModel {
     private(set) var conflict: Conflict?
     var selectedScope: String?
     private var etags: [String: String] = [:]
+    private var sourceDrafts: SourceSettingsDraftStore?
+    private var session: BackendSession?
 
     func load(client: WindexClient, session: BackendSession, appModel: AppModel) async {
         isLoading = scopes.isEmpty
+        self.session = session
+        sourceDrafts = session.sourceSettingsDrafts
         do {
             let global = try await client.globalSettings()
             var loaded = [try global.settingsScope()]
             etags[global.scope] = global.etag
             for source in session.sources.sources {
                 let response = try await client.sourceSettings(source.name)
-                loaded.append(try response.settingsScope())
+                let scope = try response.settingsScope()
+                loaded.append(scope)
                 etags[source.name] = response.etag
+                session.sources.setSettingsETag(response.etag, for: source.name)
+                session.sourceSettingsDrafts.reconcile(scope)
             }
             scopes = loaded.sorted {
                 if $0.isGlobal != $1.isGlobal { return $0.isGlobal }
@@ -55,7 +62,9 @@ final class SettingsModel {
             form = nil
             return
         }
-        form = FormModel(scope: match)
+        form = match.isGlobal
+            ? FormModel(scope: match)
+            : sourceDrafts?.reconcile(match)
         conflict = nil
         confirmation = nil
         errorMessage = nil
@@ -74,7 +83,9 @@ final class SettingsModel {
     func reloadServerValues() {
         guard let conflict else { return }
         replace(conflict.server)
-        form = FormModel(scope: conflict.server)
+        form = conflict.server.isGlobal
+            ? FormModel(scope: conflict.server)
+            : sourceDrafts?.adopt(conflict.server)
         self.conflict = nil
         errorMessage = nil
         confirmation = "Loaded the current server values."
@@ -111,10 +122,18 @@ final class SettingsModel {
                 let response = try await client.patchSourceSettings(
                     selectedScope, values: changes, etag: etag)
                 etags[selectedScope] = response.etag
+                session?.sources.setSettingsETag(
+                    response.etag,
+                    for: selectedScope
+                )
                 updated = try response.settingsScope()
             }
             replace(updated)
-            form?.apply(updated.fields)
+            if updated.isGlobal {
+                form?.apply(updated.fields)
+            } else {
+                form = sourceDrafts?.adopt(updated)
+            }
             conflict = nil
             confirmation = "Settings saved."
             isSaving = false
@@ -129,6 +148,12 @@ final class SettingsModel {
                     )
                     conflict = Conflict(changes: changes, server: current.scope)
                     etags[selectedScope] = current.etag
+                    if selectedScope != SettingsScope.global {
+                        session?.sources.setSettingsETag(
+                            current.etag,
+                            for: selectedScope
+                        )
+                    }
                     errorMessage = "The settings changed after this editor opened. Compare the values below, then reload or reapply."
                 } catch {
                     errorMessage = error.localizedDescription
@@ -177,10 +202,16 @@ final class SettingsModel {
                 let response = try await client.deleteSourceSetting(
                     selectedScope, key: key, etag: etag)
                 etags[selectedScope] = response.etag
+                session?.sources.setSettingsETag(
+                    response.etag,
+                    for: selectedScope
+                )
                 updated = try response.settingsScope()
             }
             replace(updated)
-            form = FormModel(scope: updated)
+            form = updated.isGlobal
+                ? FormModel(scope: updated)
+                : sourceDrafts?.adopt(updated)
             confirmation = "\(key) now follows its environment or default value."
             isSaving = false
             errorMessage = nil

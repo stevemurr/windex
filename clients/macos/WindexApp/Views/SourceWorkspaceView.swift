@@ -126,6 +126,9 @@ struct SourcesView: View {
                     appModel.openConsole(
                         OperationalEventFilter(sourceName: source.name)
                     )
+                },
+                openRun: { id in
+                    appModel.openRun(id)
                 }
             )
         } else {
@@ -478,6 +481,11 @@ private enum SourceLifecycleConfirmation: Identifiable {
     }
 }
 
+private struct TriggerEditorItem: Identifiable {
+    let trigger: SourceTriggerWire?
+    var id: String { trigger.map { "edit-\($0.id)" } ?? "new" }
+}
+
 private struct SourceDeploymentDetail: View {
     private enum Section: String, CaseIterable, Identifiable {
         case overview
@@ -494,13 +502,13 @@ private struct SourceDeploymentDetail: View {
     let source: SourceDeployment
     let openPipeline: () -> Void
     let openConsole: () -> Void
+    let openRun: (Int) -> Void
     @State private var section: Section = .overview
-    @State private var form: FormModel?
     @State private var isMutating = false
     @State private var actionError: String?
     @State private var settingsConflict: SettingsConflict?
     @State private var confirmation: SourceLifecycleConfirmation?
-    @State private var isAddingTrigger = false
+    @State private var triggerEditor: TriggerEditorItem?
     @State private var isUpgrading = false
     @State private var ingestID = ""
     @State private var ingestURL = ""
@@ -542,10 +550,6 @@ private struct SourceDeploymentDetail: View {
             }
         }
         .task(id: source.configuration.valuesHash) {
-            form = FormModel(
-                params: source.configuration.fields,
-                values: source.configuration.effectiveValues
-            )
             settingsConflict = nil
         }
         .sheet(item: $confirmation) { value in
@@ -556,8 +560,8 @@ private struct SourceDeploymentDetail: View {
                 errorMessage: $actionError
             )
         }
-        .sheet(isPresented: $isAddingTrigger) {
-            TriggerSheet(source: source)
+        .sheet(item: $triggerEditor) { item in
+            TriggerSheet(source: source, trigger: item.trigger)
                 .frame(minWidth: 480, minHeight: 360)
         }
         .sheet(isPresented: $isUpgrading) {
@@ -694,17 +698,22 @@ private struct SourceDeploymentDetail: View {
             settingsSection
 
         case .runs:
-            if let current = source.status.currentRun {
-                runSummary("Current Run", current)
-            }
-            if let latest = source.status.latestRun,
-               latest.id != source.status.currentRun?.id {
-                runSummary("Latest Run", latest)
-            }
-            if source.status.currentRun == nil, source.status.latestRun == nil {
+            let sourceRuns = session.runs.runs(for: source.name)
+            if sourceRuns.isEmpty {
                 Text("This Source has no Run history.")
                     .windexStyle(Typography.body)
                     .foregroundStyle(theme.palette.graphite)
+            } else {
+                ForEach(sourceRuns) { run in
+                    runSummary(run)
+                }
+                if session.runs.sourceHistoryHasMore[source.name] == true {
+                    Button("Load older Runs") {
+                        Task {
+                            await session.loadMoreSourceRuns(source.name)
+                        }
+                    }
+                }
             }
 
         case .activity:
@@ -738,7 +747,8 @@ private struct SourceDeploymentDetail: View {
                 word: source.configuration.isReady ? "ready" : "incomplete"
             )
         }
-        if let activeForm = form, !activeForm.params.isEmpty {
+        if let activeForm = session.sourceSettingsDrafts.form(for: source.name),
+           !activeForm.params.isEmpty {
             SchemaForm(
                 model: activeForm,
                 configuredSecretReferences: session.sources.configuredSecrets
@@ -765,7 +775,7 @@ private struct SourceDeploymentDetail: View {
                     }
                     HStack {
                         Button("Reload server values") {
-                            form = FormModel(scope: conflict.server)
+                            session.sourceSettingsDrafts.adopt(conflict.server)
                             settingsConflict = nil
                         }
                         Button("Reapply my changes") {
@@ -800,7 +810,9 @@ private struct SourceDeploymentDetail: View {
             StyledText("Triggers", Typography.eyebrow)
                 .foregroundStyle(theme.palette.graphite)
             Spacer()
-            Button("Add schedule") { isAddingTrigger = true }
+            Button("Add trigger") {
+                triggerEditor = TriggerEditorItem(trigger: nil)
+            }
         }
         let triggers = session.sources.triggers[source.name] ?? []
         if triggers.isEmpty {
@@ -818,6 +830,10 @@ private struct SourceDeploymentDetail: View {
                         .foregroundStyle(theme.palette.graphite)
                 }
                 Spacer()
+                Button("Edit") {
+                    triggerEditor = TriggerEditorItem(trigger: trigger)
+                }
+                .buttonStyle(.borderless)
                 Toggle(
                     "Enabled",
                     isOn: Binding(
@@ -980,8 +996,10 @@ private struct SourceDeploymentDetail: View {
         """
     }
 
-    private func runSummary(_ title: String, _ run: SourceRunSummary) -> some View {
-        fieldGroup(title) {
+    private func runSummary(_ run: SourceRunSummary) -> some View {
+        Button {
+            openRun(run.id)
+        } label: {
             HStack {
                 Text("Run \(run.id) · \(run.flow)")
                     .windexStyle(Typography.data)
@@ -992,6 +1010,12 @@ private struct SourceDeploymentDetail: View {
                 ProgressView(value: progress)
             }
         }
+        .buttonStyle(.plain)
+        .padding(.sm)
+        .background(theme.palette.plate)
+        .accessibilityLabel(
+            "Open Run \(run.id), \(run.flow), \(run.state.rawValue)"
+        )
     }
 
     private func fieldGroup<Content: View>(
@@ -1358,6 +1382,7 @@ private struct SourceUpgradeSheet: View {
 
 private struct TriggerSheet: View {
     let source: SourceDeployment
+    let trigger: SourceTriggerWire?
     @Environment(BackendSession.self) private var session
     @Environment(\.dismiss) private var dismiss
     @Environment(\.windexTheme) private var theme
@@ -1366,6 +1391,8 @@ private struct TriggerSheet: View {
     @State private var intervalSeconds = "3600"
     @State private var cron = "0 * * * *"
     @State private var timezone = "UTC"
+    @State private var eventSpec = #"{"event":"document.changed"}"#
+    @State private var enabled = true
     @State private var isSaving = false
     @State private var errorMessage: String?
 
@@ -1377,20 +1404,38 @@ private struct TriggerSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: .lg) {
-            StyledText("Add schedule", Typography.setLG)
+            StyledText(
+                trigger == nil ? "Add trigger" : "Edit trigger",
+                Typography.setLG
+            )
             Picker("Flow", selection: $flow) {
                 ForEach(flows, id: \.self) { Text($0).tag($0) }
             }
             Picker("Type", selection: $kind) {
                 Text("Interval").tag("interval")
                 Text("Cron").tag("cron")
+                Text("Event").tag("event")
             }
             if kind == "interval" {
                 TextField("Seconds", text: $intervalSeconds)
-            } else {
+            } else if kind == "cron" {
                 TextField("Five-field cron expression", text: $cron)
                 TextField("IANA timezone", text: $timezone)
+            } else {
+                Text("Event match specification (JSON)")
+                    .windexStyle(Typography.label)
+                TextEditor(text: $eventSpec)
+                    .font(.system(.callout, design: .monospaced))
+                    .frame(minHeight: 110)
+                    .padding(.xs)
+                    .background(theme.palette.plate)
+                Text(
+                    "Event trigger specifications are backend-defined and are preserved exactly."
+                )
+                .windexStyle(Typography.dataSM)
+                .foregroundStyle(theme.palette.graphite)
             }
+            Toggle("Enabled", isOn: $enabled)
             if let errorMessage {
                 Text(errorMessage).foregroundStyle(theme.palette.rust)
             }
@@ -1398,7 +1443,7 @@ private struct TriggerSheet: View {
             HStack {
                 Button("Cancel") { dismiss() }
                 Spacer()
-                Button(isSaving ? "Saving…" : "Add schedule") {
+                Button(isSaving ? "Saving…" : (trigger == nil ? "Add trigger" : "Save trigger")) {
                     Task { await save() }
                 }
                 .buttonStyle(.borderedProminent)
@@ -1407,7 +1452,7 @@ private struct TriggerSheet: View {
         }
         .padding(.xl)
         .background(theme.palette.ink)
-        .onAppear { flow = flows.first ?? "" }
+        .onAppear { populate() }
     }
 
     private func save() async {
@@ -1420,18 +1465,54 @@ private struct TriggerSheet: View {
                     throw SourceFormError.json("Interval seconds must be positive.")
                 }
                 spec = ["seconds": .int(seconds)]
-            } else {
+            } else if kind == "cron" {
                 spec = ["cron": .string(cron), "timezone": .string(timezone)]
+            } else {
+                spec = try JSONDecoder().decode(
+                    [String: JSONValue].self,
+                    from: Data(eventSpec.utf8)
+                )
             }
-            try await session.createTrigger(
-                source: source.name,
-                flow: flow,
-                type: kind,
-                spec: spec
-            )
+            if let trigger {
+                try await session.updateTrigger(
+                    source: source.name,
+                    id: trigger.id,
+                    flow: flow,
+                    type: kind,
+                    spec: spec,
+                    enabled: enabled
+                )
+            } else {
+                try await session.createTrigger(
+                    source: source.name,
+                    flow: flow,
+                    type: kind,
+                    spec: spec,
+                    enabled: enabled
+                )
+            }
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func populate() {
+        guard let trigger else {
+            flow = flows.first ?? ""
+            return
+        }
+        flow = trigger.flowName
+        kind = trigger.triggerType
+        enabled = trigger.enabled
+        let spec = (try? trigger.triggerSpec.additionalProperties.decode(
+            [String: JSONValue].self
+        )) ?? [:]
+        intervalSeconds = spec["seconds"]?.displayString ?? "3600"
+        cron = spec["cron"]?.stringValue ?? "0 * * * *"
+        timezone = spec["timezone"]?.stringValue ?? "UTC"
+        if let data = try? JSONEncoder().encode(spec) {
+            eventSpec = String(decoding: data, as: UTF8.self)
         }
     }
 }

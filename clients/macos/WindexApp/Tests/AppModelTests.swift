@@ -162,6 +162,149 @@ struct AppModelTests {
         #expect(model.positions["first"] == nil)
     }
 
+    @Test("composer renames Flows without losing their presentation")
+    func composerRenamesFlowPresentation() {
+        let model = PipelineComposerModel()
+        model.newPipeline(registry: Self.registry)
+        model.move("node", to: CGPoint(x: 320, y: 190))
+
+        model.renameSelectedFlow(to: "Refresh Docs", registry: Self.registry)
+
+        #expect(model.selectedFlow == "refresh_docs")
+        #expect(model.draft?.flows.map(\.name) == ["refresh_docs"])
+        #expect(model.positions["node"] == CGPoint(x: 320, y: 190))
+    }
+
+    @Test("composer connects Flow boundaries through compatible Nodes")
+    func composerBoundaryConnections() throws {
+        let model = PipelineComposerModel()
+        model.newPipeline(registry: Self.registry)
+        model.addBoundary(
+            owner: .input,
+            type: "documents",
+            registry: Self.registry
+        )
+        model.add(Self.transformModule, registry: Self.registry)
+        model.addBoundary(
+            owner: .output,
+            type: "documents",
+            registry: Self.registry
+        )
+        let node = try #require(model.currentFlow?.nodes.first)
+
+        model.beginConnection(from: .input("input_1"))
+        #expect(model.canConnect(to: .node(node.id), registry: Self.registry))
+        model.finishConnection(to: .node(node.id), registry: Self.registry)
+        model.beginConnection(from: .node(node.id))
+        #expect(model.canConnect(to: .output("output_1"), registry: Self.registry))
+        model.finishConnection(to: .output("output_1"), registry: Self.registry)
+
+        #expect(model.currentFlow?.edges == [
+            .init(from: .input("input_1"), to: .node(node.id)),
+            .init(from: .node(node.id), to: .output("output_1")),
+        ])
+    }
+
+    @Test("canvas zoom is bounded and keeps drag geometry in graph coordinates")
+    func canvasZoom() {
+        let viewport = PipelineCanvasViewport()
+        viewport.setZoom(4)
+        #expect(viewport.zoom == 2)
+        #expect(viewport.translatedPosition(
+            origin: CGPoint(x: 100, y: 100),
+            translation: CGSize(width: 40, height: 20)
+        ) == CGPoint(x: 120, y: 110))
+        viewport.setZoom(0.1)
+        #expect(viewport.zoom == 0.5)
+    }
+
+    @Test("validation diagnostics focus their Flow, Node, and field")
+    func composerDiagnosticFocus() throws {
+        let model = PipelineComposerModel()
+        model.newPipeline(registry: Self.registry)
+        model.add(Self.transformModule, registry: Self.registry)
+        let node = try #require(model.currentFlow?.nodes.first)
+        let issue = PipelineValidationIssue(
+            path: "flows.main.nodes.\(node.id).with.limit",
+            code: "invalid_value",
+            severity: .error,
+            message: "Limit is invalid."
+        )
+
+        _ = model.focus(issue, registry: Self.registry)
+
+        #expect(model.selectedFlow == "main")
+        #expect(model.selectedNodeID == node.id)
+        #expect(model.focusedFieldKey == "limit")
+        #expect(model.rightPane == .inspector)
+    }
+
+    @Test("stale debounced server validation cannot replace current diagnostics")
+    func composerValidationRevision() {
+        let model = PipelineComposerModel()
+        model.newPipeline(registry: Self.registry)
+        let staleRevision = model.semanticRevision
+        model.addBoundary(
+            owner: .input,
+            type: "documents",
+            registry: Self.registry
+        )
+        let issue = Components.Schemas.ValidationIssueModel(
+            code: "server",
+            message: "Server issue",
+            path: "flows.main",
+            severity: .error
+        )
+        let response = PipelineValidationWire(issues: [issue], valid: false)
+
+        model.applyServerValidation(response, revision: staleRevision)
+        #expect(model.serverIssues.isEmpty)
+        model.applyServerValidation(response, revision: model.semanticRevision)
+        #expect(model.serverIssues.map(\.code) == ["server"])
+    }
+
+    @Test("Source settings share one draft and preserve it during reconciliation")
+    func sharedSourceSettingsDraft() throws {
+        let store = SourceSettingsDraftStore()
+        let initial = try Self.settingsScope(value: 10)
+        let changedOnServer = try Self.settingsScope(value: 30)
+        let first = store.reconcile(initial)
+        let second = store.reconcile(initial)
+        #expect(first === second)
+
+        first.set("batch", .int(20))
+        let reconciled = store.reconcile(changedOnServer)
+        #expect(reconciled === first)
+        #expect(reconciled.value(forKey: "batch") == .int(20))
+
+        let adopted = store.adopt(changedOnServer)
+        #expect(adopted === first)
+        #expect(adopted.value(forKey: "batch") == .int(30))
+        #expect(!adopted.isDirty)
+    }
+
+    @Test("Source Run history is isolated and merges older pages")
+    func sourceRunHistory() {
+        let store = SharedRunStore()
+        let reference = PipelineRevisionReference(
+            pipeline: "crawl",
+            version: 2,
+            specHash: "hash"
+        )
+        store.replace([
+            .init(id: 9, sourceName: "docs", pipeline: reference, state: .running, flow: "refresh"),
+            .init(id: 8, sourceName: "other", pipeline: reference, state: .failed, flow: "refresh"),
+        ])
+        store.mergeSourceHistory(
+            [.init(id: 7, sourceName: "docs", pipeline: reference, state: .succeeded, flow: "refresh")],
+            source: "docs",
+            replacing: false
+        )
+
+        #expect(store.runs(for: "docs").map(\.id) == [9, 7])
+        #expect(store.runs(for: "other").map(\.id) == [8])
+    }
+
     @Test("Console history tracks the server forward cursor")
     func consoleHistoryCursor() {
         let store = SharedLogStore()
@@ -187,6 +330,49 @@ struct AppModelTests {
         uptimeSeconds: 128,
         authRequired: true,
         scopes: ["admin"])
+
+    private static let transformModule = PipelineModuleDescriptor(
+        id: "test.transform",
+        kind: "transform",
+        version: "1",
+        title: "Transform"
+    )
+
+    private static let registry = PipelineRegistry(
+        version: 1,
+        portTypes: [.init(name: "documents", title: "Documents")],
+        kinds: [
+            .init(
+                id: "transform",
+                title: "Transform",
+                description: "",
+                inputType: "documents",
+                outputType: "documents",
+                stateful: false
+            ),
+        ],
+        modules: [transformModule]
+    )
+
+    private static func settingsScope(value: Int) throws -> SettingsScope {
+        try JSONDecoder().decode(
+            SettingsScope.self,
+            from: Data(
+                """
+                {
+                  "scope": "docs",
+                  "fields": [{
+                    "key": "batch",
+                    "kind": "int",
+                    "title": "Batch",
+                    "value": \(value),
+                    "origin": "source"
+                  }]
+                }
+                """.utf8
+            )
+        )
+    }
 }
 
 private final class PairingRecorder: @unchecked Sendable {

@@ -125,6 +125,58 @@ struct Epoch2TransportTests {
         ])
     }
 
+    @Test("event triggers can be created and edited with a new Flow and spec")
+    func eventTriggerWrites() async throws {
+        let server = try MockWindexServer()
+        let trigger = """
+            {
+              "id":12,
+              "flow_name":"refresh",
+              "trigger_type":"event",
+              "trigger_spec":{"event":"document.changed","source":"upstream"},
+              "enabled":true,
+              "next_fire_at":null,
+              "last_fired_at":null,
+              "last_run_id":null
+            }
+            """
+        server.on("POST /admin/v1/sources/docs/triggers") { request in
+            #expect(request.body.contains("\"trigger_type\":\"event\""))
+            #expect(request.body.contains("\"event\":\"document.changed\""))
+            return .json(trigger)
+        }
+        server.on("PATCH /admin/v1/sources/docs/triggers/12") { request in
+            #expect(request.body.contains("\"flow_name\":\"rebuild\""))
+            #expect(request.body.contains("\"source\":\"archive\""))
+            #expect(request.body.contains("\"enabled\":false"))
+            return .json(trigger)
+        }
+        try await server.start()
+        defer { server.stop() }
+        let client = WindexClient(baseURL: server.baseURL, token: "token")
+
+        _ = try await client.createSourceTrigger(
+            "docs",
+            flow: "refresh",
+            type: "event",
+            spec: [
+                "event": .string("document.changed"),
+                "source": .string("upstream"),
+            ]
+        )
+        _ = try await client.patchSourceTrigger(
+            "docs",
+            id: 12,
+            flow: "rebuild",
+            type: "event",
+            enabled: false,
+            spec: [
+                "event": .string("document.changed"),
+                "source": .string("archive"),
+            ]
+        )
+    }
+
     @Test("ingest uses the agent route with token and idempotency key")
     func ingest() async throws {
         let server = try MockWindexServer()

@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import WindexKit
+import WindexUI
 
 enum StoreLoadState: Equatable, Sendable {
     case idle
@@ -112,6 +113,49 @@ final class SourceStore {
     }
 }
 
+/// One connection-scoped configuration editor per Source. Both Source detail
+/// and global Settings ask this store for the same FormModel instance, so
+/// navigation and background reconciliation cannot discard an unsaved edit.
+@MainActor
+@Observable
+final class SourceSettingsDraftStore {
+    private var forms: [String: FormModel] = [:]
+
+    func form(for source: String) -> FormModel? {
+        forms[source]
+    }
+
+    @discardableResult
+    func reconcile(_ scope: SettingsScope) -> FormModel {
+        if let current = forms[scope.scope] {
+            guard !current.isDirty else { return current }
+            if current.params == scope.fields.map(\.param) {
+                current.apply(scope.fields)
+                return current
+            }
+        }
+        let form = FormModel(scope: scope)
+        forms[scope.scope] = form
+        return form
+    }
+
+    @discardableResult
+    func adopt(_ scope: SettingsScope) -> FormModel {
+        if let current = forms[scope.scope],
+           current.params == scope.fields.map(\.param) {
+            current.apply(scope.fields)
+            return current
+        }
+        let form = FormModel(scope: scope)
+        forms[scope.scope] = form
+        return form
+    }
+
+    func removeMissingSources(_ names: Set<String>) {
+        forms = forms.filter { names.contains($0.key) }
+    }
+}
+
 @MainActor
 @Observable
 final class SharedRunStore {
@@ -120,6 +164,7 @@ final class SharedRunStore {
     private(set) var events: [Int: [OperationalEvent]] = [:]
     private(set) var outputs: [Int: [RunOutputWire]] = [:]
     private(set) var detailErrors: [Int: String] = [:]
+    private(set) var sourceHistoryHasMore: [String: Bool] = [:]
     private(set) var state: StoreLoadState = .idle
     func loading() { state = .loading }
     func fail(_ error: Error) { state = .failed(error.localizedDescription) }
@@ -132,6 +177,27 @@ final class SharedRunStore {
             runs[index] = run
         } else { runs.append(run) }
         runs.sort { $0.id > $1.id }
+    }
+    func runs(for source: String) -> [SourceRunSummary] {
+        runs.filter { $0.sourceName == source }
+    }
+    func mergeSourceHistory(
+        _ values: [SourceRunSummary],
+        source: String,
+        replacing: Bool
+    ) {
+        if replacing {
+            runs.removeAll { $0.sourceName == source }
+        }
+        for run in values {
+            if let index = runs.firstIndex(where: { $0.id == run.id }) {
+                runs[index] = run
+            } else {
+                runs.append(run)
+            }
+        }
+        runs.sort { $0.id > $1.id }
+        sourceHistoryHasMore[source] = values.count == 200
     }
     func applyDetail(
         _ detail: RunWire,
@@ -255,6 +321,7 @@ final class BackendSession {
     let registry: RegistryStore
     let pipelines = PipelineStore()
     let sources = SourceStore()
+    let sourceSettingsDrafts = SourceSettingsDraftStore()
     let runs = SharedRunStore()
     let overview = SharedOverviewStore()
     let logs = SharedLogStore()
@@ -374,6 +441,16 @@ final class BackendSession {
             }
             var values: [SourceDeployment] = []
             for wire in response.sources {
+                if let history = try? await client.sourceRuns(
+                    wire.name,
+                    limit: 200
+                ) {
+                    runs.mergeSourceHistory(
+                        try history.runs.map { try $0.summary() },
+                        source: wire.name,
+                        replacing: true
+                    )
+                }
                 let detailedWire = (try? await client.source(wire.name)) ?? wire
                 let settings = try await client.sourceSettings(wire.name)
                 sources.setSettingsETag(settings.etag, for: wire.name)
@@ -391,6 +468,7 @@ final class BackendSession {
                 )
                 let base = try detailedWire.deployment(status: status)
                 let scope = try settings.settingsScope()
+                sourceSettingsDrafts.reconcile(scope)
                 let effective = try settings.values.additionalProperties
                     .decode([String: JSONValue].self)
                 values.append(base.withConfiguration(.init(
@@ -407,6 +485,7 @@ final class BackendSession {
                 )))
             }
             sources.replace(values)
+            sourceSettingsDrafts.removeMissingSources(Set(values.map(\.name)))
         } catch {
             sources.fail(error)
         }
@@ -620,7 +699,13 @@ final class BackendSession {
         guard let etag = sources.settingsETags[name] else {
             throw WindexError.preconditionRequired(message: "Source settings ETag is unavailable.")
         }
-        _ = try await client.patchSourceSettings(name, values: values, etag: etag)
+        let response = try await client.patchSourceSettings(
+            name,
+            values: values,
+            etag: etag
+        )
+        sources.setSettingsETag(response.etag, for: name)
+        sourceSettingsDrafts.adopt(try response.settingsScope())
         await refreshAll()
     }
 
@@ -700,12 +785,33 @@ final class BackendSession {
         source: String,
         flow: String,
         type: String,
-        spec: [String: JSONValue]
+        spec: [String: JSONValue],
+        enabled: Bool = true
     ) async throws {
         _ = try await client.createSourceTrigger(
             source,
             flow: flow,
             type: type,
+            enabled: enabled,
+            spec: spec
+        )
+        await refreshAll()
+    }
+
+    func updateTrigger(
+        source: String,
+        id: Int,
+        flow: String,
+        type: String,
+        spec: [String: JSONValue],
+        enabled: Bool
+    ) async throws {
+        _ = try await client.patchSourceTrigger(
+            source,
+            id: id,
+            flow: flow,
+            type: type,
+            enabled: enabled,
             spec: spec
         )
         await refreshAll()
@@ -759,6 +865,24 @@ final class BackendSession {
             )
         } catch {
             runs.failDetail(id, error: error)
+        }
+    }
+
+    func loadMoreSourceRuns(_ source: String) async {
+        guard let beforeID = runs.runs(for: source).last?.id else { return }
+        do {
+            let response = try await client.sourceRuns(
+                source,
+                beforeID: beforeID,
+                limit: 200
+            )
+            runs.mergeSourceHistory(
+                try response.runs.map { try $0.summary() },
+                source: source,
+                replacing: false
+            )
+        } catch {
+            runs.fail(error)
         }
     }
 
