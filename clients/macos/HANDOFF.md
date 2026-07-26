@@ -44,7 +44,9 @@ document.
   declared Pipeline parameters with `SchemaForm`, collect one JSON value per
   typed boundary input, offer normal Run and Dry Run modes, and preserve Source
   Run latest as a different action. Both modes enter the canonical queued Run
-  lifecycle and shared Run detail.
+  lifecycle and shared Run detail. Module contract roles that require Source
+  state, identity, provenance, or staging disable generic submission per Flow
+  and direct the operator to an existing Source or Source creation.
 - Source-capable Pipeline revisions expose `Use as Source`, carrying that exact
   immutable revision into Source creation.
 - Source validation and creation, schema-backed settings, upgrade preview and
@@ -100,7 +102,7 @@ bounded to the server maximum of 200.
 
 ## Verification gates
 
-Run both gates from a native Mac:
+Run the package and app-model gates from a native Mac:
 
 ```sh
 swift test --package-path clients/macos/Packages/WindexKit
@@ -113,6 +115,15 @@ xcodebuild \
   CODE_SIGNING_ALLOWED=NO \
   test
 ```
+
+Run the dedicated XCUITest scheme only inside the configured Tart VM:
+
+```sh
+~/.claude/skills/vm-uitest/uitest.sh
+```
+
+The repository-root `.vm-uitest.conf` syncs `clients/macos`, regenerates the
+Xcode project, and runs `WindexUITests` in a disposable clone of the golden VM.
 
 The active-code legacy scan must be empty:
 
@@ -133,12 +144,6 @@ Console update without manual refresh.
 Custom Module authoring is not part of this cutover. The current backend
 supports Python only and requires separate module-admin authentication plus
 HTTPS. Marketplace remains out of scope.
-
-## Current external acceptance blockers
-
-- The available LAN server is still pre-epoch-2. Strict contract enforcement
-  intentionally prevents pairing, so the end-to-end mutation/SSE acceptance
-  pass must wait for an epoch-2 deployment.
 
 ## Release-only external gates
 

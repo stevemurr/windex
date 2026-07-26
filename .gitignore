@@ -13,3 +13,4 @@ dist/
 *.bak
 *.bak-*
 .qdrant-rsync.log
+test-results/

@@ -27,6 +27,14 @@ final class RegistryStore {
 
     init(client: WindexClient) { cache = RegistryCache(client: client) }
 
+    #if DEBUG
+    func replaceForUITesting(_ value: PipelineRegistry) {
+        registry = value
+        isStale = false
+        state = .loaded
+    }
+    #endif
+
     func load() async {
         if registry == nil, let cached = await cache.cached() {
             registry = try? cached.pipelineRegistry()

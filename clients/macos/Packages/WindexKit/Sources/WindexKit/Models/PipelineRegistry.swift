@@ -170,6 +170,86 @@ public struct PipelineRegistry: Codable, Hashable, Sendable {
     public func module(_ id: String) -> PipelineModuleDescriptor? {
         modules.first { $0.id == id }
     }
+
+    /// Mirrors the backend compiler's Source-binding guard for generic Runs.
+    ///
+    /// Generic Runs have no Source identity, state namespace, provenance, or
+    /// staging destination. A Flow containing a Module with any of these roles
+    /// must run through a Source instead.
+    public func genericRunCapability(
+        for flow: PipelineFlow?
+    ) -> PipelineGenericRunCapability {
+        guard let flow else { return .unavailable }
+        let sourceRoles: Set<String> = [
+            "state.read",
+            "state.write",
+            "document.identity",
+            "document.provenance",
+            "document.staging",
+        ]
+        var blockers: [String: PipelineGenericRunBlocker] = [:]
+        for node in flow.nodes {
+            guard let descriptor = module(node.module) else { continue }
+            let roles = descriptor.contractRoles
+                .filter(sourceRoles.contains)
+                .sorted()
+            guard !roles.isEmpty else { continue }
+            blockers[descriptor.id] = PipelineGenericRunBlocker(
+                moduleID: descriptor.id,
+                title: descriptor.title,
+                roles: roles
+            )
+        }
+        let ordered = blockers.values.sorted { $0.moduleID < $1.moduleID }
+        return ordered.isEmpty ? .runnable : .sourceRequired(ordered)
+    }
+}
+
+public struct PipelineGenericRunBlocker: Hashable, Identifiable, Sendable {
+    public var id: String { moduleID }
+    public let moduleID: String
+    public let title: String
+    public let roles: [String]
+
+    public init(moduleID: String, title: String, roles: [String]) {
+        self.moduleID = moduleID
+        self.title = title
+        self.roles = roles
+    }
+}
+
+public enum PipelineGenericRunCapability: Hashable, Sendable {
+    case unavailable
+    case runnable
+    case sourceRequired([PipelineGenericRunBlocker])
+
+    public var canRun: Bool {
+        if case .runnable = self { return true }
+        return false
+    }
+
+    public var requiresSource: Bool {
+        if case .sourceRequired = self { return true }
+        return false
+    }
+
+    public var blockers: [PipelineGenericRunBlocker] {
+        if case .sourceRequired(let blockers) = self { return blockers }
+        return []
+    }
+
+    public var explanation: String {
+        switch self {
+        case .unavailable:
+            "The Module registry is not available, so generic Run safety cannot be checked."
+        case .runnable:
+            "This Flow can run without a Source binding."
+        case .sourceRequired(let blockers):
+            "This Flow requires a Source because Module(s) "
+                + blockers.map(\.moduleID).joined(separator: ", ")
+                + " use persistent Source state, identity, provenance, or staging."
+        }
+    }
 }
 
 extension Registry {

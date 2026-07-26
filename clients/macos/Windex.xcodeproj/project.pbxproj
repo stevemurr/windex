@@ -20,11 +20,13 @@
 		3D4FDC6D2172AA1F6EA5EC3E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 74190244EB5FFBCD65CA3793 /* Assets.xcassets */; };
 		472C67AB4FF54CAED84F4F9F /* WindexKit in Frameworks */ = {isa = PBXBuildFile; productRef = 1E1463297EF1D5184F155E2C /* WindexKit */; };
 		48966DDDE34C2EE434E0554E /* WindexUI in Frameworks */ = {isa = PBXBuildFile; productRef = B69EC3AE87B3E98DA39029F8 /* WindexUI */; };
+		5035C70FD68FC73C168C0A6E /* WindexUITestFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9632182B1E05C537ABEF67F4 /* WindexUITestFixture.swift */; };
 		55FD2D075A3C48F96C4A2F2F /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D463B914F0A0EF2E58B037B /* KeychainTokenStore.swift */; };
 		5D295224C596FDF304F4DB3F /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B88E33AF32C998CEACC5B7C /* SettingsView.swift */; };
 		61C72F9ABE656E7E61572A90 /* BackendSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395CE89C2300EDDC1B18D07F /* BackendSession.swift */; };
 		88B923106F1838CCF6F3E0BD /* SourceWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E62C4D0A6DBEF04A5A5E51AB /* SourceWorkspaceView.swift */; };
 		950E907DC6CE9A94CBCDA5E8 /* Archivo-Variable.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 13BCA1A9F02859BDFDEC3C5B /* Archivo-Variable.ttf */; };
+		A50D983F76A3AEB47E6205C5 /* PipelineRunGatingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA2A39DB7DE583AA027489DC /* PipelineRunGatingUITests.swift */; };
 		C118E1614A23450043F7638F /* AppShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1027BD81BFAFD57E5A32C38 /* AppShellView.swift */; };
 		C268344AF1AD26709618E470 /* OFL-IBMPlexMono.txt in Resources */ = {isa = PBXBuildFile; fileRef = 4FD3CCBD1AE5CBAA2535118F /* OFL-IBMPlexMono.txt */; };
 		C436C0D414FAEC91837B20C4 /* WindexApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 885327951FE2AF1DB18312C4 /* WindexApp.swift */; };
@@ -35,6 +37,13 @@
 
 /* Begin PBXContainerItemProxy section */
 		9ED0C61FD16752B84201BC45 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7E2F4536AC5FA99984E38AF1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FB755C731DEB531AF19D13DC;
+			remoteInfo = Windex;
+		};
+		C515118C5348FB14E59BC7CC /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 7E2F4536AC5FA99984E38AF1 /* Project object */;
 			proxyType = 1;
@@ -61,6 +70,8 @@
 		885327951FE2AF1DB18312C4 /* WindexApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindexApp.swift; sourceTree = "<group>"; };
 		8EE1634EB30941C0E80A0680 /* ConsoleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleView.swift; sourceTree = "<group>"; };
 		93184813B43791E62E4BF673 /* FontBundleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontBundleTests.swift; sourceTree = "<group>"; };
+		945FB79CA51F0E5BC7321401 /* WindexUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WindexUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9632182B1E05C537ABEF67F4 /* WindexUITestFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindexUITestFixture.swift; sourceTree = "<group>"; };
 		A307EF546BCFE808D85D8476 /* OverviewWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWorkspaceView.swift; sourceTree = "<group>"; };
 		B7DC27050ECED7858A069A0E /* Windex.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Windex.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C3AB53E17F9753BDABA70607 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
@@ -68,6 +79,7 @@
 		D8CD6F40E351F677B8C3D6AB /* AppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelTests.swift; sourceTree = "<group>"; };
 		DF805395216C7416F4007FD4 /* RunWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunWorkspaceView.swift; sourceTree = "<group>"; };
 		E62C4D0A6DBEF04A5A5E51AB /* SourceWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceWorkspaceView.swift; sourceTree = "<group>"; };
+		EA2A39DB7DE583AA027489DC /* PipelineRunGatingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineRunGatingUITests.swift; sourceTree = "<group>"; };
 		F1027BD81BFAFD57E5A32C38 /* AppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -108,6 +120,7 @@
 				8B097083757E187C4352F840 /* Infrastructure */,
 				8E01BC47A3EC8DFDBF2F16B5 /* Resources */,
 				CFCC454909A1B4B0F9104F4C /* Tests */,
+				7AFCDE0F5A274A0D839EEF71 /* UITests */,
 				F5C61E006F564A62F71537E7 /* Views */,
 			);
 			path = WindexApp;
@@ -120,6 +133,14 @@
 				6EF3E654D873E007B44BC362 /* IBMPlexMono-Regular.ttf */,
 			);
 			path = Fonts;
+			sourceTree = "<group>";
+		};
+		7AFCDE0F5A274A0D839EEF71 /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				EA2A39DB7DE583AA027489DC /* PipelineRunGatingUITests.swift */,
+			);
+			path = UITests;
 			sourceTree = "<group>";
 		};
 		873FAB9D206098560F611EDA = {
@@ -155,6 +176,7 @@
 			children = (
 				B7DC27050ECED7858A069A0E /* Windex.app */,
 				26626AA53527265B065D34CD /* WindexTests.xctest */,
+				945FB79CA51F0E5BC7321401 /* WindexUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -165,6 +187,7 @@
 				068E543BF1F9ABFF7C50FAE9 /* AppModel.swift */,
 				395CE89C2300EDDC1B18D07F /* BackendSession.swift */,
 				885327951FE2AF1DB18312C4 /* WindexApp.swift */,
+				9632182B1E05C537ABEF67F4 /* WindexUITestFixture.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -216,6 +239,24 @@
 			productReference = 26626AA53527265B065D34CD /* WindexTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		709A670C7BB150516BE162B5 /* WindexUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 96A169A3795AD6F483F5DE43 /* Build configuration list for PBXNativeTarget "WindexUITests" */;
+			buildPhases = (
+				F231E5B40802B0561682AA65 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AD4B02EEEBF44AABD77668C5 /* PBXTargetDependency */,
+			);
+			name = WindexUITests;
+			packageProductDependencies = (
+			);
+			productName = WindexUITests;
+			productReference = 945FB79CA51F0E5BC7321401 /* WindexUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		FB755C731DEB531AF19D13DC /* Windex */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = C3E26FBBEF988F3270B27342 /* Build configuration list for PBXNativeTarget "Windex" */;
@@ -246,6 +287,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
+					709A670C7BB150516BE162B5 = {
+						TestTargetID = FB755C731DEB531AF19D13DC;
+					};
 					FB755C731DEB531AF19D13DC = {
 						ProvisioningStyle = Automatic;
 					};
@@ -270,6 +314,7 @@
 			targets = (
 				FB755C731DEB531AF19D13DC /* Windex */,
 				2DA2D96F117E9162EA0C4BEE /* WindexTests */,
+				709A670C7BB150516BE162B5 /* WindexUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -309,6 +354,7 @@
 				5D295224C596FDF304F4DB3F /* SettingsView.swift in Sources */,
 				88B923106F1838CCF6F3E0BD /* SourceWorkspaceView.swift in Sources */,
 				C436C0D414FAEC91837B20C4 /* WindexApp.swift in Sources */,
+				5035C70FD68FC73C168C0A6E /* WindexUITestFixture.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -321,9 +367,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F231E5B40802B0561682AA65 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A50D983F76A3AEB47E6205C5 /* PipelineRunGatingUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		AD4B02EEEBF44AABD77668C5 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FB755C731DEB531AF19D13DC /* Windex */;
+			targetProxy = C515118C5348FB14E59BC7CC /* PBXContainerItemProxy */;
+		};
 		F2513D779A3E9F1D5BBC275E /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = FB755C731DEB531AF19D13DC /* Windex */;
@@ -394,6 +453,25 @@
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
+		};
+		3085A62884AB42E703BCBB4A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.stevemurr.windex.uitests;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = Windex;
+			};
+			name = Release;
 		};
 		32A3408B6F65CDB9FE1F573E /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -470,6 +548,25 @@
 			};
 			name = Debug;
 		};
+		AF358B6F08843F0AE3B143BC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.stevemurr.windex.uitests;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = Windex;
+			};
+			name = Debug;
+		};
 		D0B9BC92312C20D3C9A6C913 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -540,6 +637,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		96A169A3795AD6F483F5DE43 /* Build configuration list for PBXNativeTarget "WindexUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AF358B6F08843F0AE3B143BC /* Debug */,
+				3085A62884AB42E703BCBB4A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		C3E26FBBEF988F3270B27342 /* Build configuration list for PBXNativeTarget "Windex" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
