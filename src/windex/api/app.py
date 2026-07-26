@@ -8,9 +8,10 @@ from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 
-from windex.api import service
+from windex.api import prom, service
 from windex.api.canonical import data_router, router as canonical_router
 from windex.api.module_admin import router as module_admin_router
 from windex.config import get_settings
@@ -246,8 +247,31 @@ def get_doc(doc_id: str) -> dict[str, Any]:
     return result
 
 
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics() -> Response:
+    """Prometheus scrape surface, deliberately outside both API contracts."""
+    return Response(
+        prom.render(get_settings()),
+        media_type=prom.CONTENT_TYPE_LATEST,
+    )
+
+
 admin.include_router(canonical_router)
 admin.include_router(
     module_admin_router, dependencies=[Depends(require_module_admin)])
 app.include_router(data_router, dependencies=[Depends(require_write_token)])
 app.mount("/admin", admin)
+
+# The mounted admin app records its own full route templates.  The parent skips
+# the mount so an admin request is neither double-counted nor collapsed to the
+# bare "/admin" mount label.
+admin.add_middleware(
+    prom.PrometheusMiddleware,
+    routes=admin.router.routes,
+    label_prefix="/admin",
+)
+app.add_middleware(
+    prom.PrometheusMiddleware,
+    routes=app.router.routes,
+    skip_prefixes=("/admin",),
+)
