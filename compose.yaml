@@ -148,7 +148,9 @@ services:
     # and worker submit JSONL jobs but provides no external route.
     windex-module-sandbox:
         image: localhost/windex-app:latest
-        command: ["python", "-m", "windex.module_sandbox"]
+        # Replace the image's `windex` CLI entrypoint: this service runs the
+        # sandbox's dedicated ASGI process directly.
+        entrypoint: ["python", "-m", "windex.module_sandbox"]
         read_only: true
         tmpfs:
             - /tmp:rw,noexec,nosuid,nodev,size=64m
