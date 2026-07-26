@@ -9,7 +9,7 @@ same validator to quarantine rows written by older releases or direct SQL.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -194,8 +194,33 @@ def validate_trigger(
     _validate_next_fire(trigger_type, next_fire_at)
 
 
+def scheduled_next_fire(
+    trigger_type: str,
+    trigger_spec: Mapping[str, Any],
+    after: datetime,
+) -> datetime | None:
+    """Return the first scheduled deadline strictly after ``after``.
+
+    Validation and cadence calculation live together so API/store re-arming
+    and scheduler advancement cannot drift into subtly different behavior.
+    Event and manual triggers deliberately have no clock deadline.
+    """
+
+    validate_trigger(trigger_type, trigger_spec)
+    if trigger_type == "interval":
+        return after + timedelta(seconds=trigger_spec["seconds"])
+    if trigger_type == "cron":
+        timezone = ZoneInfo(trigger_spec["timezone"])
+        local = after.astimezone(timezone)
+        return croniter(
+            trigger_spec["cron"], local,
+        ).get_next(datetime).astimezone(UTC)
+    return None
+
+
 __all__ = [
     "TRIGGER_TYPES",
     "TriggerValidationError",
+    "scheduled_next_fire",
     "validate_trigger",
 ]
