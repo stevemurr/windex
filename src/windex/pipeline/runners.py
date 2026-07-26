@@ -54,13 +54,13 @@ from windex.modules.fetch import (
     local_parquet_lookup,
 )
 from windex.modules.load import ledger_stage
+from windex.modules.minhash import dedup_minhash
 from windex.modules.receive import push_docs
 from windex.modules.warc import warc_datatrove
 from windex.modules.transform import (
     canonical_url,
     dedup_boilerplate,
     dedup_exact,
-    dedup_minhash,
     filter_lang,
     filter_quality,
 )
