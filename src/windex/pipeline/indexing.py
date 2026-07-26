@@ -13,10 +13,31 @@ from windex.embed.base import embed_isolating
 from windex.embed.pipeline import point_id
 from windex.index import qdrant as qidx
 from windex.index.sparse import bm25_model
+from windex.modules.load import _vector_metadata
 from windex.sanitize import strip_smuggled
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 _BATCH = 256
+
+
+def _search_text(row: dict, max_chars: int) -> str:
+    return strip_smuggled(
+        ((str(row.get("title") or "") + "\n\n")
+         if row.get("title") else "")
+        + str(
+            row.get("text") or row.get("abstract")
+            or row.get("story_text") or "")
+    )[:max_chars]
+
+
+def _point_payload(ctx: TaskContext, row: dict, text: str) -> dict:
+    payload = _vector_metadata(row)
+    payload.update({
+        "doc_id": row["id"],
+        "source": ctx.search_name,
+        "snippet": text[:400],
+    })
+    return payload
 
 
 def _rows(ctx: TaskContext, ids: list[str], refs: list[str]) -> dict[str, dict]:
@@ -117,6 +138,64 @@ def _remove_stale_vectors(
     return len(stale)
 
 
+def _refresh_metadata(
+    ctx: TaskContext,
+    client: QdrantClient,
+    collection: str,
+    pending: list[tuple[str, str, str]],
+    settings: Settings,
+) -> int:
+    """Overwrite point payloads without re-embedding unchanged text.
+
+    Each row carries the metadata hash selected with its immutable parquet
+    reference. The conditional acknowledgement prevents a concurrent newer
+    ledger write from being marked indexed by an older payload refresh.
+    """
+    if not pending:
+        return 0
+    ids = [row[0] for row in pending]
+    rows = _rows(ctx, ids, [row[1] for row in pending])
+    missing = sorted(set(ids) - set(rows))
+    if missing:
+        raise PermanentTaskError(
+            f"{len(missing)} metadata refresh documents are missing "
+            "from their artifact")
+    operations = []
+    for doc_id, _reference, _metadata_hash in pending:
+        row = rows[doc_id]
+        operations.append(qm.OverwritePayloadOperation(
+            overwrite_payload=qm.SetPayload(
+                payload=_point_payload(
+                    ctx,
+                    row,
+                    _search_text(row, settings.embed_max_tokens * 4),
+                ),
+                points=[point_id(doc_id)],
+            ),
+        ))
+    client.batch_update_points(
+        collection_name=collection,
+        update_operations=operations,
+        wait=True,
+    )
+    with ctx.conn.cursor() as cur:
+        cur.executemany(
+            """
+            UPDATE documents
+               SET indexed_metadata_hash = %s, updated_at = now()
+             WHERE id = %s
+               AND metadata_hash = %s
+               AND status = 'searchable'
+            """,
+            [
+                (metadata_hash, doc_id, metadata_hash)
+                for doc_id, _reference, metadata_hash in pending
+            ],
+        )
+    ctx.conn.commit()
+    return len(pending)
+
+
 def platform_index(ctx: TaskContext) -> SliceResult:
     """Make this Source's staged documents queryable before the Run succeeds."""
     if (
@@ -141,6 +220,21 @@ def platform_index(ctx: TaskContext) -> SliceResult:
         )
         stale = [row[0] for row in cur.fetchall()]
         cur.execute(
+            """
+            SELECT id, text_ref, metadata_hash
+              FROM documents
+             WHERE source_id = %s
+               AND status = 'searchable'
+               AND text_ref IS NOT NULL
+               AND metadata_hash IS DISTINCT FROM indexed_metadata_hash
+             ORDER BY updated_at, id
+             LIMIT %s
+             FOR UPDATE SKIP LOCKED
+            """,
+            (ctx.source_id, _BATCH),
+        )
+        metadata_pending = cur.fetchall()
+        cur.execute(
             """SELECT id, text_ref
                  FROM documents
                 WHERE source_id = %s AND owner_run_id = %s
@@ -158,10 +252,10 @@ def platform_index(ctx: TaskContext) -> SliceResult:
                 ([row[0] for row in pending],),
             )
     ctx.conn.commit()
-    if not pending and not stale:
+    if not pending and not stale and not metadata_pending:
         return SliceResult(
             exhausted=True, units_total=ctx.units_done if hasattr(ctx, "units_done") else -1,
-            stats={"searchable": 0})
+            stats={"searchable": 0, "metadata_refreshed": 0})
 
     ids = [row[0] for row in pending]
     settings = Settings()
@@ -170,6 +264,7 @@ def platform_index(ctx: TaskContext) -> SliceResult:
     searchable: list[str] = []
     failed: list[str] = []
     removed = 0
+    refreshed = 0
     try:
         client = QdrantClient(url=settings.qdrant_url, timeout=120)
         collection = qidx.ensure_collection(
@@ -182,14 +277,28 @@ def platform_index(ctx: TaskContext) -> SliceResult:
         )
         ctx.conn.commit()
         removed = _remove_stale_vectors(ctx, client, collection, stale)
+        refreshed = _refresh_metadata(
+            ctx, client, collection, metadata_pending, settings)
         if not pending:
-            ctx.heartbeat(
-                0, 0, {"searchable": 0, "failed": 0, "vectors_removed": removed})
+            ctx.heartbeat(0, 0, {
+                "searchable": 0,
+                "failed": 0,
+                "vectors_removed": removed,
+                "metadata_refreshed": refreshed,
+            })
             return SliceResult(
-                exhausted=len(stale) < _BATCH,
+                units_done=refreshed,
+                exhausted=(
+                    len(stale) < _BATCH
+                    and len(metadata_pending) < _BATCH
+                ),
                 units_total=(
                     ctx.units_done if hasattr(ctx, "units_done") else -1),
-                stats={"searchable": 0, "vectors_removed": removed})
+                stats={
+                    "searchable": 0,
+                    "vectors_removed": removed,
+                    "metadata_refreshed": refreshed,
+                })
 
         rows = _rows(ctx, ids, [row[1] for row in pending])
         missing = sorted(set(ids) - set(rows))
@@ -207,13 +316,7 @@ def platform_index(ctx: TaskContext) -> SliceResult:
         embedder = build_embedder(settings, bulk=True)
         ordered = [rows[doc_id] for doc_id in ids]
         texts = [
-            strip_smuggled(
-                ((str(row.get("title") or "") + "\n\n")
-                 if row.get("title") else "")
-                + str(
-                    row.get("text") or row.get("abstract")
-                    or row.get("story_text") or "")
-            )[: settings.embed_max_tokens * 4]
+            _search_text(row, settings.embed_max_tokens * 4)
             for row in ordered
         ]
         dense, accepted = embed_isolating(embedder, texts)
@@ -227,15 +330,7 @@ def platform_index(ctx: TaskContext) -> SliceResult:
             if not okay:
                 failed.append(doc_id)
                 continue
-            payload = {
-                key: value for key, value in row.items()
-                if key not in {"text", "abstract", "story_text"} and value is not None
-            }
-            payload.update({
-                "doc_id": doc_id,
-                "source": ctx.search_name,
-                "snippet": texts[position][:400],
-            })
+            payload = _point_payload(ctx, row, texts[position])
             item = sparse[sparse_index]
             sparse_index += 1
             points.append(qm.PointStruct(
@@ -255,7 +350,9 @@ def platform_index(ctx: TaskContext) -> SliceResult:
                 cur.execute(
                     """UPDATE documents
                           SET status = 'searchable', embedded_model = %s,
-                              indexed_at = now(), updated_at = now()
+                              indexed_at = now(),
+                              indexed_metadata_hash = metadata_hash,
+                              updated_at = now()
                         WHERE id = ANY(%s)""",
                     (settings.embed_model, searchable),
                 )
@@ -283,14 +380,19 @@ def platform_index(ctx: TaskContext) -> SliceResult:
             client.close()
     ctx.heartbeat(len(searchable), len(failed), {
         "staged": len(ids), "searchable": len(searchable), "failed": len(failed),
-        "vectors_removed": removed})
+        "vectors_removed": removed, "metadata_refreshed": refreshed})
     return SliceResult(
-        units_done=len(searchable), units_failed=len(failed),
-        exhausted=len(pending) < _BATCH and len(stale) < _BATCH,
+        units_done=len(searchable) + refreshed, units_failed=len(failed),
+        exhausted=(
+            len(pending) < _BATCH
+            and len(stale) < _BATCH
+            and len(metadata_pending) < _BATCH
+        ),
         stats={
             "searchable": len(searchable),
             "failed": len(failed),
             "vectors_removed": removed,
+            "metadata_refreshed": refreshed,
         })
 
 

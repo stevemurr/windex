@@ -10,6 +10,7 @@ import os
 from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
+from typing import NamedTuple
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -25,6 +26,19 @@ from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 _BATCH = 1_000
 log = logging.getLogger("windex.pipeline.load")
+_TEXT_PAYLOAD_FIELDS = frozenset({"text", "abstract", "story_text"})
+
+
+class _Existing(NamedTuple):
+    text_hash: str | None
+    metadata_hash: str | None
+    status: str
+    embedded_model: str | None
+
+
+class _StageAction(NamedTuple):
+    write_artifact: bool
+    update_ledger: bool
 
 
 def _prefix(ctx: TaskContext) -> str:
@@ -139,12 +153,76 @@ def _parquet_row(ctx: TaskContext, doc: ExtractedDoc) -> dict:
             "conversation_id": fields.get("conversation_id") or "",
             "chunk_index": int(fields.get("chunk_index") or 0),
             "published_at": doc.published_at,
+            "extra": json.dumps(
+                doc.payload, sort_keys=True, separators=(",", ":"),
+            ) if doc.payload else None,
         }
     return {
         **base,
+        "canonical_url": doc.canonical_url,
         "published_at": doc.published_at,
-        "extra": json.dumps(doc.payload) if doc.payload else None,
+        "lang": doc.lang,
+        "extra": json.dumps(
+            doc.payload, sort_keys=True, separators=(",", ":"),
+        ) if doc.payload else None,
     }
+
+
+def _vector_metadata(row: dict) -> dict:
+    """The exact staged columns copied into a Qdrant point payload.
+
+    Text-bearing columns are represented by the dense/sparse vectors and the
+    generated snippet instead. Keeping this projection shared with
+    ``platform.index`` makes the metadata fingerprint describe what Qdrant
+    actually exposes, including source-specific and custom fields.
+    """
+    return {
+        key: value for key, value in row.items()
+        if key not in _TEXT_PAYLOAD_FIELDS and value is not None
+    }
+
+
+def _metadata_hash(ctx: TaskContext, doc: ExtractedDoc) -> str:
+    encoded = json.dumps(
+        {
+            "source": ctx.search_name,
+            "payload": _vector_metadata(_parquet_row(ctx, doc)),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _stage_action(
+    doc: ExtractedDoc,
+    prior: _Existing | None,
+    digest: str,
+    metadata_digest: str,
+) -> _StageAction:
+    """Classify one document without turning an unchanged replay into work."""
+    text_changed = prior is None or prior.text_hash != digest
+    metadata_changed = (
+        prior is None or prior.metadata_hash != metadata_digest
+    )
+    if doc.deleted:
+        return _StageAction(False, True)
+    if doc.fields.get("_duplicate_of") or is_empty_text(
+            doc.title + "\n\n" + doc.text):
+        changed = (
+            text_changed
+            or metadata_changed
+            or prior.status not in {"duplicate", "empty"}
+        )
+        return _StageAction(False, changed)
+    changed = (
+        text_changed
+        or metadata_changed
+        or prior.status != "searchable"
+    )
+    return _StageAction(changed, changed)
 
 
 def _text_ref(ctx: TaskContext, key: str) -> tuple[str, Path]:
@@ -169,16 +247,16 @@ def _write_parquet(ctx: TaskContext, key: str,
 
 def _existing(
         ctx: TaskContext, ids: list[str],
-) -> dict[str, tuple[str | None, str, str | None]]:
+) -> dict[str, _Existing]:
     if not ids:
         return {}
     with ctx.conn.cursor() as cur:
         cur.execute(
-            "SELECT id, text_hash, status, embedded_model "
+            "SELECT id, text_hash, metadata_hash, status, embedded_model "
             "FROM documents WHERE id = ANY(%s)",
             (ids,),
         )
-        return {row[0]: (row[1], row[2], row[3]) for row in cur.fetchall()}
+        return {row[0]: _Existing(*row[1:]) for row in cur.fetchall()}
 
 
 def _ledger_rows(ctx: TaskContext, docs: list[ExtractedDoc],
@@ -200,7 +278,8 @@ def _ledger_rows(ctx: TaskContext, docs: list[ExtractedDoc],
         rows.append((
             doc_id, ctx.source_id, ctx.run_id, ctx.search_name, doc.url,
             doc.canonical_url, doc.title,
-            doc.published_at, doc.lang, digest, status, duplicate, ref,
+            doc.published_at, doc.lang, digest, _metadata_hash(ctx, doc),
+            status, duplicate, ref,
         ))
     return sorted(rows)
 
@@ -217,8 +296,8 @@ def _upsert_ledger(ctx: TaskContext, rows: list[tuple]) -> None:
             INSERT INTO documents
                    (id, source_id, owner_run_id, source, url, canonical_url, title,
                     published_at, lang,
-                    text_hash, status, duplicate_of, text_ref)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    text_hash, metadata_hash, status, duplicate_of, text_ref)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
                 source_id = EXCLUDED.source_id,
                 owner_run_id = EXCLUDED.owner_run_id,
@@ -229,10 +308,19 @@ def _upsert_ledger(ctx: TaskContext, rows: list[tuple]) -> None:
                 published_at = EXCLUDED.published_at,
                 lang = EXCLUDED.lang,
                 text_hash = EXCLUDED.text_hash,
-                status = EXCLUDED.status,
+                metadata_hash = EXCLUDED.metadata_hash,
+                status = CASE
+                    WHEN documents.text_hash IS NOT DISTINCT FROM EXCLUDED.text_hash
+                     AND documents.status = 'searchable'
+                     AND documents.embedded_model IS NOT NULL
+                     AND EXCLUDED.status = 'staged'
+                    THEN documents.status
+                    ELSE EXCLUDED.status
+                END,
                 duplicate_of = EXCLUDED.duplicate_of,
                 text_ref = EXCLUDED.text_ref
             WHERE documents.text_hash IS DISTINCT FROM EXCLUDED.text_hash
+               OR documents.metadata_hash IS DISTINCT FROM EXCLUDED.metadata_hash
                OR documents.status IS DISTINCT FROM EXCLUDED.status
                OR documents.url IS DISTINCT FROM EXCLUDED.url
                OR documents.title IS DISTINCT FROM EXCLUDED.title
@@ -461,29 +549,21 @@ def ledger_stage(ctx: TaskContext) -> SliceResult:
         existing = _existing(ctx, ids)
         for doc, doc_id in zip(docs, ids):
             prior = existing.get(doc_id)
-            if doc.deleted and prior and prior[2] is not None:
+            if doc.deleted and prior and prior.embedded_model is not None:
                 vector_tombstones.add(doc_id)
         stage_docs = []
         ledger_docs = []
         for doc, doc_id in zip(docs, ids):
             digest = doc.fields.get(
                 "_text_hash", text_hash(doc.title + "\n\n" + doc.text))
+            metadata_digest = _metadata_hash(ctx, doc)
             prior = existing.get(doc_id)
-            if (not doc.deleted and not doc.fields.get("_duplicate_of")
-                    and not is_empty_text(doc.title + "\n\n" + doc.text)
-                    and (prior is None or prior[0] != digest
-                         or prior[1] == "deleted")):
+            action = _stage_action(
+                doc, prior, digest, metadata_digest)
+            if action.write_artifact:
                 stage_docs.append(doc)
+            if action.update_ledger:
                 ledger_docs.append(doc)
-            elif doc.deleted:
-                ledger_docs.append(doc)
-            elif doc.fields.get("_duplicate_of") or is_empty_text(
-                    doc.title + "\n\n" + doc.text):
-                if prior is None or prior[0] != digest or prior[1] not in {
-                        "duplicate", "empty"}:
-                    ledger_docs.append(doc)
-                else:
-                    skipped += 1
             else:
                 skipped += 1
         text_ref = None
