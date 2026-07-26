@@ -111,10 +111,14 @@ def test_core_store_payloads_match_typed_api_contracts(canonical_conn):
         },
     ))
     TaskPreviewResponse.model_validate(
-        task_preview(canonical_conn, "custom", 1))
+    task_preview(canonical_conn, "custom", 1))
     run_id = submit_source(
         canonical_conn, "typed_contract", inputs=_documents(), dedupe=False)
-    RunModel.model_validate(get_run(canonical_conn, run_id))
+    run = get_run(canonical_conn, run_id)
+    RunModel.model_validate(run)
+    index_task = next(
+        task for task in run["tasks"] if task["module"] == "platform.index")
+    assert index_task["preconditions"] == ["gateway"]
 
 
 def _generic_output_pipeline():

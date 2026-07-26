@@ -131,7 +131,7 @@ def _insert(
                 "search_name": source["search_name"],
             },
             "depends_on": terminal,
-            "preconditions": ["embed"],
+            "preconditions": ["gateway"],
             "captures": [],
             "weight": 1.0,
             "max_attempts": 3,
