@@ -49,6 +49,8 @@ struct Epoch2TransportTests {
         let server = try MockWindexServer()
         server.on("PUT /admin/v1/pipelines/push/revisions/4/layout") { request in
             #expect(request.header("If-Match") == "layout-v2")
+            #expect(request.body.contains("\"nodes\""))
+            #expect(!request.body.contains("\"positions\""))
             return .detail("stale layout", status: 412)
         }
         server.on("PATCH /admin/v1/sources/docs/settings") { request in
@@ -68,6 +70,22 @@ struct Epoch2TransportTests {
             _ = try await client.patchSourceSettings(
                 "docs", values: ["batch": 10], etag: "settings-v7")
         }
+    }
+
+    @Test("Run list limits are bounded to the backend maximum")
+    func boundedRunLimit() async throws {
+        let server = try MockWindexServer()
+        let response = #"{"runs":[]}"#
+        server.on("GET /admin/v1/runs", json: response)
+        server.on("GET /admin/v1/sources/docs/runs", json: response)
+        try await server.start()
+        defer { server.stop() }
+        let client = WindexClient(baseURL: server.baseURL, token: "token")
+        _ = try await client.runs(limit: 250)
+        _ = try await client.sourceRuns("docs", limit: 999)
+        #expect(server.requests.allSatisfy { request in
+            request.query["limit"] == "200"
+        })
     }
 
     @Test("generic head runs require If-Match while pinned runs do not")

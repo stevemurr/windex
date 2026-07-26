@@ -2,12 +2,13 @@ import SwiftUI
 import WindexKit
 import WindexUI
 
-/// The canonical Source surface. A Source is a deployment of an immutable
-/// Pipeline revision, not an alias for a Pipeline.
+/// The canonical Source surface. A Source deploys one immutable Pipeline
+/// revision with origin, search identity, configuration, and runtime control.
 struct SourcesView: View {
     @Bindable var appModel: AppModel
     @Environment(BackendSession.self) private var session
     @State private var selectedName: String?
+    @State private var isCreating = false
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -15,7 +16,7 @@ struct SourcesView: View {
             catalogue
                 .frame(minWidth: 240, idealWidth: 280, maxWidth: 340)
             detail
-                .frame(minWidth: 560)
+                .frame(minWidth: 620)
         }
         .background(theme.palette.ink)
         .onChange(of: session.sources.sources) { _, sources in
@@ -25,6 +26,12 @@ struct SourcesView: View {
                 selectedName = sources.first?.name
             }
         }
+        .sheet(isPresented: $isCreating) {
+            NewSourceSheet { name in
+                selectedName = name
+            }
+            .frame(minWidth: 680, minHeight: 720)
+        }
     }
 
     private var catalogue: some View {
@@ -33,14 +40,14 @@ struct SourcesView: View {
                 StyledText("Sources", Typography.masthead)
                 Spacer()
                 Button {
-                    appModel.selection = .pipelines
+                    isCreating = true
                 } label: {
                     Label("New source", systemImage: "plus")
                 }
-                .help("Choose or build a Pipeline before creating a Source.")
+                .disabled(session.pipelines.pipelines.isEmpty)
+                .help("Deploy a published Pipeline revision as a Source.")
             }
             .padding(.md)
-
             Hairline()
 
             if session.sources.sources.isEmpty {
@@ -59,23 +66,20 @@ struct SourcesView: View {
 
     private var emptyCatalogue: some View {
         VStack(alignment: .leading, spacing: .md) {
-            Text("No sources yet.")
+            Text("No Sources yet.")
                 .windexStyle(Typography.label)
             Text(
-                "A Source binds an immutable Pipeline revision to an external origin, configuration, runtime state, and searchable corpus."
+                "Deploy a pinned Pipeline revision, then configure its origin, schedules, and searchable corpus."
             )
             .windexStyle(Typography.body)
             .foregroundStyle(theme.palette.graphite)
             .fixedSize(horizontal: false, vertical: true)
-
-            Button("Choose a Pipeline") {
-                appModel.selection = .pipelines
-            }
-
-            if case .idle = session.sources.state {
-                Text("Waiting for the canonical Sources API.")
-                    .windexStyle(Typography.dataSM)
-                    .foregroundStyle(theme.palette.graphite)
+            Button("New Source") { isCreating = true }
+                .disabled(session.pipelines.pipelines.isEmpty)
+            if session.pipelines.pipelines.isEmpty {
+                Button("Build a Pipeline first") {
+                    appModel.selection = .pipelines
+                }
             }
             Spacer()
         }
@@ -92,13 +96,221 @@ struct SourcesView: View {
         } else {
             VStack(alignment: .leading, spacing: .sm) {
                 StyledText("Source workspace", Typography.masthead)
-                Text("Select a Source to inspect its Pipeline pin, configuration, corpus, and live execution state.")
-                    .windexStyle(Typography.body)
-                    .foregroundStyle(theme.palette.graphite)
-                    .frame(maxWidth: Layout.proseMeasure, alignment: .leading)
+                Text(
+                    "Select a Source to inspect its Pipeline pin, configuration, corpus, schedules, and execution state."
+                )
+                .windexStyle(Typography.body)
+                .foregroundStyle(theme.palette.graphite)
+                .frame(maxWidth: Layout.proseMeasure, alignment: .leading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(.xl)
+        }
+    }
+}
+
+private struct NewSourceSheet: View {
+    let onCreated: (String) -> Void
+    @Environment(BackendSession.self) private var session
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.windexTheme) private var theme
+
+    @State private var name = ""
+    @State private var title = ""
+    @State private var description = ""
+    @State private var pipelineName = ""
+    @State private var pipelineVersion = 0
+    @State private var originJSON = #"{"ingress":"push"}"#
+    @State private var valuesJSON = "{}"
+    @State private var searchName = ""
+    @State private var idPrefix = ""
+    @State private var collectionKey = ""
+    @State private var searchProfile = "default"
+    @State private var stateNamespace = ""
+    @State private var includeInAll = true
+    @State private var enabled = true
+    @State private var isCreating = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                StyledText("New Source", Typography.masthead)
+                Spacer()
+                Button("Cancel") { dismiss() }
+            }
+            .padding(.lg)
+            Hairline()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: .lg) {
+                    Text(
+                        "A Source is the searchable deployment rail around one immutable Pipeline revision."
+                    )
+                    .windexStyle(Typography.body)
+                    .foregroundStyle(theme.palette.graphite)
+
+                    Group {
+                        TextField("Source name", text: $name)
+                        TextField("Display title", text: $title)
+                        TextField("Description", text: $description, axis: .vertical)
+                    }
+                    .textFieldStyle(.roundedBorder)
+
+                    HStack {
+                        Picker("Pipeline", selection: $pipelineName) {
+                            ForEach(session.pipelines.pipelines) {
+                                Text($0.displayTitle).tag($0.name)
+                            }
+                        }
+                        Picker("Revision", selection: $pipelineVersion) {
+                            ForEach(session.pipelines.revisions[pipelineName] ?? [], id: \.reference) {
+                                Text("v\($0.reference.version)").tag($0.reference.version)
+                            }
+                        }
+                    }
+                    .onChange(of: pipelineName) {
+                        pipelineVersion = session.pipelines.revisions[pipelineName]?
+                            .first?.reference.version ?? 0
+                    }
+
+                    jsonEditor(
+                        "Origin",
+                        help: #"Use {"ingress":"push"} for push ingestion, or the origin object expected by the Pipeline."#,
+                        text: $originJSON
+                    )
+                    jsonEditor(
+                        "Initial Pipeline values",
+                        help: "Values are validated against the selected revision before creation.",
+                        text: $valuesJSON
+                    )
+
+                    DisclosureGroup("Search identity and control") {
+                        VStack(alignment: .leading, spacing: .sm) {
+                            TextField("Search name (defaults to Source name)", text: $searchName)
+                            TextField("ID prefix (defaults to name:)", text: $idPrefix)
+                            TextField("Collection key", text: $collectionKey)
+                            TextField("Search profile", text: $searchProfile)
+                            TextField("State namespace", text: $stateNamespace)
+                            Toggle("Include in all-source search", isOn: $includeInAll)
+                            Toggle("Enabled", isOn: $enabled)
+                        }
+                        .textFieldStyle(.roundedBorder)
+                        .padding(.top, .sm)
+                    }
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .windexStyle(Typography.body)
+                            .foregroundStyle(theme.palette.rust)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.xl)
+            }
+
+            Hairline()
+            HStack {
+                Spacer()
+                Button(isCreating ? "Creating…" : "Validate and create") {
+                    Task { await create() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    isCreating || name.trimmingCharacters(in: .whitespaces).isEmpty
+                        || pipelineName.isEmpty || pipelineVersion == 0
+                )
+            }
+            .padding(.lg)
+        }
+        .background(theme.palette.ink)
+        .onAppear {
+            if pipelineName.isEmpty,
+               let first = session.pipelines.pipelines.first {
+                pipelineName = first.name
+                pipelineVersion = session.pipelines.revisions[first.name]?
+                    .first?.reference.version ?? first.headVersion
+            }
+        }
+    }
+
+    private func jsonEditor(
+        _ title: String,
+        help: String,
+        text: Binding<String>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: .xs) {
+            Text(title).windexStyle(Typography.label)
+            Text(help)
+                .windexStyle(Typography.dataSM)
+                .foregroundStyle(theme.palette.graphite)
+            TextEditor(text: text)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 84)
+                .padding(.xs)
+                .background(theme.palette.plate)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+    }
+
+    private func create() async {
+        isCreating = true
+        defer { isCreating = false }
+        do {
+            let canonical = canonicalName
+            let request = SourceCreateRequest(
+                name: canonical,
+                title: title,
+                description: description,
+                origin: try decodeObject(originJSON),
+                pipelineName: pipelineName,
+                pipelineVersion: pipelineVersion,
+                values: try decodeObject(valuesJSON),
+                searchName: searchName.isEmpty ? canonical : searchName,
+                idPrefix: idPrefix.isEmpty ? "\(canonical):" : idPrefix,
+                collectionKey: collectionKey.isEmpty ? canonical : collectionKey,
+                searchProfile: searchProfile.isEmpty ? "default" : searchProfile,
+                includeInAll: includeInAll,
+                stateNamespace: stateNamespace.isEmpty ? canonical : stateNamespace,
+                enabled: enabled
+            )
+            try await session.createSource(request)
+            onCreated(canonical)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private var canonicalName: String {
+        name.lowercased()
+            .replacingOccurrences(
+                of: #"[^a-z0-9_-]+"#,
+                with: "-",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+
+    private func decodeObject(_ value: String) throws -> [String: JSONValue] {
+        guard let data = value.data(using: .utf8) else {
+            throw SourceFormError.invalidJSON
+        }
+        do {
+            return try JSONDecoder().decode([String: JSONValue].self, from: data)
+        } catch {
+            throw SourceFormError.json(error.localizedDescription)
+        }
+    }
+}
+
+private enum SourceFormError: LocalizedError {
+    case invalidJSON
+    case json(String)
+    var errorDescription: String? {
+        switch self {
+        case .invalidJSON: "Enter a JSON object."
+        case .json(let message): "The JSON object is invalid: \(message)"
         }
     }
 }
@@ -113,7 +325,10 @@ private struct SourceDeploymentRow: View {
                 Text(source.displayTitle)
                     .windexStyle(Typography.label)
                 Spacer(minLength: 0)
-                StatusBadge(source.status.activity.badgeStatus, word: source.status.activity.rawValue)
+                StatusBadge(
+                    source.status.activity.badgeStatus,
+                    word: source.status.activity.rawValue
+                )
             }
             Text("\(source.pipeline.pipeline) @ \(source.pipeline.version)")
                 .windexStyle(Typography.dataSM)
@@ -124,12 +339,27 @@ private struct SourceDeploymentRow: View {
     }
 }
 
+private enum SourceLifecycleConfirmation: Identifiable {
+    case reset(Components.Schemas.ResetPreviewResponse)
+    case upgrade(SourceUpgradePreviewWire)
+    case archive
+
+    var id: String {
+        switch self {
+        case .reset: "reset"
+        case .upgrade: "upgrade"
+        case .archive: "archive"
+        }
+    }
+}
+
 private struct SourceDeploymentDetail: View {
     private enum Section: String, CaseIterable, Identifiable {
         case overview
         case settings
         case runs
         case activity
+        case ingestion
         case pipeline
 
         var id: Self { self }
@@ -140,13 +370,73 @@ private struct SourceDeploymentDetail: View {
     let openPipeline: () -> Void
     @State private var section: Section = .overview
     @State private var form: FormModel?
-    @State private var isSaving = false
-    @State private var saveError: String?
+    @State private var isMutating = false
+    @State private var actionError: String?
+    @State private var settingsConflict: SettingsConflict?
+    @State private var confirmation: SourceLifecycleConfirmation?
+    @State private var isAddingTrigger = false
+    @State private var ingestID = ""
+    @State private var ingestURL = ""
+    @State private var ingestTitle = ""
+    @State private var ingestText = ""
     @Environment(BackendSession.self) private var session
     @Environment(\.windexTheme) private var theme
 
+    private struct SettingsConflict {
+        let changes: [String: JSONValue]
+        let server: SettingsScope
+    }
+
     var body: some View {
         VStack(spacing: 0) {
+            header
+            Picker("Source section", selection: $section) {
+                ForEach(Section.allCases) {
+                    Text($0.title).tag($0)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, .xl)
+            .padding(.vertical, .md)
+            Hairline()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: .lg) {
+                    sectionContent
+                    if let actionError {
+                        Text(actionError)
+                            .windexStyle(Typography.body)
+                            .foregroundStyle(theme.palette.rust)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.xl)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .task(id: source.configuration.valuesHash) {
+            form = FormModel(
+                params: source.configuration.fields,
+                values: source.configuration.effectiveValues
+            )
+            settingsConflict = nil
+        }
+        .sheet(item: $confirmation) { value in
+            LifecycleConfirmationSheet(
+                source: source,
+                confirmation: value,
+                isMutating: $isMutating,
+                errorMessage: $actionError
+            )
+        }
+        .sheet(isPresented: $isAddingTrigger) {
+            TriggerSheet(source: source)
+                .frame(minWidth: 480, minHeight: 360)
+        }
+    }
+
+    private var header: some View {
+        VStack(spacing: .md) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: .xs) {
                     StyledText(source.displayTitle, Typography.masthead)
@@ -157,35 +447,74 @@ private struct SourceDeploymentDetail: View {
                 Spacer()
                 StatusBadge(
                     source.status.activity.badgeStatus,
-                    word: source.status.activity.rawValue)
+                    word: source.status.activity.rawValue
+                )
             }
-            .padding(.horizontal, .xl)
-            .padding(.top, .lg)
-
-            Picker("Source section", selection: $section) {
-                ForEach(Section.allCases) {
-                    Text($0.title).tag($0)
+            HStack(spacing: .sm) {
+                Button("Run latest") {
+                    Task {
+                        await perform { try await session.runLatest(source: source.name) }
+                    }
+                }
+                .help("Runs the Source’s current revision and configuration.")
+                Button(source.paused ? "Resume" : "Pause") {
+                    Task {
+                        await perform {
+                            if source.paused {
+                                try await session.resumeSource(source.name)
+                            } else {
+                                try await session.pauseSource(
+                                    source.name,
+                                    reason: "Paused from the macOS app"
+                                )
+                            }
+                        }
+                    }
+                }
+                if let latest = session.pipelines.revisions[source.pipeline.pipeline]?.first,
+                   latest.reference.version > source.pipeline.version {
+                    Button("Upgrade to v\(latest.reference.version)") {
+                        Task {
+                            do {
+                                confirmation = .upgrade(
+                                    try await session.previewSourceUpgrade(
+                                        source.name,
+                                        version: latest.reference.version
+                                    )
+                                )
+                            } catch {
+                                actionError = error.localizedDescription
+                            }
+                        }
+                    }
+                }
+                Menu {
+                    Button("Reset corpus and state", role: .destructive) {
+                        Task {
+                            do {
+                                confirmation = .reset(
+                                    try await session.previewSourceReset(source.name)
+                                )
+                            } catch {
+                                actionError = error.localizedDescription
+                            }
+                        }
+                    }
+                    Button("Archive Source", role: .destructive) {
+                        confirmation = .archive
+                    }
+                } label: {
+                    Label("More", systemImage: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                Spacer()
+                if isMutating {
+                    ProgressView().controlSize(.small)
                 }
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, .xl)
-            .padding(.vertical, .md)
-
-            Hairline()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: .lg) {
-                    sectionContent
-                }
-                .padding(.xl)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
         }
-        .task(id: source.configuration.valuesHash) {
-            form = FormModel(
-                params: source.configuration.fields,
-                values: source.configuration.effectiveValues)
-        }
+        .padding(.horizontal, .xl)
+        .padding(.top, .lg)
     }
 
     @ViewBuilder
@@ -206,7 +535,8 @@ private struct SourceDeploymentDetail: View {
                     "Control",
                     source.archived ? "archived"
                         : source.paused ? "paused"
-                        : source.enabled ? "enabled" : "disabled")
+                        : source.enabled ? "enabled" : "disabled"
+                )
             }
             fieldGroup("Search identity") {
                 dataRow("Search name", source.search.searchName)
@@ -217,51 +547,12 @@ private struct SourceDeploymentDetail: View {
             fieldGroup("Corpus") {
                 dataRow("Searchable", source.status.counts.searchable.formatted())
                 dataRow("Staged", source.status.counts.staged.formatted())
-                dataRow(
-                    "Pending embedding",
-                    source.status.counts.pendingEmbedding.formatted())
+                dataRow("Pending embedding", source.status.counts.pendingEmbedding.formatted())
                 dataRow("Failed", source.status.counts.failed.formatted())
             }
 
         case .settings:
-            HStack {
-                Text(
-                    source.configuration.isReady
-                        ? "All required values are resolved."
-                        : "\(source.configuration.missingRequired.count) required value(s) are missing."
-                )
-                .windexStyle(Typography.body)
-                Spacer()
-                StatusBadge(
-                    source.configuration.isReady ? .healthy : .attention,
-                    word: source.configuration.isReady ? "ready" : "incomplete")
-            }
-            if let form, !form.params.isEmpty {
-                SchemaForm(model: form)
-                Button(isSaving ? "Saving…" : "Save settings") {
-                    Task {
-                        isSaving = true
-                        defer { isSaving = false }
-                        do {
-                            try await session.saveSourceSettings(
-                                source.name, values: form.changes)
-                            saveError = nil
-                        } catch {
-                            saveError = error.localizedDescription
-                        }
-                    }
-                }
-                .disabled(isSaving || !form.canSubmit)
-                if let saveError {
-                    Text(saveError)
-                        .windexStyle(Typography.body)
-                        .foregroundStyle(theme.palette.rust)
-                }
-            } else {
-                Text("This Source has no configurable parameters.")
-                    .windexStyle(Typography.body)
-                    .foregroundStyle(theme.palette.graphite)
-            }
+            settingsSection
 
         case .runs:
             if let current = source.status.currentRun {
@@ -278,21 +569,10 @@ private struct SourceDeploymentDetail: View {
             }
 
         case .activity:
-            fieldGroup("Live state") {
-                dataRow("Activity", source.status.activity.rawValue)
-                dataRow("Next trigger", source.status.nextTrigger ?? "not scheduled")
-                if let error = source.status.recentError {
-                    Text(error)
-                        .windexStyle(Typography.data)
-                        .foregroundStyle(theme.palette.rust)
-                        .textSelection(.enabled)
-                }
-            }
-            Text(
-                "Recent Run Events will appear here from the shared operational journal."
-            )
-            .windexStyle(Typography.body)
-            .foregroundStyle(theme.palette.graphite)
+            activitySection
+
+        case .ingestion:
+            ingestionSection
 
         case .pipeline:
             fieldGroup("Pinned immutable revision") {
@@ -304,10 +584,257 @@ private struct SourceDeploymentDetail: View {
         }
     }
 
-    private func runSummary(
-        _ title: String,
-        _ run: SourceRunSummary
-    ) -> some View {
+    @ViewBuilder
+    private var settingsSection: some View {
+        HStack {
+            Text(
+                source.configuration.isReady
+                    ? "All required values are resolved."
+                    : "\(source.configuration.missingRequired.count) required value(s) are missing."
+            )
+            .windexStyle(Typography.body)
+            Spacer()
+            StatusBadge(
+                source.configuration.isReady ? .healthy : .attention,
+                word: source.configuration.isReady ? "ready" : "incomplete"
+            )
+        }
+        if let activeForm = form, !activeForm.params.isEmpty {
+            SchemaForm(model: activeForm)
+            Button(isMutating ? "Saving…" : "Save settings") {
+                Task { await saveSettings(activeForm.changes) }
+            }
+            .disabled(isMutating || !activeForm.canSubmit)
+
+            if let conflict = settingsConflict {
+                VStack(alignment: .leading, spacing: .sm) {
+                    Text("Settings changed on the server")
+                        .windexStyle(Typography.label)
+                        .foregroundStyle(theme.palette.rust)
+                    ForEach(conflict.changes.keys.sorted(), id: \.self) { key in
+                        let serverValue = conflict.server.fields.first {
+                            $0.key == key
+                        }?.value?.displayString ?? "unset"
+                        Text(
+                            "\(key): server \(serverValue) · yours "
+                                + (conflict.changes[key]?.displayString ?? "unset")
+                        )
+                        .windexStyle(Typography.dataSM)
+                    }
+                    HStack {
+                        Button("Reload server values") {
+                            form = FormModel(scope: conflict.server)
+                            settingsConflict = nil
+                        }
+                        Button("Reapply my changes") {
+                            Task { await saveSettings(conflict.changes) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(.md)
+                .background(theme.palette.plate)
+            }
+        } else {
+            Text("This Source has no configurable parameters.")
+                .windexStyle(Typography.body)
+                .foregroundStyle(theme.palette.graphite)
+        }
+    }
+
+    @ViewBuilder
+    private var activitySection: some View {
+        fieldGroup("Live state") {
+            dataRow("Activity", source.status.activity.rawValue)
+            dataRow("Next trigger", source.status.nextTrigger ?? "not scheduled")
+            if let error = source.status.recentError {
+                Text(error)
+                    .windexStyle(Typography.data)
+                    .foregroundStyle(theme.palette.rust)
+                    .textSelection(.enabled)
+            }
+        }
+        HStack {
+            StyledText("Triggers", Typography.eyebrow)
+                .foregroundStyle(theme.palette.graphite)
+            Spacer()
+            Button("Add schedule") { isAddingTrigger = true }
+        }
+        let triggers = session.sources.triggers[source.name] ?? []
+        if triggers.isEmpty {
+            Text("No triggers. Runs can still be started manually.")
+                .windexStyle(Typography.body)
+                .foregroundStyle(theme.palette.graphite)
+        }
+        ForEach(triggers, id: \.id) { trigger in
+            HStack {
+                VStack(alignment: .leading, spacing: .xxs) {
+                    Text("\(trigger.triggerType) · \(trigger.flowName)")
+                        .windexStyle(Typography.label)
+                    Text(trigger.nextFireAt ?? "not armed")
+                        .windexStyle(Typography.dataSM)
+                        .foregroundStyle(theme.palette.graphite)
+                }
+                Spacer()
+                Toggle(
+                    "Enabled",
+                    isOn: Binding(
+                        get: { trigger.enabled },
+                        set: { enabled in
+                            Task {
+                                await perform {
+                                    try await session.setTriggerEnabled(
+                                        source: source.name,
+                                        id: trigger.id,
+                                        enabled: enabled
+                                    )
+                                }
+                            }
+                        }
+                    )
+                )
+                .labelsHidden()
+                Button(role: .destructive) {
+                    Task {
+                        await perform {
+                            try await session.deleteTrigger(
+                                source: source.name,
+                                id: trigger.id
+                            )
+                        }
+                    }
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        let sourceEvents = session.logs.allEvents
+            .filter { $0.sourceName == source.name }
+            .suffix(12)
+        if !sourceEvents.isEmpty {
+            Hairline()
+            StyledText("Recent Events", Typography.eyebrow)
+                .foregroundStyle(theme.palette.graphite)
+            ForEach(sourceEvents) { event in
+                Text("\(event.event) · \(event.message)")
+                    .windexStyle(Typography.dataSM)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var ingestionSection: some View {
+        if let ingress = source.ingress {
+            fieldGroup("Push contract") {
+                dataRow("Endpoint", pushURL(ingress.path))
+                dataRow("Authentication", ingress.authenticationRequired ? "Bearer write token" : "none")
+                dataRow("Maximum documents", ingress.maxDocuments.formatted())
+                dataRow("Maximum text bytes", ingress.maxTextBytes.formatted())
+                dataRow("Modes", ingress.modes.joined(separator: ", "))
+            }
+            Text("curl example")
+                .windexStyle(Typography.label)
+            Text(curlExample(ingress))
+                .font(.system(.callout, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(theme.palette.plate)
+
+            Hairline()
+            StyledText("Send one document", Typography.eyebrow)
+                .foregroundStyle(theme.palette.graphite)
+            TextField("Document ID", text: $ingestID)
+            TextField("URL", text: $ingestURL)
+            TextField("Title", text: $ingestTitle)
+            TextEditor(text: $ingestText)
+                .frame(minHeight: 120)
+                .padding(.xs)
+                .background(theme.palette.plate)
+            Button("Queue ingestion") {
+                Task {
+                    await perform {
+                        try await session.ingest(
+                            [
+                                IngestDocument(
+                                    id: ingestID,
+                                    url: ingestURL,
+                                    text: ingestText,
+                                    title: ingestTitle
+                                )
+                            ],
+                            source: source.name,
+                            mode: ingress.modes.first ?? "delta",
+                            idempotencyKey: UUID().uuidString
+                        )
+                        ingestID = ""
+                        ingestURL = ""
+                        ingestTitle = ""
+                        ingestText = ""
+                    }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(ingestID.isEmpty || ingestURL.isEmpty || ingestText.isEmpty || isMutating)
+        } else {
+            Text(
+                "This Pipeline revision does not expose push ingestion. Add a push.docs input module and publish a new revision to enable it."
+            )
+            .windexStyle(Typography.body)
+            .foregroundStyle(theme.palette.graphite)
+            .frame(maxWidth: Layout.proseMeasure, alignment: .leading)
+        }
+    }
+
+    private func saveSettings(_ changes: [String: JSONValue]) async {
+        await perform {
+            do {
+                try await session.saveSourceSettings(source.name, values: changes)
+                settingsConflict = nil
+            } catch let error as WindexError {
+                guard case .preconditionFailed = error else { throw error }
+                let response = try await session.sourceSettings(source.name)
+                settingsConflict = SettingsConflict(
+                    changes: changes,
+                    server: try response.settingsScope()
+                )
+            }
+        }
+    }
+
+    private func perform(_ action: () async throws -> Void) async {
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            try await action()
+            actionError = nil
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    private func pushURL(_ path: String) -> String {
+        if path.hasPrefix("http://") || path.hasPrefix("https://") { return path }
+        return session.backend.profile.displayAddress + (path.hasPrefix("/") ? path : "/\(path)")
+    }
+
+    private func curlExample(_ ingress: SourceIngress) -> String {
+        var headers = [
+            #"-H 'Content-Type: application/json'"#,
+            #"-H 'Idempotency-Key: <unique-batch-id>'"#
+        ]
+        if ingress.authenticationRequired {
+            headers.append(#"-H 'Authorization: Bearer <write-token>'"#)
+        }
+        return """
+        curl -X POST '\(pushURL(ingress.path))' \\
+          \(headers.joined(separator: " \\\n  ")) \\
+          --data '{"schema_version":"windex.ingest/1","mode":"\(ingress.modes.first ?? "delta")","documents":[{"id":"doc-1","url":"https://example.test/doc-1","title":"Example","text":"Searchable text"}]}'
+        """
+    }
+
+    private func runSummary(_ title: String, _ run: SourceRunSummary) -> some View {
         fieldGroup(title) {
             HStack {
                 Text("Run \(run.id) · \(run.flow)")
@@ -337,11 +864,177 @@ private struct SourceDeploymentDetail: View {
             Text(label)
                 .windexStyle(Typography.label)
                 .foregroundStyle(theme.palette.graphite)
-                .frame(width: 130, alignment: .leading)
+                .frame(width: 140, alignment: .leading)
             Text(value)
                 .windexStyle(Typography.data)
                 .textSelection(.enabled)
             Spacer(minLength: 0)
+        }
+    }
+}
+
+private struct LifecycleConfirmationSheet: View {
+    let source: SourceDeployment
+    let confirmation: SourceLifecycleConfirmation
+    @Binding var isMutating: Bool
+    @Binding var errorMessage: String?
+    @Environment(BackendSession.self) private var session
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.windexTheme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: .lg) {
+            switch confirmation {
+            case .reset(let preview):
+                StyledText("Reset \(source.displayTitle)?", Typography.setLG)
+                Text(
+                    "This queues generation \(preview.generation + 1), replacing "
+                        + "\(preview.documents) documents and \(preview.stateUnits) state units. "
+                        + "\(preview.outstandingTasks) outstanding tasks are affected."
+                )
+                confirmationButtons("Queue reset", role: .destructive) {
+                    try await session.resetSource(
+                        source.name,
+                        confirmationToken: preview.confirmationToken
+                    )
+                }
+            case .upgrade(let preview):
+                StyledText("Upgrade \(source.displayTitle)?", Typography.setLG)
+                Text(
+                    "Move from Pipeline v\(preview.fromVersion) to v\(preview.targetVersion). "
+                        + (preview.valid
+                            ? "The backend validated the migrated settings."
+                            : "The candidate is not valid; resolve its missing settings first.")
+                )
+                confirmationButtons("Confirm upgrade", role: nil) {
+                    try await session.upgradeSource(
+                        source.name,
+                        version: preview.targetVersion,
+                        confirmationToken: preview.confirmationToken
+                    )
+                }
+                .disabled(!preview.valid)
+            case .archive:
+                StyledText("Archive \(source.displayTitle)?", Typography.setLG)
+                Text("The Source leaves active lists and can no longer be run or scheduled.")
+                confirmationButtons("Archive Source", role: .destructive) {
+                    try await session.archiveSource(source.name)
+                }
+            }
+            if let errorMessage {
+                Text(errorMessage)
+                    .foregroundStyle(theme.palette.rust)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.xl)
+        .frame(minWidth: 480, minHeight: 240, alignment: .topLeading)
+        .background(theme.palette.ink)
+    }
+
+    private func confirmationButtons(
+        _ label: String,
+        role: ButtonRole?,
+        action: @escaping () async throws -> Void
+    ) -> some View {
+        HStack {
+            Button("Cancel") { dismiss() }
+            Spacer()
+            Button(label, role: role) {
+                Task {
+                    isMutating = true
+                    defer { isMutating = false }
+                    do {
+                        try await action()
+                        errorMessage = nil
+                        dismiss()
+                    } catch {
+                        errorMessage = error.localizedDescription
+                    }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isMutating)
+        }
+    }
+}
+
+private struct TriggerSheet: View {
+    let source: SourceDeployment
+    @Environment(BackendSession.self) private var session
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.windexTheme) private var theme
+    @State private var flow = ""
+    @State private var kind = "interval"
+    @State private var intervalSeconds = "3600"
+    @State private var cron = "0 * * * *"
+    @State private var timezone = "UTC"
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+
+    private var flows: [String] {
+        session.pipelines.revisions[source.pipeline.pipeline]?
+            .first(where: { $0.reference.version == source.pipeline.version })?
+            .spec.flows.map(\.name) ?? []
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: .lg) {
+            StyledText("Add schedule", Typography.setLG)
+            Picker("Flow", selection: $flow) {
+                ForEach(flows, id: \.self) { Text($0).tag($0) }
+            }
+            Picker("Type", selection: $kind) {
+                Text("Interval").tag("interval")
+                Text("Cron").tag("cron")
+            }
+            if kind == "interval" {
+                TextField("Seconds", text: $intervalSeconds)
+            } else {
+                TextField("Five-field cron expression", text: $cron)
+                TextField("IANA timezone", text: $timezone)
+            }
+            if let errorMessage {
+                Text(errorMessage).foregroundStyle(theme.palette.rust)
+            }
+            Spacer()
+            HStack {
+                Button("Cancel") { dismiss() }
+                Spacer()
+                Button(isSaving ? "Saving…" : "Add schedule") {
+                    Task { await save() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isSaving || flow.isEmpty)
+            }
+        }
+        .padding(.xl)
+        .background(theme.palette.ink)
+        .onAppear { flow = flows.first ?? "" }
+    }
+
+    private func save() async {
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            let spec: [String: JSONValue]
+            if kind == "interval" {
+                guard let seconds = Int(intervalSeconds), seconds > 0 else {
+                    throw SourceFormError.json("Interval seconds must be positive.")
+                }
+                spec = ["seconds": .int(seconds)]
+            } else {
+                spec = ["cron": .string(cron), "timezone": .string(timezone)]
+            }
+            try await session.createTrigger(
+                source: source.name,
+                flow: flow,
+                type: kind,
+                spec: spec
+            )
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }

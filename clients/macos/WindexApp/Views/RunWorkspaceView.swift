@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WindexKit
 import WindexUI
@@ -112,6 +113,7 @@ private struct CanonicalRunDetail: View {
     @Environment(BackendSession.self) private var session
     @State private var isMutating = false
     @State private var actionError: String?
+    @State private var artifactMessage: String?
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -183,13 +185,208 @@ private struct CanonicalRunDetail: View {
                 }
 
                 Hairline()
-                Text(
-                    "Task progress, declared inputs and outputs, artifacts, and Events will populate from the canonical Run projection."
-                )
-                .windexStyle(Typography.body)
-                .foregroundStyle(theme.palette.graphite)
+                runProjection
             }
             .padding(.xl)
+        }
+        .task(id: "\(run.id):\(run.state.rawValue)") {
+            await session.loadRunDetail(run.id)
+        }
+    }
+
+    @ViewBuilder
+    private var runProjection: some View {
+        if let detail = session.runs.details[run.id] {
+            taskProgress(detail.tasks ?? [])
+            Hairline()
+            outputs(session.runs.outputs[run.id] ?? [])
+            Hairline()
+            runEvents(session.runs.events[run.id] ?? [])
+        } else if let error = session.runs.detailErrors[run.id] {
+            VStack(alignment: .leading, spacing: .sm) {
+                Text(error)
+                    .windexStyle(Typography.body)
+                    .foregroundStyle(theme.palette.rust)
+                Button("Retry") {
+                    Task { await session.loadRunDetail(run.id) }
+                }
+            }
+        } else {
+            HStack(spacing: .sm) {
+                ProgressView().controlSize(.small)
+                Text("Loading tasks, Events, outputs, and artifacts…")
+                    .windexStyle(Typography.body)
+                    .foregroundStyle(theme.palette.graphite)
+            }
+        }
+    }
+
+    private func taskProgress(_ tasks: [RunTaskWire]) -> some View {
+        VStack(alignment: .leading, spacing: .sm) {
+            StyledText("Tasks", Typography.eyebrow)
+                .foregroundStyle(theme.palette.graphite)
+            if tasks.isEmpty {
+                Text("This Run has no executable tasks.")
+                    .windexStyle(Typography.body)
+                    .foregroundStyle(theme.palette.graphite)
+            }
+            ForEach(tasks, id: \.id) { task in
+                VStack(alignment: .leading, spacing: .xs) {
+                    HStack {
+                        Text(task.node)
+                            .windexStyle(Typography.label)
+                        Text("\(task.module) · \(task.lane)")
+                            .windexStyle(Typography.dataSM)
+                            .foregroundStyle(theme.palette.graphite)
+                        Spacer()
+                        StatusBadge(
+                            status(for: task.state),
+                            word: task.state
+                        )
+                    }
+                    if task.unitsTotal > 0 {
+                        ProgressView(
+                            value: Double(task.unitsDone + task.unitsFailed),
+                            total: Double(task.unitsTotal)
+                        )
+                        Text(
+                            "\(task.unitsDone) done · \(task.unitsFailed) failed · "
+                                + "\(task.unitsTotal) total"
+                        )
+                        .windexStyle(Typography.dataSM)
+                        .foregroundStyle(theme.palette.graphite)
+                    } else if task.state == "running" {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    if let error = task.error {
+                        Text(error)
+                            .windexStyle(Typography.dataSM)
+                            .foregroundStyle(theme.palette.rust)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.sm)
+                .background(theme.palette.plate)
+            }
+        }
+    }
+
+    private func outputs(_ values: [RunOutputWire]) -> some View {
+        VStack(alignment: .leading, spacing: .sm) {
+            StyledText("Outputs and artifacts", Typography.eyebrow)
+                .foregroundStyle(theme.palette.graphite)
+            if values.isEmpty {
+                Text("No declared boundary outputs have been captured.")
+                    .windexStyle(Typography.body)
+                    .foregroundStyle(theme.palette.graphite)
+            }
+            ForEach(values, id: \.boundary) { output in
+                VStack(alignment: .leading, spacing: .xs) {
+                    HStack {
+                        Text(output.boundary)
+                            .windexStyle(Typography.label)
+                        Text(output._type)
+                            .windexStyle(Typography.dataSM)
+                            .foregroundStyle(theme.palette.graphite)
+                        Spacer()
+                        Text(ByteCountFormatter.string(
+                            fromByteCount: Int64(output.sizeBytes),
+                            countStyle: .file
+                        ))
+                        .windexStyle(Typography.dataSM)
+                        if let artifactID = output.artifactID {
+                            Button("Save artifact…") {
+                                Task {
+                                    await saveArtifact(
+                                        artifactID,
+                                        boundary: output.boundary
+                                    )
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                    Text(outputValue(output))
+                        .font(.system(.caption, design: .monospaced))
+                        .lineLimit(8)
+                        .textSelection(.enabled)
+                    Text("sha256 \(output.checksum)")
+                        .windexStyle(Typography.dataSM)
+                        .foregroundStyle(theme.palette.graphite)
+                }
+                .padding(.sm)
+                .background(theme.palette.plate)
+            }
+            if let artifactMessage {
+                Text(artifactMessage)
+                    .windexStyle(Typography.dataSM)
+                    .foregroundStyle(theme.palette.graphite)
+            }
+        }
+    }
+
+    private func runEvents(_ events: [OperationalEvent]) -> some View {
+        VStack(alignment: .leading, spacing: .sm) {
+            StyledText("Events", Typography.eyebrow)
+                .foregroundStyle(theme.palette.graphite)
+            if events.isEmpty {
+                Text("No Events recorded for this Run.")
+                    .windexStyle(Typography.body)
+                    .foregroundStyle(theme.palette.graphite)
+            }
+            ForEach(events) { event in
+                HStack(alignment: .firstTextBaseline, spacing: .sm) {
+                    Text(event.timestamp, format: .dateTime.hour().minute().second())
+                        .windexStyle(Typography.dataSM)
+                        .foregroundStyle(theme.palette.graphite)
+                        .frame(width: 80, alignment: .leading)
+                    Text(event.event)
+                        .windexStyle(Typography.label)
+                        .frame(width: 150, alignment: .leading)
+                    Text(event.message)
+                        .windexStyle(Typography.body)
+                    Spacer()
+                }
+            }
+        }
+    }
+
+    private func outputValue(_ output: RunOutputWire) -> String {
+        guard let value = try? output.decodedValue(),
+              let data = try? JSONEncoder.pretty.encode(value),
+              let result = String(data: data, encoding: .utf8) else {
+            return "Value unavailable"
+        }
+        return result
+    }
+
+    private func saveArtifact(_ artifactID: String, boundary: String) async {
+        do {
+            let data = try await session.artifact(
+                runID: run.id,
+                artifactID: artifactID
+            )
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = "\(boundary)-\(artifactID)"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            try data.write(to: url, options: .atomic)
+            artifactMessage = "Saved \(url.lastPathComponent)."
+        } catch {
+            artifactMessage = error.localizedDescription
+        }
+    }
+
+    private func status(for state: String) -> Status {
+        switch state {
+        case "succeeded", "skipped":
+            .healthy
+        case "ready", "running":
+            .running
+        case "blocked", "queued":
+            .attention
+        default:
+            .fault
         }
     }
 
@@ -215,6 +412,14 @@ private struct CanonicalRunDetail: View {
                 .textSelection(.enabled)
             Spacer()
         }
+    }
+}
+
+private extension JSONEncoder {
+    static var pretty: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
     }
 }
 

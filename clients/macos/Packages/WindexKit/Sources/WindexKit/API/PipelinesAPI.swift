@@ -24,7 +24,7 @@ private struct PipelineRevisionBody: Codable, Sendable {
 
 private struct LayoutBody: Codable, Sendable {
     struct Payload: Codable, Sendable {
-        let positions: [String: PipelineNodePosition]
+        let nodes: [String: PipelineNodePosition]
         let groups: [String: [String]]
         let annotations: [String: String]
     }
@@ -136,7 +136,7 @@ extension WindexClient {
             surface: .admin,
             body: LayoutBody(
                 flowName: layout.flow,
-                layout: .init(positions: layout.positions, groups: layout.groups,
+                layout: .init(nodes: layout.positions, groups: layout.groups,
                               annotations: layout.annotations)
             ),
             headers: ["If-Match": etag], as: PipelineLayoutWire.self

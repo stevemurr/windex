@@ -496,6 +496,8 @@ struct PipelinesView: View {
     @Environment(BackendSession.self) private var session
     @State private var model = PipelineComposerModel()
     @State private var isSaving = false
+    @State private var isPresentingRun = false
+    @State private var isArchiving = false
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -528,6 +530,17 @@ struct PipelinesView: View {
                 return
             } catch {
                 // Recovery is best-effort. Publication remains the durable path.
+            }
+        }
+        .sheet(isPresented: $isPresentingRun) {
+            if let draft = model.draft, let version = model.baseVersion {
+                PipelineRunSheet(
+                    pipeline: draft.name,
+                    version: version,
+                    flows: draft.flows.map(\.name),
+                    selectedFlow: model.selectedFlow
+                )
+                .frame(minWidth: 560, minHeight: 520)
             }
         }
     }
@@ -652,6 +665,25 @@ struct PipelinesView: View {
                     ))
                 }
 
+                if let version = model.baseVersion {
+                    Menu("v\(version)") {
+                        ForEach(
+                            session.pipelines.revisions[draft.name] ?? [],
+                            id: \.reference
+                        ) { revision in
+                            Button {
+                                Task { await openRevision(revision) }
+                            } label: {
+                                Text(
+                                    "v\(revision.reference.version)"
+                                        + (revision.note.isEmpty ? "" : " · \(revision.note)")
+                                )
+                            }
+                        }
+                    }
+                    .help("Open an immutable revision from Pipeline history.")
+                }
+
                 Menu {
                     Button("New Flow") {
                         model.addFlow()
@@ -725,14 +757,60 @@ struct PipelinesView: View {
                 StatusBadge(.fault, word: "\(model.errorCount) errors")
             }
 
+            if model.baseVersion != nil {
+                Button("Run") {
+                    isPresentingRun = true
+                }
+                .help("Run this explicit immutable Pipeline revision.")
+            }
+
             Button(isSaving ? "Saving…" : "Save revision") {
                 Task { await saveRevision() }
             }
             .disabled(isSaving || model.errorCount > 0 || model.draft == nil)
+
+            if model.baseVersion != nil {
+                Menu {
+                    Button("Archive Pipeline", role: .destructive) {
+                        Task { await archiveCurrentPipeline() }
+                    }
+                    .disabled(isArchiving)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .accessibilityLabel("Pipeline actions")
+                }
+                .menuStyle(.borderlessButton)
+            }
         }
         .padding(.horizontal, .md)
         .frame(height: 48)
         .background(theme.palette.plate)
+    }
+
+    private func openRevision(_ revision: PipelineRevision) async {
+        model.open(revision, registry: session.registry.registry)
+        await session.loadLayout(
+            pipeline: revision.reference.pipeline,
+            version: revision.reference.version,
+            flow: model.selectedFlow
+        )
+        model.apply(session.pipelines.layout(
+            pipeline: revision.reference.pipeline,
+            version: revision.reference.version,
+            flow: model.selectedFlow
+        ))
+    }
+
+    private func archiveCurrentPipeline() async {
+        guard let name = model.draft?.name else { return }
+        isArchiving = true
+        defer { isArchiving = false }
+        do {
+            try await session.archivePipeline(name)
+            model.newPipeline(registry: session.registry.registry)
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
     }
 
     private func saveRevision() async {
@@ -790,6 +868,152 @@ struct PipelinesView: View {
             }
         }
         .background(theme.palette.plate)
+    }
+}
+
+private struct PipelineRunSheet: View {
+    let pipeline: String
+    let version: Int
+    let flows: [String]
+    @State var selectedFlow: String
+
+    @Environment(BackendSession.self) private var session
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.windexTheme) private var theme
+    @State private var inputs = "{}"
+    @State private var parameters = "{}"
+    @State private var priority = 50.0
+    @State private var isRunning = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: .xs) {
+                    StyledText("Run Pipeline", Typography.setLG)
+                    Text("\(pipeline) @ \(version)")
+                        .windexStyle(Typography.data)
+                        .foregroundStyle(theme.palette.graphite)
+                }
+                Spacer()
+                Button("Cancel") { dismiss() }
+            }
+            .padding(.lg)
+            Hairline()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: .lg) {
+                    Text(
+                        "This queues the selected immutable revision. It is distinct from running a Source, which adds Source origin and configuration."
+                    )
+                    .windexStyle(Typography.body)
+                    .foregroundStyle(theme.palette.graphite)
+
+                    Picker("Flow", selection: $selectedFlow) {
+                        ForEach(flows, id: \.self) { Text($0).tag($0) }
+                    }
+
+                    jsonEditor(
+                        "Explicit inputs",
+                        help: "A JSON object keyed by declared Flow input.",
+                        text: $inputs
+                    )
+                    jsonEditor(
+                        "Pipeline parameters",
+                        help: "A JSON object of parameter overrides for this Run.",
+                        text: $parameters
+                    )
+
+                    HStack {
+                        Text("Priority \(Int(priority))")
+                            .windexStyle(Typography.label)
+                        Slider(value: $priority, in: 0...100, step: 1)
+                    }
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .windexStyle(Typography.body)
+                            .foregroundStyle(theme.palette.rust)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.xl)
+            }
+
+            Hairline()
+            HStack {
+                Spacer()
+                Button(isRunning ? "Queuing…" : "Queue Run") {
+                    Task { await queue() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isRunning || selectedFlow.isEmpty)
+            }
+            .padding(.lg)
+        }
+        .background(theme.palette.ink)
+    }
+
+    private func jsonEditor(
+        _ title: String,
+        help: String,
+        text: Binding<String>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: .xs) {
+            Text(title).windexStyle(Typography.label)
+            Text(help)
+                .windexStyle(Typography.dataSM)
+                .foregroundStyle(theme.palette.graphite)
+            TextEditor(text: text)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 100)
+                .padding(.xs)
+                .background(theme.palette.plate)
+        }
+    }
+
+    private func queue() async {
+        isRunning = true
+        defer { isRunning = false }
+        do {
+            _ = try decodeObject(inputs)
+            _ = try decodeObject(parameters)
+            _ = try await session.client.runPipeline(
+                pipeline,
+                version: version,
+                flow: selectedFlow,
+                inputs: try decodeObject(inputs),
+                parameters: try decodeObject(parameters),
+                priority: Int(priority)
+            )
+            await session.refreshAll()
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func decodeObject(_ value: String) throws -> [String: JSONValue] {
+        guard let data = value.data(using: .utf8) else {
+            throw PipelineRunFormError.invalidJSON
+        }
+        do {
+            return try JSONDecoder().decode([String: JSONValue].self, from: data)
+        } catch {
+            throw PipelineRunFormError.json(error.localizedDescription)
+        }
+    }
+}
+
+private enum PipelineRunFormError: LocalizedError {
+    case invalidJSON
+    case json(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidJSON: "Enter a JSON object."
+        case .json(let message): "The JSON object is invalid: \(message)"
+        }
     }
 }
 

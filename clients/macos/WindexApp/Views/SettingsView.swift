@@ -6,12 +6,18 @@ import WindexUI
 @MainActor
 @Observable
 final class SettingsModel {
+    struct Conflict {
+        let changes: [String: JSONValue]
+        let server: SettingsScope
+    }
+
     private(set) var scopes: [SettingsScope] = []
     private(set) var form: FormModel?
     private(set) var isLoading = false
     private(set) var isSaving = false
     private(set) var errorMessage: String?
     private(set) var confirmation: String?
+    private(set) var conflict: Conflict?
     var selectedScope: String?
     private var etags: [String: String] = [:]
 
@@ -50,12 +56,46 @@ final class SettingsModel {
             return
         }
         form = FormModel(scope: match)
+        conflict = nil
         confirmation = nil
         errorMessage = nil
     }
 
     func save(client: WindexClient, appModel: AppModel) async {
         guard let selectedScope, let form, form.canSubmit else { return }
+        await save(
+            changes: form.changes,
+            selectedScope: selectedScope,
+            client: client,
+            appModel: appModel
+        )
+    }
+
+    func reloadServerValues() {
+        guard let conflict else { return }
+        replace(conflict.server)
+        form = FormModel(scope: conflict.server)
+        self.conflict = nil
+        errorMessage = nil
+        confirmation = "Loaded the current server values."
+    }
+
+    func reapply(client: WindexClient, appModel: AppModel) async {
+        guard let conflict, let selectedScope else { return }
+        await save(
+            changes: conflict.changes,
+            selectedScope: selectedScope,
+            client: client,
+            appModel: appModel
+        )
+    }
+
+    private func save(
+        changes: [String: JSONValue],
+        selectedScope: String,
+        client: WindexClient,
+        appModel: AppModel
+    ) async {
         isSaving = true
         confirmation = nil
         do {
@@ -64,24 +104,56 @@ final class SettingsModel {
             }
             let updated: SettingsScope
             if selectedScope == SettingsScope.global {
-                let response = try await client.patchGlobalSettings(form.changes, etag: etag)
+                let response = try await client.patchGlobalSettings(changes, etag: etag)
                 etags[selectedScope] = response.etag
                 updated = try response.settingsScope()
             } else {
                 let response = try await client.patchSourceSettings(
-                    selectedScope, values: form.changes, etag: etag)
+                    selectedScope, values: changes, etag: etag)
                 etags[selectedScope] = response.etag
                 updated = try response.settingsScope()
             }
-            replace(updated); form.apply(updated.fields)
+            replace(updated)
+            form?.apply(updated.fields)
+            conflict = nil
             confirmation = "Settings saved."
             isSaving = false
             errorMessage = nil
+        } catch let error as WindexError {
+            isSaving = false
+            if case .preconditionFailed = error {
+                do {
+                    let current = try await fetch(
+                        scope: selectedScope,
+                        client: client
+                    )
+                    conflict = Conflict(changes: changes, server: current.scope)
+                    etags[selectedScope] = current.etag
+                    errorMessage = "The settings changed after this editor opened. Compare the values below, then reload or reapply."
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            } else {
+                errorMessage = form?.apply(error)
+            }
+            appModel.handleClientError(error)
         } catch {
             isSaving = false
-            errorMessage = form.apply(error)
+            errorMessage = error.localizedDescription
             appModel.handleClientError(error)
         }
+    }
+
+    private func fetch(
+        scope: String,
+        client: WindexClient
+    ) async throws -> (scope: SettingsScope, etag: String) {
+        if scope == SettingsScope.global {
+            let response = try await client.globalSettings()
+            return (try response.settingsScope(), response.etag)
+        }
+        let response = try await client.sourceSettings(scope)
+        return (try response.settingsScope(), response.etag)
     }
 
     func revert(
@@ -268,6 +340,10 @@ struct SettingsView: View {
                         notice(confirmation, colour: theme.palette.graphite)
                     }
 
+                    if let conflict = model.conflict {
+                        conflictNotice(conflict)
+                    }
+
                     overrides(scope)
                 }
                 .padding(.xl)
@@ -282,6 +358,38 @@ struct SettingsView: View {
                 .controlSize(.small)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func conflictNotice(_ conflict: SettingsModel.Conflict) -> some View {
+        VStack(alignment: .leading, spacing: .sm) {
+            StyledText("Concurrent settings update", Typography.eyebrow)
+                .foregroundStyle(theme.palette.rust)
+            ForEach(conflict.changes.keys.sorted(), id: \.self) { key in
+                let serverValue = conflict.server.fields.first {
+                    $0.key == key
+                }?.value?.displayString ?? "unset"
+                Text(
+                    "\(key): server \(serverValue) · yours "
+                        + (conflict.changes[key]?.displayString ?? "unset")
+                )
+                .windexStyle(Typography.dataSM)
+            }
+            HStack {
+                Button("Reload server values") {
+                    model.reloadServerValues()
+                }
+                Button("Reapply my changes") {
+                    Task {
+                        await model.reapply(client: client, appModel: appModel)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isSaving)
+            }
+        }
+        .padding(.md)
+        .frame(maxWidth: Layout.proseMeasure, alignment: .leading)
+        .background(theme.palette.plate)
     }
 
     private func overrides(_ scope: SettingsScope) -> some View {

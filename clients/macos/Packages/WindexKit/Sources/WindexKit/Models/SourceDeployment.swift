@@ -144,6 +144,28 @@ public struct SourceConfiguration: Codable, Hashable, Sendable {
     }
 }
 
+public struct SourceIngress: Codable, Hashable, Sendable {
+    public let path: String
+    public let authenticationRequired: Bool
+    public let maxDocuments: Int
+    public let maxTextBytes: Int
+    public let modes: [String]
+
+    public init(
+        path: String,
+        authenticationRequired: Bool,
+        maxDocuments: Int,
+        maxTextBytes: Int,
+        modes: [String]
+    ) {
+        self.path = path
+        self.authenticationRequired = authenticationRequired
+        self.maxDocuments = maxDocuments
+        self.maxTextBytes = maxTextBytes
+        self.modes = modes
+    }
+}
+
 /// A configured searchable-corpus deployment of one immutable Pipeline revision.
 public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
     public var id: String { name }
@@ -159,6 +181,7 @@ public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
     public let paused: Bool
     public let archived: Bool
     public let generation: Int
+    public let ingress: SourceIngress?
     public let configuration: SourceConfiguration
     public let status: SourceStatus
 
@@ -174,6 +197,7 @@ public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
         paused: Bool = false,
         archived: Bool = false,
         generation: Int = 1,
+        ingress: SourceIngress? = nil,
         configuration: SourceConfiguration = .init(),
         status: SourceStatus = .init()
     ) {
@@ -188,6 +212,7 @@ public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
         self.paused = paused
         self.archived = archived
         self.generation = generation
+        self.ingress = ingress
         self.configuration = configuration
         self.status = status
     }

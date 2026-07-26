@@ -19,9 +19,21 @@ struct OverviewView: View {
                 if let snapshot = session.overview.snapshot {
                     headline(snapshot)
                     Hairline()
-                    runPressure(snapshot.runs)
+                    runPressure(snapshot)
+                    if !snapshot.workerLanes.isEmpty {
+                        Hairline()
+                        workerPressure(snapshot)
+                    }
                     Hairline()
                     sourceTable(snapshot.sources)
+                    if !snapshot.activeRuns.isEmpty || !snapshot.recentRuns.isEmpty {
+                        Hairline()
+                        runTable(snapshot)
+                    }
+                    if !snapshot.recentDocuments.isEmpty {
+                        Hairline()
+                        recentDocuments(snapshot.recentDocuments)
+                    }
                     Hairline()
                     serviceTable(snapshot.services)
                     if !snapshot.recentFailures.isEmpty {
@@ -58,7 +70,7 @@ struct OverviewView: View {
         case .connecting:
             StatusBadge(.running, word: "connecting")
         case .degraded:
-            StatusBadge(.attention, word: "degraded")
+            StatusBadge(.attention, word: "REST fallback")
         case .idle:
             StatusBadge(.attention, word: "offline")
         }
@@ -67,18 +79,19 @@ struct OverviewView: View {
     private func headline(_ snapshot: OverviewSnapshot) -> some View {
         VStack(alignment: .leading, spacing: .lg) {
             HStack(alignment: .firstTextBaseline, spacing: .xl) {
-                setFigure(
-                    snapshot.documentsPerMinute.formatted(
-                        .number.precision(.fractionLength(0))),
-                    "documents per minute")
-                setFigure(snapshot.indexedDocuments.formatted(), "searchable documents")
+                setFigure(snapshot.searchable.formatted(), "searchable documents")
+                setFigure(snapshot.documents.formatted(), "documents")
             }
-
             HStack(spacing: .xl) {
-                measure("staged", snapshot.stagedDocuments)
-                measure("pending embedding", snapshot.pendingEmbedding)
-                measure("uptime", duration(snapshot.uptimeSeconds))
-                measure("version", snapshot.serviceVersion)
+                measure("indexed last hour", snapshot.indexedLastHour)
+                measure("vectors", snapshot.vectors.map(String.init) ?? "unavailable")
+                measure(
+                    "snapshot",
+                    snapshot.generatedAt.formatted(
+                        .dateTime.hour().minute().second()
+                    )
+                )
+                measure("event revision", String(snapshot.revision))
             }
         }
     }
@@ -106,15 +119,43 @@ struct OverviewView: View {
         }
     }
 
-    private func runPressure(_ runs: OverviewRunCounts) -> some View {
+    private func runPressure(_ snapshot: OverviewSnapshot) -> some View {
         VStack(alignment: .leading, spacing: .sm) {
             StyledText("Run pressure", Typography.eyebrow)
                 .foregroundStyle(theme.palette.graphite)
             HStack(spacing: .xl) {
-                measure("active", runs.active)
-                measure("queued", runs.queued)
-                measure("blocked", runs.blocked)
-                measure("recent failures", runs.failed)
+                measure("running", snapshot.runs.running)
+                measure("queued", snapshot.runs.queued)
+                measure("blocked", snapshot.runs.blocked)
+                measure("failed", snapshot.runs.failed)
+                measure("succeeded", snapshot.runs.succeeded)
+                measure("cancelled", snapshot.runs.cancelled)
+            }
+        }
+    }
+
+    private func workerPressure(_ snapshot: OverviewSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: .sm) {
+            StyledText("Worker lanes", Typography.eyebrow)
+                .foregroundStyle(theme.palette.graphite)
+            ForEach(snapshot.workerLanes) { lane in
+                HStack(spacing: .lg) {
+                    Text(lane.name)
+                        .windexStyle(Typography.label)
+                        .frame(width: 140, alignment: .leading)
+                    ForEach(lane.states.keys.sorted(), id: \.self) { state in
+                        Text("\(state) \(lane.states[state, default: 0])")
+                            .windexStyle(Typography.dataSM)
+                    }
+                }
+            }
+            ForEach(snapshot.blockedPreconditions) { item in
+                Text(
+                    "\(item.tasks) blocked · \(item.preconditions.joined(separator: ", "))"
+                        + (item.reason.map { " · \($0)" } ?? "")
+                )
+                .windexStyle(Typography.dataSM)
+                .foregroundStyle(theme.palette.rust)
             }
         }
     }
@@ -125,12 +166,12 @@ struct OverviewView: View {
                 .foregroundStyle(theme.palette.graphite)
 
             HStack {
-                tableHeader("Source", width: 180)
-                tableHeader("Pipeline", width: 180)
-                tableHeader("Staged", width: 90, alignment: .trailing)
-                tableHeader("Embedding", width: 90, alignment: .trailing)
-                tableHeader("Searchable", width: 100, alignment: .trailing)
-                tableHeader("State", width: 110)
+                tableHeader("Source", width: 170)
+                tableHeader("Pipeline", width: 170)
+                tableHeader("Documents", width: 90, alignment: .trailing)
+                tableHeader("Searchable", width: 90, alignment: .trailing)
+                tableHeader("Next trigger", width: 180)
+                tableHeader("State", width: 105)
                 Spacer()
             }
 
@@ -138,21 +179,20 @@ struct OverviewView: View {
                 Hairline()
                 HStack {
                     Text(row.source.displayTitle)
+                        .frame(width: 170, alignment: .leading)
+                    Text("\(row.source.pipeline.pipeline) @ \(row.source.pipeline.version)")
+                        .frame(width: 170, alignment: .leading)
+                    Text(row.documents.formatted())
+                        .frame(width: 90, alignment: .trailing)
+                    Text(row.searchable.formatted())
+                        .frame(width: 90, alignment: .trailing)
+                    Text(row.nextTrigger.map(shortTimestamp) ?? "—")
                         .frame(width: 180, alignment: .leading)
-                    Text(
-                        "\(row.source.pipeline.pipeline) @ \(row.source.pipeline.version)"
-                    )
-                    .frame(width: 180, alignment: .leading)
-                    Text(row.source.status.counts.staged.formatted())
-                        .frame(width: 90, alignment: .trailing)
-                    Text(row.source.status.counts.pendingEmbedding.formatted())
-                        .frame(width: 90, alignment: .trailing)
-                    Text(row.source.status.counts.searchable.formatted())
-                        .frame(width: 100, alignment: .trailing)
                     StatusBadge(
                         row.source.status.activity.overviewStatus,
-                        word: row.source.status.activity.rawValue)
-                        .frame(width: 110, alignment: .leading)
+                        word: row.source.status.activity.rawValue
+                    )
+                    .frame(width: 105, alignment: .leading)
                     Spacer()
                 }
                 .windexStyle(Typography.data)
@@ -161,15 +201,59 @@ struct OverviewView: View {
         }
     }
 
+    private func runTable(_ snapshot: OverviewSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: .sm) {
+            StyledText("Active and recent Runs", Typography.eyebrow)
+                .foregroundStyle(theme.palette.graphite)
+            ForEach((snapshot.activeRuns + snapshot.recentRuns.prefix(8))) { run in
+                HStack(spacing: .sm) {
+                    Text("#\(run.id)")
+                        .windexStyle(Typography.data)
+                        .frame(width: 54, alignment: .leading)
+                    Text(run.sourceName ?? "generic")
+                        .windexStyle(Typography.label)
+                        .frame(width: 130, alignment: .leading)
+                    Text("\(run.pipelineName) @ \(run.pipelineVersion) · \(run.flowName)")
+                        .windexStyle(Typography.dataSM)
+                        .frame(width: 260, alignment: .leading)
+                    Text(run.state)
+                        .windexStyle(Typography.dataSM)
+                    if let progress = run.progress {
+                        ProgressView(value: progress)
+                            .frame(width: 100)
+                    }
+                    Spacer()
+                }
+            }
+        }
+    }
+
+    private func recentDocuments(_ documents: [OverviewRecentDocument]) -> some View {
+        VStack(alignment: .leading, spacing: .sm) {
+            StyledText("Recently indexed", Typography.eyebrow)
+                .foregroundStyle(theme.palette.graphite)
+            ForEach(documents.prefix(8)) { document in
+                HStack(spacing: .sm) {
+                    Text(document.source)
+                        .windexStyle(Typography.dataSM)
+                        .foregroundStyle(theme.palette.graphite)
+                        .frame(width: 120, alignment: .leading)
+                    Text(document.title)
+                        .windexStyle(Typography.body)
+                        .lineLimit(1)
+                    Spacer()
+                    Text(shortTimestamp(document.indexedAt))
+                        .windexStyle(Typography.dataSM)
+                        .foregroundStyle(theme.palette.graphite)
+                }
+            }
+        }
+    }
+
     private func serviceTable(_ services: [OverviewServiceStatus]) -> some View {
         VStack(alignment: .leading, spacing: .sm) {
             StyledText("Services", Typography.eyebrow)
                 .foregroundStyle(theme.palette.graphite)
-            if services.isEmpty {
-                Text("No service health projection is available.")
-                    .windexStyle(Typography.body)
-                    .foregroundStyle(theme.palette.graphite)
-            }
             ForEach(services) { service in
                 HStack {
                     Text(service.name)
@@ -177,7 +261,8 @@ struct OverviewView: View {
                         .frame(width: 180, alignment: .leading)
                     StatusBadge(
                         service.available ? .healthy : .fault,
-                        word: service.available ? "available" : "unavailable")
+                        word: service.available ? "available" : "unavailable"
+                    )
                     if let detail = service.detail {
                         Text(detail)
                             .windexStyle(Typography.dataSM)
@@ -208,9 +293,9 @@ struct OverviewView: View {
 
     private var waitingState: some View {
         VStack(alignment: .leading, spacing: .md) {
-            StyledText("Awaiting the all-up projection", Typography.setLG)
+            StyledText("Loading the all-up projection", Typography.setLG)
             Text(
-                "The canonical Overview snapshot will combine throughput, Run pressure, Source progress, corpus stages, recent failures, and service availability. Known data will remain visible while it refreshes."
+                "Overview reconciles the canonical corpus totals, Run pressure, worker lanes, Source schedules, recent documents, and service health."
             )
             .windexStyle(Typography.body)
             .foregroundStyle(theme.palette.graphite)
@@ -230,9 +315,8 @@ struct OverviewView: View {
             .frame(width: width, alignment: alignment)
     }
 
-    private func duration(_ seconds: Int) -> String {
-        Duration.seconds(seconds).formatted(
-            .units(allowed: [.days, .hours, .minutes], width: .abbreviated))
+    private func shortTimestamp(_ value: String) -> String {
+        value.replacingOccurrences(of: "T", with: " ").prefix(19).description
     }
 }
 

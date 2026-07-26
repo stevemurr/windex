@@ -58,7 +58,7 @@ extension PipelineLayoutWire {
             [String: JSONValue].self
         )
         let positions: [String: PipelineNodePosition]
-        if let raw = payload["positions"] {
+        if let raw = payload["nodes"] {
             positions = (try? roundTrip(raw, as: [String: PipelineNodePosition].self)) ?? [:]
         } else {
             positions = [:]
@@ -89,6 +89,18 @@ extension SourceWire {
             ?? originValues["ingress"]?.stringValue
             ?? originValues["type"]?.stringValue
             ?? "configured"
+        let ingressValues = try ingress?.additionalProperties.decode(
+            [String: JSONValue].self
+        )
+        let sourceIngress = ingressValues.map {
+            SourceIngress(
+                path: $0["url"]?.stringValue ?? "",
+                authenticationRequired: $0["authentication_required"]?.boolValue ?? false,
+                maxDocuments: $0["max_documents"]?.intValue ?? 0,
+                maxTextBytes: $0["max_text_bytes"]?.intValue ?? 0,
+                modes: $0["modes"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            )
+        }
         return SourceDeployment(
             name: name,
             title: title,
@@ -104,6 +116,7 @@ extension SourceWire {
             paused: paused,
             archived: archivedAt != nil,
             generation: generation,
+            ingress: sourceIngress,
             configuration: .init(
                 configuredValues: values,
                 effectiveValues: values,
@@ -137,6 +150,16 @@ extension RunWire {
             finishedAt: finishedAt,
             error: error
         )
+    }
+}
+
+extension RunOutputWire {
+    public func decodedValue() throws -> JSONValue {
+        try roundTrip(value, as: JSONValue.self)
+    }
+
+    public var artifactID: String? {
+        (try? decodedValue().objectValue?["artifact_id"]?.stringValue) ?? nil
     }
 }
 
@@ -202,7 +225,10 @@ extension GlobalSettingsWire {
 }
 
 extension SourceStatusWire {
-    public func status(runs: [SourceRunSummary]) throws -> SourceStatus {
+    public func status(
+        runs: [SourceRunSummary],
+        nextTrigger: String? = nil
+    ) throws -> SourceStatus {
         let raw = try object(self)
         let documents = raw["documents"]?.objectValue ?? [:]
         func count(_ key: String) -> Int {
@@ -231,7 +257,7 @@ extension SourceStatusWire {
             ),
             currentRun: current,
             latestRun: latest,
-            nextTrigger: raw["next_trigger"]?.stringValue,
+            nextTrigger: nextTrigger,
             recentError: recentError
         )
     }
@@ -243,8 +269,17 @@ extension OverviewWire {
         let raw = try object(self)
         let health = raw["health"]?.objectValue ?? [:]
         let runProjection = raw["runs"]?.objectValue ?? [:]
-        let runs = runProjection["counts"]?.objectValue ?? runProjection
+        let runCounts = runProjection["counts"]?.objectValue ?? [:]
         let totals = raw["totals"]?.objectValue ?? [:]
+        let workers = raw["workers"]?.objectValue ?? [:]
+        let schedules = Dictionary(uniqueKeysWithValues:
+            (raw["schedules"]?.arrayValue ?? []).compactMap { row
+                -> (String, String?)? in
+                guard let value = row.objectValue,
+                      let source = value["source"]?.stringValue else { return nil }
+                return (source, value["next_trigger"]?.stringValue)
+            }
+        )
         let sourceRows = raw["sources"]?.arrayValue ?? []
         let sourceMetadata: [String: [String: JSONValue]] = Dictionary(
             uniqueKeysWithValues: sourceRows.compactMap { row
@@ -257,26 +292,26 @@ extension OverviewWire {
         return OverviewSnapshot(
             revision: Int64(revision),
             generatedAt: date(asOf),
-            serviceVersion: health["version"]?.stringValue ?? "",
-            uptimeSeconds: health["uptime_s"]?.intValue ?? 0,
-            documentsPerMinute: (totals["indexed_last_hour"]?.doubleValue ?? 0) / 60,
-            indexedDocuments: totals["indexed_documents"]?.intValue
-                ?? totals["documents"]?.intValue ?? 0,
-            stagedDocuments: totals["staged_documents"]?.intValue
-                ?? totals["staged"]?.intValue ?? 0,
-            pendingEmbedding: totals["pending_embedding"]?.intValue ?? 0,
+            documents: totals["documents"]?.intValue ?? 0,
+            searchable: totals["searchable"]?.intValue ?? 0,
+            vectors: totals["vectors"]?.intValue,
+            indexedLastHour: totals["indexed_last_hour"]?.intValue ?? 0,
             runs: .init(
-                active: runs["active"]?.intValue ?? runs["running"]?.intValue ?? 0,
-                queued: runs["queued"]?.intValue ?? 0,
-                blocked: runs["blocked"]?.intValue ?? 0,
-                failed: runs["failed"]?.intValue ?? 0
+                running: runCounts["running"]?.intValue ?? 0,
+                queued: runCounts["queued"]?.intValue ?? 0,
+                blocked: runCounts["blocked"]?.intValue ?? 0,
+                failed: runCounts["failed"]?.intValue ?? 0,
+                succeeded: runCounts["succeeded"]?.intValue ?? 0,
+                cancelled: runCounts["cancelled"]?.intValue ?? 0
             ),
             sources: sourceDeployments.map { source in
                 let metadata = sourceMetadata[source.name]
                 return OverviewSourceStatus(
                     source: source,
-                    lastSuccess: metadata?["last_success"]?.stringValue,
-                    lastFailure: metadata?["last_failure"]?.stringValue
+                    documents: metadata?["documents"]?.intValue ?? 0,
+                    searchable: metadata?["searchable"]?.intValue ?? 0,
+                    lastIndexedAt: metadata?["last_indexed_at"]?.stringValue,
+                    nextTrigger: schedules[source.name] ?? nil
                 )
             },
             services: health.compactMap { name, value in
@@ -289,7 +324,60 @@ extension OverviewWire {
                     detail: status == "ok" ? nil : health["\(name)_error"]?.stringValue
                 )
             }.sorted { $0.name < $1.name },
+            workerLanes: (workers["lanes"]?.objectValue ?? [:]).map { name, value in
+                OverviewWorkerLane(
+                    name: name,
+                    states: (value.objectValue ?? [:]).mapValues { $0.intValue ?? 0 }
+                )
+            }.sorted { $0.name < $1.name },
+            blockedPreconditions: (workers["blocked_preconditions"]?.arrayValue ?? [])
+                .compactMap { value in
+                    guard let item = value.objectValue else { return nil }
+                    return OverviewBlockedPrecondition(
+                        preconditions: item["preconditions"]?.arrayValue?
+                            .compactMap(\.stringValue) ?? [],
+                        reason: item["reason"]?.stringValue,
+                        tasks: item["tasks"]?.intValue ?? 0
+                    )
+                },
+            activeRuns: Self.runStatuses(runProjection["active"]?.arrayValue ?? []),
+            recentRuns: Self.runStatuses(runProjection["recent"]?.arrayValue ?? []),
+            recentDocuments: (raw["recent_documents"]?.arrayValue ?? []).compactMap {
+                value in
+                guard let item = value.objectValue,
+                      let id = item["id"]?.stringValue,
+                      let source = item["source"]?.stringValue,
+                      let indexedAt = item["indexed_at"]?.stringValue else { return nil }
+                return OverviewRecentDocument(
+                    id: id,
+                    source: source,
+                    title: item["title"]?.stringValue ?? id,
+                    indexedAt: indexedAt
+                )
+            },
             recentFailures: recentFailures
         )
+    }
+
+    private static func runStatuses(_ values: [JSONValue]) -> [OverviewRunStatus] {
+        values.compactMap { value in
+            guard let item = value.objectValue,
+                  let id = item["id"]?.intValue,
+                  let pipeline = item["pipeline_name"]?.stringValue,
+                  let version = item["pipeline_version"]?.intValue,
+                  let flow = item["flow_name"]?.stringValue,
+                  let state = item["state"]?.stringValue else { return nil }
+            return OverviewRunStatus(
+                id: id,
+                sourceName: item["source_name"]?.stringValue,
+                pipelineName: pipeline,
+                pipelineVersion: version,
+                flowName: flow,
+                state: state,
+                progress: item["progress"]?.objectValue?["fraction"]?.doubleValue,
+                finishedAt: item["finished_at"]?.stringValue,
+                error: item["error"]?.stringValue
+            )
+        }
     }
 }

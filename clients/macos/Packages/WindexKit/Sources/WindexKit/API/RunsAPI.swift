@@ -4,7 +4,8 @@ extension WindexClient {
     public func runs(source: String? = nil, pipeline: String? = nil,
                      state: String? = nil, beforeID: Int? = nil,
                      limit: Int = 100) async throws -> RunsWire {
-        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        let boundedLimit = min(max(limit, 1), 200)
+        var query = [URLQueryItem(name: "limit", value: String(boundedLimit))]
         if let source { query.append(.init(name: "source", value: source)) }
         if let pipeline { query.append(.init(name: "pipeline", value: pipeline)) }
         if let state { query.append(.init(name: "state", value: state)) }
@@ -14,7 +15,8 @@ extension WindexClient {
     }
     public func sourceRuns(_ name: String, beforeID: Int? = nil,
                            limit: Int = 100) async throws -> RunsWire {
-        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        let boundedLimit = min(max(limit, 1), 200)
+        var query = [URLQueryItem(name: "limit", value: String(boundedLimit))]
         if let beforeID { query.append(.init(name: "before_id", value: String(beforeID))) }
         return try await send("GET", "/v1/sources/\(Self.escapePath(name))/runs",
                               surface: .admin, query: query, as: RunsWire.self)
