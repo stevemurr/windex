@@ -5248,6 +5248,16 @@
           "required": true
         },
         "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineRevisionModel"
+                }
+              }
+            },
+            "description": "An existing semantic revision is now the Pipeline head (rollback or idempotent no-op)."
+          },
           "201": {
             "content": {
               "application/json": {

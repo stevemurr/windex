@@ -784,17 +784,34 @@ def pipeline_revision(name: str, version: int) -> dict[str, Any]:
     "/pipelines/{name}/revisions",
     status_code=201,
     response_model=PipelineRevisionModel,
+    responses={
+        200: {
+            "model": PipelineRevisionModel,
+            "description": (
+                "An existing semantic revision is now the Pipeline head "
+                "(rollback or idempotent no-op)."
+            ),
+        },
+    },
 )
 def pipeline_revision_publish(
-    name: str, body: PipelineRevisionCreate, if_match: str | None = Header(None),
+    name: str,
+    body: PipelineRevisionCreate,
+    response: Response,
+    if_match: str | None = Header(None),
 ) -> dict[str, Any]:
     try:
         expected_version, expected_hash = _pipeline_revision_guard(body, if_match)
         with db.pooled(get_settings().pg_dsn) as conn:
             registry.load_custom(conn)
-            return pipeline_store.publish_revision(
+            result = pipeline_store.publish_revision(
                 conn, name, body.spec, expected_version=expected_version,
                 expected_hash=expected_hash, author=body.author, note=body.note)
+        # 201 is reserved for a newly-created immutable revision. Reusing an
+        # existing semantic revision is a successful head update (or no-op), but
+        # it did not create a resource and therefore returns 200.
+        response.status_code = 201 if result.action == "created" else 200
+        return result.revision
     except Exception as exc:
         _raise(exc)
 

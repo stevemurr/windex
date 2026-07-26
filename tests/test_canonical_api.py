@@ -1,7 +1,7 @@
 from contextlib import nullcontext
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from fastapi.testclient import TestClient
 
 from windex.api.app import admin, app
@@ -46,6 +46,10 @@ def test_openapi_is_one_pipeline_source_contract_epoch():
     assert "values" in schemas["SourceUpgradeRequest"]["required"]
     assert "candidate" in schemas["UpgradePreviewResponse"]["required"]
     assert "issues" in schemas["UpgradePreviewResponse"]["required"]
+    publication_responses = admin_schema["paths"][
+        "/v1/pipelines/{name}/revisions"
+    ]["post"]["responses"]
+    assert {"200", "201"} <= set(publication_responses)
 
 
 def test_registry_response_is_fully_typed():
@@ -232,6 +236,7 @@ def test_pipeline_revision_stale_guard_maps_to_precondition_failed(monkeypatch):
             "example",
             PipelineRevisionCreate(
                 spec={}, parent_version=1, parent_hash="sha256:same"),
+            Response(),
             '"sha256:same"',
         )
 
@@ -239,6 +244,42 @@ def test_pipeline_revision_stale_guard_maps_to_precondition_failed(monkeypatch):
     assert raised.value.detail == "head moved"
     assert received["expected_version"] == 1
     assert received["expected_hash"] == "sha256:same"
+
+
+@pytest.mark.parametrize(
+    ("action", "status_code"),
+    (("created", 201), ("rollback", 200), ("noop", 200)),
+)
+def test_pipeline_revision_publish_status_describes_resource_creation(
+    monkeypatch,
+    action,
+    status_code,
+):
+    from windex.api import canonical
+
+    monkeypatch.setattr(
+        canonical.db, "pooled", lambda _dsn: nullcontext(object()))
+    monkeypatch.setattr(
+        canonical.registry, "load_custom", lambda _conn: None)
+    monkeypatch.setattr(
+        canonical.pipeline_store,
+        "publish_revision",
+        lambda *_args, **_kwargs: canonical.pipeline_store.PublicationResult(
+            revision={"version": 7},
+            action=action,
+        ),
+    )
+
+    response = Response()
+    result = pipeline_revision_publish(
+        "example",
+        PipelineRevisionCreate(spec={}, parent_version=6),
+        response,
+        None,
+    )
+
+    assert response.status_code == status_code
+    assert result == {"version": 7}
 
 
 def test_initial_pipeline_publication_uses_create_route_without_guard(monkeypatch):
