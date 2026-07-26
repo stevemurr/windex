@@ -34,9 +34,66 @@ def _rows(ctx: TaskContext, ids: list[str], refs: list[str]) -> dict[str, dict]:
     return result
 
 
+def _record_ownership(
+    ctx: TaskContext,
+    *,
+    collection: str,
+    alias: str,
+    model: str,
+) -> None:
+    """Record the exact Qdrant resources owned by this Source generation."""
+    resources = (
+        (
+            "qdrant_collection",
+            collection,
+            {
+                "source_id": ctx.source_id,
+                "source_name": ctx.source_name,
+                "model": model,
+            },
+        ),
+        (
+            "qdrant_alias",
+            alias,
+            {
+                "source_id": ctx.source_id,
+                "source_name": ctx.source_name,
+                "collection": collection,
+            },
+        ),
+    )
+    with ctx.conn.cursor() as cur:
+        for resource_type, resource_name, metadata in resources:
+            # A collection key is immutable and unique to one Source. Keep one
+            # current ownership row when corpus reset advances its generation.
+            cur.execute(
+                """DELETE FROM storage_ownership
+                    WHERE resource_type = %s AND resource_name = %s
+                      AND generation <> %s""",
+                (resource_type, resource_name, ctx.source_generation),
+            )
+            cur.execute(
+                """INSERT INTO storage_ownership
+                       (generation, resource_type, resource_name, metadata)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (generation, resource_type, resource_name)
+                   DO UPDATE SET metadata = EXCLUDED.metadata""",
+                (
+                    ctx.source_generation,
+                    resource_type,
+                    resource_name,
+                    Jsonb(metadata),
+                ),
+            )
+
+
 def platform_index(ctx: TaskContext) -> SliceResult:
     """Make this Source's staged documents queryable before the Run succeeds."""
-    if ctx.source_id is None or not ctx.collection_key:
+    if (
+        ctx.source_id is None
+        or not ctx.collection_key
+        or ctx.source_generation <= 0
+    ):
         raise PermanentTaskError(
             "platform.index requires a frozen Source deployment binding")
     with ctx.conn.cursor() as cur:
@@ -85,22 +142,12 @@ def platform_index(ctx: TaskContext) -> SliceResult:
         client = QdrantClient(url=settings.qdrant_url, timeout=120)
         collection = qidx.ensure_collection(
             client, ctx.collection_key, settings.embed_model, settings.embed_dim)
-        with ctx.conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO storage_ownership
-                       (resource_type, resource_name, source_id, metadata)
-                   VALUES ('qdrant_collection', %s, %s, %s),
-                          ('qdrant_alias', %s, %s, %s)
-                   ON CONFLICT (resource_type, resource_name) DO UPDATE SET
-                       source_id = EXCLUDED.source_id,
-                       metadata = EXCLUDED.metadata""",
-                (
-                    collection, ctx.source_id,
-                    Jsonb({"model": settings.embed_model}),
-                    qidx.alias_name(ctx.collection_key), ctx.source_id,
-                    Jsonb({"collection": collection}),
-                ),
-            )
+        _record_ownership(
+            ctx,
+            collection=collection,
+            alias=qidx.alias_name(ctx.collection_key),
+            model=settings.embed_model,
+        )
         ctx.conn.commit()
         ordered = [rows[doc_id] for doc_id in ids]
         texts = [

@@ -83,6 +83,7 @@ class TaskContext:
     mode: str = "run"                              # run | dry_run
     attempt: int = 0                               # run_tasks.attempts at claim
     worker: str = ""                               # lease_worker id, for logs
+    source_generation: int = 0                     # frozen Source generation
 
 
 @dataclass(frozen=True)

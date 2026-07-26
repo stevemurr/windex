@@ -16,6 +16,7 @@ from windex.api.canonical import (
 )
 from windex.db.canonical import init_canonical_db
 from windex.pipeline.events import append, list_events
+from windex.pipeline.indexing import _record_ownership
 from windex.pipeline import wire
 from windex.pipeline.ports import ExtractedDoc, PartitionRef
 from windex.pipeline.run_store import (
@@ -119,6 +120,79 @@ def test_core_store_payloads_match_typed_api_contracts(canonical_conn):
     index_task = next(
         task for task in run["tasks"] if task["module"] == "platform.index")
     assert index_task["preconditions"] == ["gateway"]
+
+
+def test_index_ownership_matches_canonical_generation_schema(canonical_conn):
+    source = _push_source(canonical_conn, "ownership")
+    run_id = submit_source(
+        canonical_conn, "ownership", inputs=_documents(), dedupe=False)
+    task = canonical_claim.claim_task(
+        canonical_conn,
+        worker="pytest/ownership",
+        lanes=["io"],
+        caps={"io": 1},
+        satisfied=[],
+        default_cap=1,
+    )
+    assert task is not None
+    assert task.run_id == run_id
+    assert task.source_generation == source["generation"]
+
+    from windex.worker.protocol import TaskContext
+
+    context = TaskContext(
+        run_id=run_id,
+        task_id=task.id,
+        pipeline_name=task.pipeline_name,
+        pipeline_version=task.pipeline_version,
+        pipeline_hash=task.pipeline_hash,
+        source_id=task.source_id,
+        source_name=task.source_name,
+        state_namespace=task.state_namespace,
+        search_name=task.search_name,
+        id_prefix=task.id_prefix,
+        collection_key=task.collection_key,
+        search_profile=task.search_profile,
+        node=task.node,
+        kind=task.kind,
+        module=task.module,
+        module_version=task.module_version,
+        module_digest=task.module_digest,
+        config=task.config,
+        spec=task.spec,
+        cursor=task.cursor,
+        conn=canonical_conn,
+        should_yield=lambda: False,
+        heartbeat=lambda _done, _failed, _stats: None,
+        source_generation=task.source_generation,
+    )
+    _record_ownership(
+        context,
+        collection="ownership-collection__model",
+        alias="ownership-collection_current",
+        model="model",
+    )
+    canonical_conn.commit()
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """SELECT generation, resource_type, resource_name,
+                      metadata->>'source_id'
+                 FROM storage_ownership ORDER BY resource_type""")
+        rows = cur.fetchall()
+    assert rows == [
+        (
+            source["generation"],
+            "qdrant_alias",
+            "ownership-collection_current",
+            str(source["id"]),
+        ),
+        (
+            source["generation"],
+            "qdrant_collection",
+            "ownership-collection__model",
+            str(source["id"]),
+        ),
+    ]
 
 
 def _generic_output_pipeline():

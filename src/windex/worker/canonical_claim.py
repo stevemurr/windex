@@ -58,6 +58,7 @@ class ClaimedTask:
     units_failed: int
     captures: tuple[str, ...] = ()
     worker: str = ""
+    source_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -211,6 +212,7 @@ def claim_task(
             max_attempts=max_attempts, lease_seconds=lease_seconds,
             units_done=units_done, units_failed=units_failed, worker=worker,
             captures=tuple(captures or ()),
+            source_generation=int(snapshot.get("generation") or 0),
         )
         if run_started:
             append(
