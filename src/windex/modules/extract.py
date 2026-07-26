@@ -4,16 +4,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+from io import BytesIO
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from types import SimpleNamespace
+from typing import BinaryIO
 from urllib.parse import urlsplit
 
 import feedparser
+import indexed_bzip2
 import pyarrow.parquet as pq
 
 from windex.config import Settings
 from windex.dateparse import parse_and_clamp
 from windex.modules.common import (
+    InputBatch,
     blob_bytes,
     finish_batch,
     pending_batches,
@@ -433,37 +440,266 @@ def parquet_rows(ctx: TaskContext) -> SliceResult:
 
 
 def cirrus_articles(ctx: TaskContext) -> SliceResult:
-    from windex.wiki.reader import iter_articles_from_bytes
+    from windex.wiki.reader import read_article_pair
 
-    def parse(blob: RawBlob) -> list[ExtractedDoc]:
-        data = blob_bytes(blob)
-        return [
-            ExtractedDoc(
-                ref=PartitionRef(
-                    store=blob.ref.store,
-                    key=blob.ref.key,
-                    id_scope=blob.ref.id_scope or "wiki:",
-                ),
-                suffix=article["id"].removeprefix("wiki:"),
-                url=article["url"],
-                title=article["title"],
-                text=article["text"],
-                published_at=_published(article.get("revision_ts")),
-                fields={
-                    "revision_ts": article.get("revision_ts"),
-                    "incoming_links": article.get("incoming_links", 0),
-                    "opening_text": article.get("opening_text", ""),
-                },
-                payload={
-                    "incoming_links": article.get("incoming_links", 0),
-                    "opening_text": article.get("opening_text", ""),
-                },
-                epoch=blob.epoch,
-            )
-            for article in iter_articles_from_bytes([data])
-        ]
+    chunk_rows = int(ctx.config.get("chunk_rows", 2_000))
+    if chunk_rows <= 0:
+        raise PermanentTaskError("cirrus.articles chunk_rows must be positive")
+    batches, more = pending_batches(ctx, limit=1)
+    if not batches:
+        _wiki_remove_checkpoint_dir(ctx)
+        ctx.conn.commit()
+        return SliceResult(exhausted=True)
+    batch = batches[0]
+    if len(batch.values) != 1:
+        raise PermanentTaskError("cirrus.articles requires one RawBlob per upstream task unit")
+    blob = require_type(batch.values[0], RawBlob, ctx.module)
 
-    return _run(ctx, parse, limit=1)
+    if blob.meta.get("missing") or blob.meta.get("not_modified"):
+        coverage = ExtractedDoc(
+            ref=blob.ref,
+            suffix="",
+            url=blob.uri,
+            text="",
+            fields={
+                "_coverage_only": True,
+                "_coverage_truncated": bool(blob.meta.get("_coverage_truncated")),
+                "_source_attrs": {
+                    key: blob.meta.get(key)
+                    for key in ("etag", "last_modified")
+                    if blob.meta.get(key) is not None
+                },
+            },
+            epoch=blob.epoch,
+        )
+        finish_batch(ctx, batch, outputs=[coverage])
+        ctx.conn.commit()
+        ctx.heartbeat(1, 0, {"last": batch.key, "documents": 1})
+        return SliceResult(
+            units_done=1,
+            exhausted=not more,
+            stats={"inputs": 1, "documents": 1, "wiki_complete": True},
+        )
+
+    if ctx.should_yield():
+        ctx.conn.commit()
+        return SliceResult(exhausted=False)
+
+    offset = _wiki_resume_offset(ctx, batch.key)
+    index_path = _wiki_index_path(ctx, batch.key)
+    source, identity = _wiki_source(blob)
+    block_offsets, decoded_size = _wiki_block_index(source, identity, index_path)
+    if ctx.should_yield():
+        ctx.conn.commit()
+        return SliceResult(
+            exhausted=False,
+            stats={"decoded_offset": offset, "index_ready": True},
+        )
+
+    documents: list[ExtractedDoc] = []
+    pairs = 0
+    complete = False
+    end_offset = offset
+    stream_source, _ = _wiki_source(blob)
+    with indexed_bzip2.open(
+        stream_source,
+        parallelization=2,
+    ) as stream:
+        stream.set_block_offsets(block_offsets)
+        stream.seek(offset)
+        while pairs < chunk_rows:
+            item = read_article_pair(stream)
+            if item is None:
+                complete = True
+                end_offset = stream.tell()
+                break
+            article, end_offset = item
+            pairs += 1
+            if article is not None:
+                documents.append(_wiki_document(blob, article))
+            if ctx.should_yield():
+                break
+        else:
+            complete = end_offset >= decoded_size
+
+    # A malformed-only chunk still advances its decoded-byte checkpoint. The
+    # child unit key remains distinct until the final chunk consumes the exact
+    # upstream lineage key that pending_batches() recognizes.
+    output_batch = (
+        batch
+        if complete
+        else InputBatch(
+            key=f"{batch.key}#bytes={offset}",
+            values=batch.values,
+        )
+    )
+    finish_batch(
+        ctx,
+        output_batch,
+        outputs=documents,
+        counts={
+            "wiki_decoded_offset": end_offset,
+            "wiki_start_offset": offset,
+            "wiki_pairs": pairs,
+            "wiki_documents": len(documents),
+            "wiki_complete": complete,
+        },
+    )
+    ctx.conn.commit()
+    if complete:
+        index_path.unlink(missing_ok=True)
+        _wiki_remove_checkpoint_dir(ctx)
+    ctx.heartbeat(
+        1,
+        0,
+        {
+            "last": batch.key,
+            "documents": len(documents),
+            "pairs": pairs,
+            "decoded_offset": end_offset,
+            "decoded_size": decoded_size,
+            "wiki_complete": complete,
+        },
+    )
+    return SliceResult(
+        units_done=1,
+        exhausted=complete and not more,
+        stats={
+            "inputs": 1,
+            "documents": len(documents),
+            "pairs": pairs,
+            "decoded_offset": end_offset,
+            "decoded_size": decoded_size,
+            "wiki_complete": complete,
+        },
+    )
+
+
+def _wiki_document(blob: RawBlob, article: dict) -> ExtractedDoc:
+    return ExtractedDoc(
+        ref=PartitionRef(
+            store=blob.ref.store,
+            key=blob.ref.key,
+            id_scope=blob.ref.id_scope or "wiki:",
+        ),
+        suffix=article["id"].removeprefix("wiki:"),
+        url=article["url"],
+        title=article["title"],
+        text=article["text"],
+        published_at=_published(article.get("revision_ts")),
+        fields={
+            "revision_ts": article.get("revision_ts"),
+            "incoming_links": article.get("incoming_links", 0),
+            "opening_text": article.get("opening_text", ""),
+        },
+        payload={
+            "incoming_links": article.get("incoming_links", 0),
+            "opening_text": article.get("opening_text", ""),
+        },
+        epoch=blob.epoch,
+    )
+
+
+def _wiki_resume_offset(ctx: TaskContext, batch_key: str) -> int:
+    prefix = f"{batch_key}#bytes="
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT coalesce(max((counts->>'wiki_decoded_offset')::bigint), 0)
+              FROM task_units
+             WHERE task_id = %s
+               AND counts ? 'wiki_decoded_offset'
+               AND left(unit_key, length(%s)) = %s
+            """,
+            (ctx.task_id, prefix, prefix),
+        )
+        return int(cur.fetchone()[0])
+
+
+def _wiki_checkpoint_dir(ctx: TaskContext) -> Path:
+    return (
+        Settings().staging_dir / "_pipeline_extract" / "wiki" / str(ctx.run_id) / str(ctx.task_id)
+    )
+
+
+def _wiki_remove_checkpoint_dir(ctx: TaskContext) -> None:
+    directory = _wiki_checkpoint_dir(ctx)
+    try:
+        directory.rmdir()
+        directory.parent.rmdir()
+    except OSError:
+        pass
+
+
+def _wiki_index_path(ctx: TaskContext, batch_key: str) -> Path:
+    digest = hashlib.sha256(batch_key.encode()).hexdigest()[:24]
+    return _wiki_checkpoint_dir(ctx) / f"{digest}.json"
+
+
+def _wiki_source(blob: RawBlob) -> tuple[str | BinaryIO, dict]:
+    if blob.body is not None and blob.path is not None:
+        raise PermanentTaskError("RawBlob has both body and path")
+    if blob.body is not None:
+        return BytesIO(blob.body), {
+            "kind": "body",
+            "size": len(blob.body),
+            "sha256": hashlib.sha256(blob.body).hexdigest(),
+        }
+    if blob.path is not None:
+        try:
+            stat = blob.path.stat()
+        except OSError as exc:
+            raise RuntimeError(f"cannot read fetched artifact {blob.path}: {exc}") from exc
+        return str(blob.path), {
+            "kind": "path",
+            "path": str(blob.path.resolve()),
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+    raise PermanentTaskError("RawBlob has neither body nor path")
+
+
+def _wiki_block_index(
+    source: str | BinaryIO,
+    identity: dict,
+    path: Path,
+) -> tuple[dict[int, int], int]:
+    try:
+        stored = json.loads(path.read_text())
+        if stored.get("identity") == identity:
+            offsets = {int(encoded): int(decoded) for encoded, decoded in stored["offsets"]}
+            if len(offsets) >= 2:
+                return offsets, max(offsets.values())
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+
+    with indexed_bzip2.open(source, parallelization=2) as stream:
+        offsets = {
+            int(encoded): int(decoded) for encoded, decoded in stream.block_offsets().items()
+        }
+    if len(offsets) < 2:
+        raise PermanentTaskError("cirrus.articles received an invalid bzip2 block index")
+    payload = {
+        "identity": identity,
+        "offsets": sorted(offsets.items()),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with NamedTemporaryFile(
+        dir=path.parent,
+        prefix=".wiki-index-",
+        mode="w",
+        encoding="utf-8",
+        delete=False,
+    ) as temporary:
+        temp_path = Path(temporary.name)
+        json.dump(payload, temporary, separators=(",", ":"))
+        temporary.flush()
+        os.fsync(temporary.fileno())
+    try:
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+    return offsets, max(offsets.values())
 
 
 def warc_datatrove(ctx: TaskContext) -> SliceResult:

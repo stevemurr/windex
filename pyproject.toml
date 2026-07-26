@@ -18,6 +18,11 @@ dependencies = [
     # 2026-07-19 on real data: 1.8x on GH Archive event parse, 5.8-9.4x on
     # API response dumps, 1.3x on wiki cirrus lines.
     "orjson>=3.9",
+    # CirrusSearch shards are single, multi-GB decoded bzip2 streams. The Wiki
+    # extractor persists this decoder's block map so every bounded worker slice
+    # can seek to its committed decoded-byte checkpoint instead of replaying the
+    # shard from byte zero.
+    "indexed-bzip2>=1.7,<2",
     # Cron expansion for canonical Source triggers. A base dependency, not an
     # extra: the Source scheduler is an always-on member of the deployment.
     # Hand-rolled calendar arithmetic is explicitly out.
