@@ -182,6 +182,8 @@ public struct SearchHit: Sendable, Hashable, Codable, Identifiable {
     // memory
     public let conversationID: String?
     public let chunkIndex: Int?
+    /// Inclusive message indexes covered by this memory chunk: `[start, end]`.
+    public let messageRange: [Int]?
 
     /// Custom sources: the opaque per-doc blob the pusher attached.
     public let extra: JSONValue?
@@ -207,6 +209,7 @@ public struct SearchHit: Sendable, Hashable, Codable, Identifiable {
         case targetURL = "target_url"
         case conversationID = "conversation_id"
         case chunkIndex = "chunk_index"
+        case messageRange = "message_range"
         case extra
     }
 
@@ -240,6 +243,7 @@ public struct SearchHit: Sendable, Hashable, Codable, Identifiable {
         targetURL = try c.decodeIfPresent(String.self, forKey: .targetURL)
         conversationID = try c.decodeIfPresent(String.self, forKey: .conversationID)
         chunkIndex = try c.decodeIfPresent(Int.self, forKey: .chunkIndex)
+        messageRange = try c.decodeIfPresent([Int].self, forKey: .messageRange)
         extra = try c.decodeIfPresent(JSONValue.self, forKey: .extra)
 
         let known = Set(CodingKeys.allCases.map(\.stringValue))
@@ -275,6 +279,7 @@ public struct SearchHit: Sendable, Hashable, Codable, Identifiable {
         try c.encodeIfPresent(targetURL, forKey: .targetURL)
         try c.encodeIfPresent(conversationID, forKey: .conversationID)
         try c.encodeIfPresent(chunkIndex, forKey: .chunkIndex)
+        try c.encodeIfPresent(messageRange, forKey: .messageRange)
         try c.encodeIfPresent(extra, forKey: .extra)
     }
 }
@@ -318,6 +323,22 @@ public struct Document: Sendable, Hashable, Codable, Identifiable {
 
     public func encode(to encoder: Encoder) throws {
         try JSONValue.object(fields).encode(to: encoder)
+    }
+
+    /// Inclusive message indexes for a memory chunk, when this document is
+    /// backed by memory parquet written with the epoch-2 range contract.
+    public var messageRange: [Int]? {
+        guard
+            let values = fields["message_range"]?.arrayValue,
+            values.count == 2,
+            let start = values[0].intValue,
+            let end = values[1].intValue,
+            start >= 0,
+            end >= start
+        else {
+            return nil
+        }
+        return [start, end]
     }
 
     public subscript(key: String) -> JSONValue? { fields[key] }

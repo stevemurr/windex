@@ -21,7 +21,7 @@ RESULT_FIELDS = (
     "language", "topics", "pushed_at", "lang", "incoming_links",
     "primary_category", "categories", "authors", "framework", "version",
     "attribution", "points", "num_comments", "author", "target_url", "root",
-    "kind", "conversation_id", "chunk_index", "extra",
+    "kind", "conversation_id", "chunk_index", "message_range", "extra",
 )
 
 _source_cache: dict[str, tuple[float, set[str]]] = {}
@@ -210,6 +210,7 @@ def get_document(settings: Settings, doc_id: str) -> dict | None:
         document["published_at"] = document["published_at"].isoformat()
     text_ref = document.pop("text_ref")
     document["text"] = None
+    document["message_range"] = None
     if text_ref:
         root = settings.staging_dir.resolve()
         path = (root / text_ref).resolve()
@@ -224,6 +225,10 @@ def get_document(settings: Settings, doc_id: str) -> dict | None:
             )
             if column is not None:
                 document["text"] = table.column(column)[0].as_py()
+            if "message_range" in table.column_names:
+                document["message_range"] = (
+                    table.column("message_range")[0].as_py()
+                )
     return document
 
 

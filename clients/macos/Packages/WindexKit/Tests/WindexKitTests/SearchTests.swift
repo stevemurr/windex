@@ -9,6 +9,9 @@ struct SearchTests {
         let server = try MockWindexServer()
         server.on("GET /v1/search") { _ in .json(Fixtures.search) }
         server.on("GET /v1/docs/gh:qdrant/qdrant") { _ in .json(Fixtures.document) }
+        server.on("GET /v1/docs/memory:b3f1c2d4/00004") { _ in
+            .json(Fixtures.memoryDocument)
+        }
         return server
     }
 
@@ -44,6 +47,7 @@ struct SearchTests {
         let memory = try #require(response.results.first { $0.source == "memory" })
         #expect(memory.chunkIndex == 4)
         #expect(memory.conversationID == "b3f1c2d4-0000-4000-8000-000000000001")
+        #expect(memory.messageRange == [12, 18])
     }
 
     /// Custom sources attach an opaque blob, and the server may add result fields
@@ -197,6 +201,19 @@ struct SearchTests {
         #expect(doc.title == "qdrant")
         #expect(doc["stars"]?.intValue == 21000)
         #expect(server.lastRequest?.path == "/v1/docs/gh:qdrant/qdrant")
+    }
+
+    @Test("memory document detail retains its message range")
+    func memoryDocumentRetainsMessageRange() async throws {
+        let server = try makeServer()
+        try await server.start()
+        defer { server.stop() }
+
+        let client = WindexClient(baseURL: server.baseURL)
+        let doc = try await client.document(id: "memory:b3f1c2d4/00004")
+
+        #expect(doc.messageRange == [12, 18])
+        #expect(doc["message_range"]?.arrayValue == [.int(12), .int(18)])
     }
 
     @Test("an unknown doc id maps to .notFound")

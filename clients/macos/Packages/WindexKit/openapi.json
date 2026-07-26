@@ -30,6 +30,23 @@
             ],
             "title": "Lang"
           },
+          "message_range": {
+            "anyOf": [
+              {
+                "items": {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Range"
+          },
           "published_at": {
             "anyOf": [
               {
@@ -451,6 +468,23 @@
               }
             ],
             "title": "Language"
+          },
+          "message_range": {
+            "anyOf": [
+              {
+                "items": {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Range"
           },
           "num_comments": {
             "anyOf": [

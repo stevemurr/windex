@@ -5,11 +5,11 @@ from __future__ import annotations
 import hmac
 import time
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from windex.api import prom, service
 from windex.api.canonical import data_router, router as canonical_router
@@ -119,6 +119,12 @@ class Health(_Strict):
     uptime_s: float
 
 
+MessageRange = Annotated[
+    list[Annotated[int, Field(ge=0)]],
+    Field(min_length=2, max_length=2),
+]
+
+
 class SearchResult(_Strict):
     id: str | None
     score: float
@@ -148,6 +154,7 @@ class SearchResult(_Strict):
     kind: str | None = None
     conversation_id: str | None = None
     chunk_index: int | None = None
+    message_range: MessageRange | None = None
     extra: dict[str, Any] | None = None
 
 
@@ -169,6 +176,7 @@ class DocumentResponse(_Strict):
     status: str
     duplicate_of: str | None
     text: str | None
+    message_range: MessageRange | None = None
 
 
 @admin.get("/v1/health", response_model=Health)

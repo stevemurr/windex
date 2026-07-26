@@ -71,10 +71,11 @@ enum Fixtures {
 
     /// A mixed-source result set. Deliberately heterogeneous: a github hit
     /// carries `stars`/`topics`, an arXiv hit `primary_category`/`authors`, an HN
-    /// hit `points`, a memory hit `conversation_id`/`chunk_index`, and a custom
-    /// source contributes both an `extra` blob and an unmodelled key — which is
-    /// exactly the shape `RESULT_FIELDS` produces and what `SearchHit` has to
-    /// survive without dropping anything.
+    /// hit `points`, a memory hit
+    /// `conversation_id`/`chunk_index`/`message_range`, and a custom source
+    /// contributes both an `extra` blob and an unmodelled key — exactly the
+    /// shape `RESULT_FIELDS` produces and what `SearchHit` has to survive
+    /// without dropping anything.
     static let search = """
         {
           "query": "vector search",
@@ -101,7 +102,7 @@ enum Fixtures {
             {"id": "memory:abc-123:4", "score": 0.6553, "source": "memory",
              "snippet": "we talked about qdrant aliases",
              "conversation_id": "b3f1c2d4-0000-4000-8000-000000000001",
-             "chunk_index": 4},
+             "chunk_index": 4, "message_range": [12, 18]},
             {"id": "custom:thing/1", "score": 0.5120, "source": "mydocs",
              "title": "Internal note", "extra": {"team": "infra", "pinned": true},
              "unmodelled_future_field": "should survive"}
@@ -120,6 +121,16 @@ enum Fixtures {
         {"id":"gh:qdrant/qdrant","source":"github","title":"qdrant",
          "url":"https://github.com/qdrant/qdrant","text":"Vector database engine.",
          "stars":21000,"topics":["vector-search"]}
+        """
+
+    static let memoryDocument = """
+        {"id":"memory:b3f1c2d4/00004","source":"memory",
+         "title":"Conversation excerpt",
+         "url":"llmchat://chat/b3f1c2d4?chunk=4",
+         "published_at":"2026-07-26T20:00:00+00:00","lang":null,
+         "status":"searchable","duplicate_of":null,
+         "text":"we talked about qdrant aliases",
+         "message_range":[12,18]}
         """
 
     // MARK: - SSE
