@@ -1,6 +1,7 @@
 # Source and Pipeline Implementation Plan
 
-Status: backend BE-0 through BE-9 implemented and verified; macOS/integration pending
+Status: backend BE-0 through BE-9 and macOS FE-0 through FE-7 implemented,
+verified, and merged; live epoch-2 cutover acceptance pending
 Date: 2026-07-25
 
 ## 1. Goal
