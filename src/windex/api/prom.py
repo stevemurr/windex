@@ -41,6 +41,48 @@ _scrape_cache: dict[tuple[str, str, str], tuple[float, bytes]] = {}
 _SCRAPE_TTL = 10.0
 
 
+def operational_snapshot(cur) -> dict[str, int | float]:
+    """Read the small worker/scheduler state shared by metrics and health.
+
+    Keep this to two aggregate queries.  The health route is intentionally
+    unauthenticated and polled during pairing, so it must not repeat the full
+    Prometheus corpus scan or turn each client into an observability load test.
+    """
+    cur.execute(
+        """SELECT
+               count(*) FILTER (WHERE state = 'ready'),
+               count(*) FILTER (WHERE state = 'running'),
+               count(DISTINCT lease_worker) FILTER (
+                   WHERE state = 'running'
+                     AND heartbeat_at >= now() - interval '60 seconds'),
+               count(*) FILTER (
+                   WHERE state = 'running'
+                     AND lease_expires_at < now())
+             FROM run_tasks
+            WHERE state IN ('ready', 'running')"""
+    )
+    ready, running, live_workers, expired = cur.fetchone()
+    cur.execute(
+        """SELECT count(*),
+                  coalesce(max(extract(
+                      epoch FROM now() - next_fire_at)), 0)
+             FROM source_triggers
+            WHERE enabled
+              AND trigger_type IN ('cron', 'interval')
+              AND next_fire_at IS NOT NULL
+              AND next_fire_at <= now()"""
+    )
+    due, lag = cur.fetchone()
+    return {
+        "ready_tasks": int(ready or 0),
+        "running_tasks": int(running or 0),
+        "live_workers": int(live_workers or 0),
+        "expired_leases": int(expired or 0),
+        "due_triggers": int(due or 0),
+        "scheduler_lag_s": max(0.0, float(lag or 0)),
+    }
+
+
 def _gateway_probe(endpoint: str) -> tuple[bool, float]:
     """Probe only the configured endpoint's TCP port; never spend GPU work."""
     now = time.monotonic()
@@ -349,23 +391,13 @@ class WindexCollector:
                         [source, lane], max(0.0, float(heartbeat)))
             families.extend((running_age, heartbeat_age))
 
-            cur.execute(
-                """SELECT
-                       count(*) FILTER (
-                           WHERE state = 'running'
-                             AND lease_expires_at < now()),
-                       count(*) FILTER (WHERE state = 'ready'),
-                       count(*) FILTER (
-                           WHERE state = 'running'
-                             AND heartbeat_at >= now() - interval '60 seconds')
-                     FROM run_tasks
-                    WHERE state IN ('ready', 'running')""")
-            expired, ready, recently_heartbeat = cur.fetchone()
+            operational = operational_snapshot(cur)
             expired_leases = GaugeMetricFamily(
                 "windex_worker_expired_leases",
                 "Running task leases already past their expiry.",
             )
-            expired_leases.add_metric([], float(expired or 0))
+            expired_leases.add_metric(
+                [], float(operational["expired_leases"]))
             claim_stalled = GaugeMetricFamily(
                 "windex_worker_claim_stalled",
                 "1 when a lease has expired, or ready work exists without a "
@@ -374,31 +406,29 @@ class WindexCollector:
             claim_stalled.add_metric(
                 [],
                 1.0
-                if expired or (ready and not recently_heartbeat)
+                if (
+                    operational["expired_leases"]
+                    or (
+                        operational["ready_tasks"]
+                        and not operational["live_workers"]
+                    )
+                )
                 else 0.0,
             )
             families.extend((expired_leases, claim_stalled))
 
-            cur.execute(
-                """SELECT count(*),
-                          coalesce(max(extract(
-                              epoch FROM now() - next_fire_at)), 0)
-                     FROM source_triggers
-                    WHERE enabled
-                      AND trigger_type IN ('cron', 'interval')
-                      AND next_fire_at IS NOT NULL
-                      AND next_fire_at <= now()""")
-            due, lag = cur.fetchone()
             scheduler_due = GaugeMetricFamily(
                 "windex_scheduler_due_triggers",
                 "Enabled cron/interval triggers currently past next_fire_at.",
             )
-            scheduler_due.add_metric([], float(due or 0))
+            scheduler_due.add_metric(
+                [], float(operational["due_triggers"]))
             scheduler_lag = GaugeMetricFamily(
                 "windex_scheduler_max_lag_seconds",
                 "Age of the most overdue enabled trigger, or zero.",
             )
-            scheduler_lag.add_metric([], max(0.0, float(lag or 0)))
+            scheduler_lag.add_metric(
+                [], float(operational["scheduler_lag_s"]))
             families.extend((scheduler_due, scheduler_lag))
 
             cur.execute(
@@ -535,5 +565,6 @@ __all__ = [
     "CONTENT_TYPE_LATEST",
     "PrometheusMiddleware",
     "WindexCollector",
+    "operational_snapshot",
     "render",
 ]

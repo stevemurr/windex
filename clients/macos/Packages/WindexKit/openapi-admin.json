@@ -352,6 +352,17 @@
             "title": "Contract Epoch",
             "type": "integer"
           },
+          "readiness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HealthReadiness"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Additive component readiness. Older epoch-2 clients may ignore it; dependency degradation never changes contract_epoch."
+          },
           "schema_generation": {
             "title": "Schema Generation",
             "type": "integer"
@@ -397,6 +408,48 @@
           "uptime_s"
         ],
         "title": "Health",
+        "type": "object"
+      },
+      "HealthReadiness": {
+        "additionalProperties": false,
+        "properties": {
+          "cache_ttl_s": {
+            "title": "Cache Ttl S",
+            "type": "number"
+          },
+          "checked_at": {
+            "title": "Checked At",
+            "type": "number"
+          },
+          "components": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ReadinessComponent"
+            },
+            "title": "Components",
+            "type": "object"
+          },
+          "ready": {
+            "description": "False only when at least one critical component is unhealthy.",
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "ready",
+          "checked_at",
+          "cache_ttl_s",
+          "components"
+        ],
+        "title": "HealthReadiness",
         "type": "object"
       },
       "KindDescriptor": {
@@ -1733,6 +1786,44 @@
           "queued"
         ],
         "title": "QueuedRunResponse",
+        "type": "object"
+      },
+      "ReadinessComponent": {
+        "additionalProperties": false,
+        "properties": {
+          "critical": {
+            "description": "True when this component is required for the serving plane to be ready; false for degradations with a useful fallback.",
+            "title": "Critical",
+            "type": "boolean"
+          },
+          "observations": {
+            "additionalProperties": true,
+            "description": "Bounded non-secret counts and booleans for this component.",
+            "title": "Observations",
+            "type": "object"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "degraded",
+              "unavailable",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "description": "Redacted operator-safe explanation; never contains exception text.",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "critical",
+          "summary"
+        ],
+        "title": "ReadinessComponent",
         "type": "object"
       },
       "RegistryResponse": {
