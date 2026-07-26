@@ -41,7 +41,7 @@ export function SearchTab() {
                      `${num(tm.total_ms ?? data.took_ms)} ms total`];
       if (tm.embed_query_ms) parts.push(`embed ${num(tm.embed_query_ms)} ms`);
       if (tm.search_ms != null) parts.push(`index ${num(tm.search_ms)} ms`);
-      if ((data.mode || "").includes("degraded")) parts.push("⚠ degraded to keyword");
+      if ((data.mode || "").includes("degraded")) parts.push(`⚠ ${data.mode}`);
       setTook(parts.join(" · "));
       setView({ kind: "results", items: data.results });
     } catch (err) {

@@ -15,6 +15,7 @@ from windex.api import prom, service
 from windex.api.canonical import data_router, router as canonical_router
 from windex.api.module_admin import router as module_admin_router
 from windex.config import get_settings
+from windex.index.search import SearchBackendUnavailable
 from windex.pipeline.contracts import CONTRACT_EPOCH
 
 STARTED_AT = time.time()
@@ -207,7 +208,17 @@ def admin_whoami() -> dict[str, Any]:
     }
 
 
-@app.get("/v1/search", response_model=SearchResponse)
+@app.get(
+    "/v1/search",
+    response_model=SearchResponse,
+    responses={
+        503: {
+            "description": (
+                "The selected Source index, or every eligible source=all "
+                "index, is temporarily unavailable.")
+        },
+    },
+)
 def search(
     q: str = Query(min_length=1),
     source: str = Query("all"),
@@ -230,13 +241,16 @@ def search(
         service.validate_source(settings, source)
     except ValueError:
         raise HTTPException(422, f"unknown source: {source}")
-    return service.run_search(
-        settings, q, source=source, limit=limit, mode=mode,
-        published_after=published_after, published_before=published_before,
-        min_stars=min_stars, language=language, category=category, outlet=outlet,
-        framework=framework, min_points=min_points, root=root, kind=kind,
-        conversation_id=conversation_id,
-    )
+    try:
+        return service.run_search(
+            settings, q, source=source, limit=limit, mode=mode,
+            published_after=published_after, published_before=published_before,
+            min_stars=min_stars, language=language, category=category, outlet=outlet,
+            framework=framework, min_points=min_points, root=root, kind=kind,
+            conversation_id=conversation_id,
+        )
+    except SearchBackendUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @app.get("/v1/docs/{doc_id:path}", response_model=DocumentResponse)

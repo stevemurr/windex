@@ -545,7 +545,7 @@ $("f").addEventListener("submit", async e => {
                    `${num(tm.total_ms ?? data.took_ms)} ms total`];
     if (tm.embed_query_ms) parts.push(`embed ${num(tm.embed_query_ms)} ms`);
     if (tm.search_ms != null) parts.push(`index ${num(tm.search_ms)} ms`);
-    if ((data.mode || "").includes("degraded")) parts.push("⚠ degraded to keyword");
+    if ((data.mode || "").includes("degraded")) parts.push(`⚠ ${data.mode}`);
     $("took").textContent = parts.join(" · ");
     $("results").innerHTML = data.results.map(res => `
       <article class="card">
