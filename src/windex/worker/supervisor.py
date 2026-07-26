@@ -33,6 +33,7 @@ import os
 import signal
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import psycopg
@@ -48,6 +49,15 @@ from windex.worker.protocol import Resolve
 from windex.worker.slot import slot_entry, worker_id
 
 log = logging.getLogger("windex.worker.supervisor")
+
+
+@dataclass(frozen=True)
+class RunningTask:
+    task_id: int
+    worker: str
+    yield_requested: bool = False
+    cancelled: bool = False
+    paused: bool = False
 
 
 class Pool:
@@ -75,6 +85,9 @@ class Pool:
         # slot index -> when we first asked it to retire. Retirement is retried
         # every tick and escalates, see _retire.
         self._retiring: dict[int, float] = {}
+        # index -> whether release_worker should charge an execution attempt.
+        # A true slice overrun is a task failure; an operator cancel/pause is not.
+        self._forced_exits: dict[int, bool] = {}
         self._prev_signals: dict[int, object] = {}
         if precond is not None:
             self._precond = precond
@@ -260,42 +273,130 @@ class Pool:
         }
 
     def _hung_watch(self, conn: psycopg.Connection) -> None:
-        """Notice a slot that has been asked to yield and hasn't.
+        """Enforce slice and control deadlines outside the slot process.
 
-        Disabled by default (``hung_grace_seconds = 0``) and that is a
-        considered choice, not an oversight. Some units are legitimately long:
-        one ccnews extract batch is minutes of datatrove inside a single unit,
-        and killing it would burn an attempt for behaving exactly as designed.
-        Enable it when a specific module is known to wedge; until then the
-        warning is the signal, and the hard RSS ceiling still covers the wedge
-        that actually threatens the box.
+        Module code may be stuck in Python, native code, or a C extension that
+        holds the GIL. The supervisor therefore cannot rely on should_yield(),
+        the heartbeat thread, or a timer inside the slot. Each slot atomically
+        publishes its current slice boundary and this process enforces it.
         """
         with conn.cursor() as cur:
-            cur.execute("SELECT id, lease_worker FROM run_tasks "
-                        "WHERE state = 'running' AND yield_requested "
-                        "AND lease_worker IS NOT NULL")
+            cur.execute(
+                """SELECT t.id, t.lease_worker, t.yield_requested,
+                          r.cancel_requested,
+                          coalesce(c.paused, false),
+                          t.module
+                     FROM run_tasks t
+                     JOIN runs r ON r.id = t.run_id
+                     LEFT JOIN source_control c ON c.source_id = t.source_id
+                    WHERE t.state = 'running'
+                      AND t.lease_worker IS NOT NULL"""
+            )
             rows = cur.fetchall()
         conn.commit()
-        pending = {w: tid for tid, w in rows}
-        now = time.monotonic()
+        pending = {
+            worker: RunningTask(
+                task_id=task_id,
+                worker=worker,
+                yield_requested=bool(yield_requested),
+                cancelled=bool(cancelled),
+                paused=bool(paused) and module != "platform.reset",
+            )
+            for task_id, worker, yield_requested, cancelled, paused, module in rows
+        }
+        self._enforce_hung_policy(pending)
+
+    def _enforce_hung_policy(
+        self,
+        pending: dict[str, RunningTask],
+        *,
+        now: float | None = None,
+    ) -> None:
+        """Apply the process-level deadline policy.
+
+        Kept separate from the query so focused tests can exercise real slice
+        transitions and signals without a database.
+        """
+        observed_at = time.monotonic() if now is None else now
         for status in self.slots.values():
-            task_id = pending.get(status.worker)
-            if task_id is None:
+            task = pending.get(status.worker)
+            active = ctrlfile.read_active_slice(
+                self.cfg.active_slice_path(status.index))
+            if (
+                task is None
+                or active is None
+                or active.pid != status.pid
+                or active.worker != status.worker
+                or active.task_id != task.task_id
+            ):
                 status.yield_since = None
                 status.task_id = None
+                status.slice_generation = None
                 continue
-            status.task_id = task_id
-            if status.yield_since is None:
-                status.yield_since = now
-                continue
-            waited = now - status.yield_since
+
+            # A cooperative yield followed by another claim may use the same
+            # task id and worker. Generation is the value that makes those two
+            # healthy slices distinct.
+            if (
+                status.task_id != task.task_id
+                or status.slice_generation != active.generation
+            ):
+                status.task_id = task.task_id
+                status.slice_generation = active.generation
+                status.yield_since = None
+
             grace = self.cfg.hung_grace_seconds
-            if waited > max(self.cfg.slice_seconds, 60.0):
-                log.warning("slot %s has not honoured a yield request for %.0fs "
-                            "(task %s)", status.worker, waited, task_id)
-            if grace and waited > grace:
-                log.error("slot %s wedged for %.0fs — killing", status.worker, waited)
-                self._signal(status.pid, signal.SIGKILL)
+            control_reason = (
+                "cancel" if task.cancelled
+                else "pause" if task.paused
+                else "yield" if task.yield_requested
+                else ""
+            )
+            if control_reason:
+                if status.yield_since is None:
+                    status.yield_since = observed_at
+                control_wait = observed_at - status.yield_since
+            else:
+                status.yield_since = None
+                control_wait = -1.0
+
+            slice_overrun = (
+                observed_at - active.started_at - self.cfg.slice_seconds)
+            control_expired = bool(control_reason) and control_wait >= grace
+            slice_expired = slice_overrun >= grace
+            if not control_expired and not slice_expired:
+                continue
+
+            # Cancellation and pause are operator lifecycle actions, not module
+            # failures. A killed task is released without spending an attempt.
+            # Priority/memory yield requests and deadline overruns still spend an
+            # attempt so a broken module cannot spin forever across fresh slots.
+            lifecycle_control = task.cancelled or task.paused
+            reason = (
+                f"ignored {control_reason} for {control_wait:.0f}s"
+                if control_expired
+                else f"exceeded slice by {slice_overrun:.0f}s"
+            )
+            self._force_exit(
+                status.index,
+                reason=reason,
+                penalize=not lifecycle_control,
+            )
+
+    def _force_exit(self, index: int, *, reason: str, penalize: bool) -> None:
+        if index in self._forced_exits:
+            return
+        status = self.slots.get(index)
+        if status is None:
+            return
+        self._forced_exits[index] = penalize
+        log.error(
+            "slot %s is non-cooperative (%s) — killing%s",
+            status.worker,
+            reason,
+            " and charging an attempt" if penalize else "",
+        )
+        self._signal(status.pid, signal.SIGKILL)
 
     # --- slots -------------------------------------------------------------
 
@@ -362,6 +463,7 @@ class Pool:
         for index in dead:
             retiring = index in self._retiring
             self._retiring.pop(index, None)
+            forced_penalty = self._forced_exits.pop(index, None)
             proc = self._procs.pop(index)
             status = self.slots.pop(index, None)
             code = proc.exitcode
@@ -370,7 +472,9 @@ class Pool:
             proc.join(timeout=1)
             if status is not None:
                 expected = self._stopping or retiring or code in (0, None)
-                workers.append((status.worker, not expected))
+                penalize = forced_penalty if forced_penalty is not None else not expected
+                workers.append((status.worker, penalize))
+                ctrlfile.clear_active_slice(self.cfg.active_slice_path(index))
         if release and workers:
             with db.connect(self.dsn) as conn:
                 for worker, penalize in workers:

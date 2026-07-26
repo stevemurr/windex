@@ -305,6 +305,14 @@ def worker(
     slots: int = typer.Option(0, help="Slot subprocesses (0 = configured default)"),
     lanes: str = typer.Option("", help="Comma-separated lanes (default: all)"),
     slice_seconds: float = typer.Option(0.0, help="Maximum seconds per task slice"),
+    heartbeat_seconds: float | None = typer.Option(
+        None, help="Lease heartbeat and control refresh interval"),
+    hung_grace_seconds: float | None = typer.Option(
+        None,
+        help="Grace after a slice/control deadline before killing its slot (0 = immediate)",
+    ),
+    stop_grace_seconds: float | None = typer.Option(
+        None, help="Graceful drain time before a deployment/shutdown kills a slot"),
     name: str = typer.Option("", help="Pool name used in lease worker IDs"),
     inline: bool = typer.Option(False, "--inline", help="Run one debug slot"),
 ) -> None:
@@ -322,6 +330,9 @@ def worker(
     cfg = config_from_env().with_overrides(
         slots=slots or None,
         slice_seconds=slice_seconds or None,
+        heartbeat_seconds=heartbeat_seconds,
+        hung_grace_seconds=hung_grace_seconds,
+        stop_grace_seconds=stop_grace_seconds,
         name=name or None,
         lanes=tuple(item.strip() for item in lanes.split(",") if item.strip())
         or None,

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -101,3 +102,72 @@ class SlotStatus:
     rss: int | None = None
     task_id: int | None = None
     yield_since: float | None = None   # when we first saw an unheeded yield request
+    slice_generation: int | None = None
+
+
+@dataclass(frozen=True)
+class ActiveSlice:
+    """Exact identity and start time of the call currently running in a slot."""
+
+    pid: int
+    worker: str
+    task_id: int
+    generation: int
+    started_at: float
+
+
+def write_active_slice(
+    path: Path,
+    *,
+    pid: int,
+    worker: str,
+    task_id: int,
+    generation: int,
+    started_at: float,
+) -> None:
+    """Publish a slice boundary atomically before invoking module code.
+
+    This record lives outside the child process so the supervisor can enforce a
+    deadline even when module code is stuck in a C extension and neither the
+    runner nor the heartbeat thread can acquire the GIL.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "pid": pid,
+        "worker": worker,
+        "task_id": task_id,
+        "generation": generation,
+        "started_at": started_at,
+    }
+    tmp = path.with_suffix(f".{pid}.tmp")
+    tmp.write_text(json.dumps(payload))
+    tmp.replace(path)
+
+
+def read_active_slice(path: Path) -> ActiveSlice | None:
+    try:
+        raw = json.loads(path.read_text())
+        active = ActiveSlice(
+            pid=int(raw["pid"]),
+            worker=str(raw["worker"]),
+            task_id=int(raw["task_id"]),
+            generation=int(raw["generation"]),
+            started_at=float(raw["started_at"]),
+        )
+    except (KeyError, OSError, TypeError, ValueError):
+        return None
+    if active.pid <= 0 or active.task_id <= 0 or active.generation <= 0:
+        return None
+    if not math.isfinite(active.started_at) or active.started_at <= 0 or not active.worker:
+        return None
+    return active
+
+
+def clear_active_slice(path: Path) -> None:
+    """Remove the safety record after the task lease has been released."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        # The pid/worker/generation checks make a stale record harmless. Task
+        # release and slot recycling must not fail merely because cleanup did.
+        log.warning("could not clear active-slice record %s: %s", path, exc)
