@@ -18,8 +18,8 @@ public struct SSEEvent: Sendable, Hashable {
         self.retry = retry
     }
 
-    /// Decode the `data` payload as JSON. windex's streams (`/v1/events`,
-    /// `/v1/crawl/runs/{id}/events`) send a JSON object per event.
+    /// Decode the `data` payload as JSON. windex's control and log streams send
+    /// a JSON object per event.
     public func decode<T: Decodable>(_ type: T.Type = T.self) throws -> T {
         do {
             return try JSONDecoder().decode(T.self, from: Data(data.utf8))

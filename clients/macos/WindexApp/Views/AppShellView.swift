@@ -5,6 +5,7 @@ import WindexUI
 struct AppShellView: View {
     @Bindable var model: AppModel
     @Environment(\.windexTheme) private var theme
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -38,6 +39,10 @@ struct AppShellView: View {
         .environment(session)
         .task(id: backend.profile) {
             await session.start()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await session.foreground() }
         }
     }
 

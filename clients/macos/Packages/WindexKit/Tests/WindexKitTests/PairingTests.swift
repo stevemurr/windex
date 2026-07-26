@@ -65,12 +65,29 @@ struct PairingTests {
             Issue.record("expected .paired, got \(result)")
             return
         }
-        #expect(who.ok)
-        #expect(who.scopes == ["admin"])
+        #expect(who["ok"] == .bool(true))
+        #expect(who["scopes"]?.stringArrayValue == ["admin"])
         let hasToken = await client.hasToken
         #expect(hasToken)
         #expect(server.requests.map(\.path)
             == ["/admin/v1/health", "/admin/v1/whoami"])
+    }
+
+    @Test("pairing refuses any contract epoch other than two")
+    func rejectsWrongEpoch() async throws {
+        let server = try MockWindexServer()
+        server.on("GET /admin/v1/health") { _ in
+            .json(Fixtures.health(authRequired: false)
+                .replacingOccurrences(of: "\"contract_epoch\":2",
+                                      with: "\"contract_epoch\":1"))
+        }
+        try await server.start()
+        defer { server.stop() }
+        let client = WindexClient(baseURL: server.baseURL)
+        await #expect(throws: WindexError.self) {
+            _ = try await client.pair(with: nil)
+        }
+        #expect(server.requests.count == 1)
     }
 
     /// A rejected token must not be left on the client, or the next admin call

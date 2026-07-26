@@ -59,8 +59,8 @@ struct OverviewView: View {
             StatusBadge(.running, word: "connecting")
         case .degraded:
             StatusBadge(.attention, word: "degraded")
-        case .idle, .awaitingContract:
-            StatusBadge(.attention, word: "awaiting canonical stream")
+        case .idle:
+            StatusBadge(.attention, word: "offline")
         }
     }
 
@@ -239,13 +239,13 @@ struct OverviewView: View {
 private extension SourceActivityState {
     var overviewStatus: Status {
         switch self {
-        case .idle:
+        case .idle, .succeeded:
             .healthy
         case .queued, .running:
             .running
         case .blocked, .paused:
             .attention
-        case .failed, .archived:
+        case .failed, .cancelled, .archived:
             .fault
         }
     }

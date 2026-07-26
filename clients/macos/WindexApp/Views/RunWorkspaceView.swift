@@ -65,7 +65,7 @@ struct RunsView: View {
             StatusBadge(.running, word: "live")
         case .degraded:
             StatusBadge(.attention, word: "reconciling")
-        case .idle, .awaitingContract, .connecting:
+        case .idle, .connecting:
             StatusBadge(.attention, word: "awaiting stream")
         }
     }
@@ -109,6 +109,9 @@ private struct CanonicalRunRow: View {
 
 private struct CanonicalRunDetail: View {
     let run: SourceRunSummary
+    @Environment(BackendSession.self) private var session
+    @State private var isMutating = false
+    @State private var actionError: String?
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -141,14 +144,33 @@ private struct CanonicalRunDetail: View {
                 }
 
                 HStack(spacing: .sm) {
-                    Button("Re-run") {}
-                        .disabled(true)
+                    Button("Re-run") {
+                        Task { await perform { try await session.rerunFrozen(runID: run.id) } }
+                    }
+                    .disabled(isMutating)
                         .help("Executes this historic frozen revision and configuration.")
                     if run.sourceName != nil {
-                        Button("Run latest") {}
-                            .disabled(true)
+                        Button("Run latest") {
+                            Task {
+                                await perform {
+                                    try await session.runLatest(source: run.sourceName!)
+                                }
+                            }
+                        }
+                        .disabled(isMutating)
                             .help("Executes the Source’s current revision and configuration.")
                     }
+                    if run.state == .queued || run.state == .running {
+                        Button("Cancel", role: .destructive) {
+                            Task { await perform { try await session.cancel(runID: run.id) } }
+                        }
+                        .disabled(isMutating)
+                    }
+                }
+                if let actionError {
+                    Text(actionError)
+                        .windexStyle(Typography.body)
+                        .foregroundStyle(theme.palette.rust)
                 }
 
                 if let error = run.error {
@@ -171,6 +193,17 @@ private struct CanonicalRunDetail: View {
         }
     }
 
+    private func perform(_ action: () async throws -> Void) async {
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            try await action()
+            actionError = nil
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
     private func dataRow(_ label: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: .md) {
             Text(label)
@@ -188,13 +221,13 @@ private struct CanonicalRunDetail: View {
 private extension SourceActivityState {
     var badgeStatus: Status {
         switch self {
-        case .idle:
+        case .idle, .succeeded:
             .healthy
         case .queued, .running:
             .running
         case .blocked, .paused:
             .attention
-        case .failed, .archived:
+        case .failed, .cancelled, .archived:
             .fault
         }
     }

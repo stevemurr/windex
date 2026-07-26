@@ -27,6 +27,8 @@ public enum SourceActivityState: String, Codable, Hashable, Sendable {
     case queued
     case running
     case blocked
+    case succeeded
+    case cancelled
     case paused
     case failed
     case archived

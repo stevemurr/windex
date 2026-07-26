@@ -172,19 +172,9 @@ public struct PipelineRegistry: Codable, Hashable, Sendable {
     }
 }
 
-// This adapter is isolated to WindexKit while the backend agent replaces the
-// open registry schema with typed generated DTOs. WindexApp only sees
-// PipelineRegistry and needs no changes when the generated wire shape lands.
 extension Registry {
     public func pipelineRegistry() throws -> PipelineRegistry {
-        struct PortPayload: Codable {
-            let title: String
-            let fields: [String]
-        }
-
-        let decodedPorts = try portTypes?.additionalProperties
-            .decode([String: PortPayload].self) ?? [:]
-        let ports = decodedPorts
+        let ports = portTypes.additionalProperties
             .map {
                 PipelinePortTypeDescriptor(
                     name: $0.key,
@@ -193,18 +183,40 @@ extension Registry {
             }
             .sorted { $0.name < $1.name }
 
-        let decodedKinds = try kinds?.map {
-            try $0.additionalProperties.decode(PipelineKindDescriptor.self)
-        } ?? []
-        let decodedModules = try modules?.map {
-            try $0.additionalProperties.decode(PipelineModuleDescriptor.self)
-        } ?? []
+        let decodedKinds = kinds.map {
+            PipelineKindDescriptor(
+                id: $0.id,
+                title: $0.title,
+                description: $0.help,
+                inputType: $0._in,
+                outputType: $0.out,
+                stateful: $0.stateful
+            )
+        }
+        let decodedModules = try modules.map {
+            PipelineModuleDescriptor(
+                id: $0.id,
+                kind: $0.kind,
+                version: $0.version,
+                digest: $0.implementationDigest,
+                title: $0.title,
+                summary: $0.summary,
+                stability: $0.stability,
+                capabilities: $0.capabilities,
+                contractRoles: $0.contractRoles,
+                allowedHosts: $0.allowedHosts,
+                lane: $0.lane,
+                preconditions: $0.preconditions,
+                fields: try $0.fields.map { try roundTrip($0, as: Param.self) },
+                implemented: $0.implemented
+            )
+        }
 
         return PipelineRegistry(
             version: registryVersion,
             portTypes: ports,
             kinds: decodedKinds,
             modules: decodedModules,
-            alwaysBeforeLoad: alwaysBeforeLoad ?? [])
+            alwaysBeforeLoad: alwaysBeforeLoad)
     }
 }

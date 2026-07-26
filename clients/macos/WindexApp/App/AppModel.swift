@@ -149,6 +149,7 @@ enum ConnectionFailure: Equatable, Sendable {
     case unauthorized
     case adminDisabled(String)
     case notWindex(service: String)
+    case incompatibleContract(String)
     case credential(String)
     case unexpected(String)
 
@@ -164,6 +165,8 @@ enum ConnectionFailure: Equatable, Sendable {
             "Admin access is disabled."
         case .notWindex:
             "That service is not windex."
+        case .incompatibleContract:
+            "This backend contract is incompatible."
         case .credential:
             "The credential could not be stored."
         case .unexpected:
@@ -174,7 +177,8 @@ enum ConnectionFailure: Equatable, Sendable {
     var guidance: String {
         switch self {
         case .invalidAddress(let message), .credential(let message),
-             .adminDisabled(let message), .unexpected(let message):
+             .adminDisabled(let message), .incompatibleContract(let message),
+             .unexpected(let message):
             message
         case .unreachable:
             "The backend may be down, or this Mac may be off the network."
@@ -217,12 +221,14 @@ final class AppModel {
             do {
                 switch try await client.pair(with: token) {
                 case .paired(let health, let identity):
+                    let scopes = identity["scopes"]?.stringArrayValue ?? []
                     return .paired(
                         PairingEvidence(
                             version: health.version,
-                            uptimeSeconds: Int(health.uptimeS ?? 0),
+                            uptimeSeconds: Int(health.uptimeS),
                             authRequired: health.needsToken,
-                            scopes: identity.scopes ?? []))
+                            scopes: scopes,
+                            contractEpoch: health.contractEpoch))
                 case .tokenRequired:
                     return .tokenRequired
                 case .notWindex(let service):
@@ -423,6 +429,11 @@ final class AppModel {
             return .adminDisabled(message)
         case .http(_, let message), .notFound(let message):
             return .unexpected(message)
+        case .conflict(let message), .preconditionFailed(let message),
+             .preconditionRequired(let message):
+            return .unexpected(message)
+        case .unsupportedContractEpoch:
+            return .incompatibleContract(windexError.localizedDescription)
         case .validation(_, let message):
             return .unexpected(message)
         case .decoding:

@@ -142,8 +142,8 @@ public enum NodeConfigValue: Hashable, Sendable, Codable {
     case secret(String)
 
     public init(wireValue value: JSONValue) {
-        if let string = value.stringValue, string.hasPrefix("@config.") {
-            self = .parameter(String(string.dropFirst("@config.".count)))
+        if let string = value.stringValue, string.hasPrefix("@param.") {
+            self = .parameter(String(string.dropFirst("@param.".count)))
         } else if let string = value.stringValue, string.hasPrefix("@secret.") {
             self = .secret(String(string.dropFirst("@secret.".count)))
         } else {
@@ -165,7 +165,7 @@ public enum NodeConfigValue: Hashable, Sendable, Codable {
         case .literal(let value):
             value
         case .parameter(let key):
-            .string("@config.\(key)")
+            .string("@param.\(key)")
         case .secret(let name):
             .string("@secret.\(name)")
         }
@@ -219,6 +219,103 @@ public struct PipelineSpec: Codable, Hashable, Sendable {
         self.parameters = parameters
         self.flows = flows
         self.refreshFlows = refreshFlows
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schema, parameters, state, flows, refresh
+    }
+
+    private struct BoundaryWire: Codable {
+        let id: String
+        let type: String
+    }
+
+    private struct NodeWire: Codable {
+        let kind: String
+        let uses: String
+        let with: [String: NodeConfigValue]
+    }
+
+    private struct EndpointWire: Codable {
+        let input: String?
+        let node: String?
+        let output: String?
+
+        init(_ reference: PipelinePortReference) {
+            input = reference.owner == .input ? reference.id : nil
+            node = reference.owner == .node ? reference.id : nil
+            output = reference.owner == .output ? reference.id : nil
+        }
+
+        var reference: PipelinePortReference {
+            if let input { return .input(input) }
+            if let output { return .output(output) }
+            return .node(node ?? "")
+        }
+    }
+
+    private struct EdgeWire: Codable {
+        let from: EndpointWire
+        let to: EndpointWire
+    }
+
+    private struct FlowWire: Codable {
+        let inputs: [BoundaryWire]
+        let outputs: [BoundaryWire]
+        let nodes: [String: NodeWire]
+        let edges: [EdgeWire]
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schema = try container.decode(String.self, forKey: .schema)
+        title = ""
+        description = ""
+        parameters = try container.decodeIfPresent([Param].self, forKey: .parameters) ?? []
+        refreshFlows = try container.decodeIfPresent([String].self, forKey: .refresh) ?? []
+        let wireFlows = try container.decode([String: FlowWire].self, forKey: .flows)
+        flows = wireFlows.map { name, flow in
+            PipelineFlow(
+                name: name,
+                inputs: flow.inputs.map {
+                    PipelineBoundary(name: $0.id, type: $0.type)
+                },
+                outputs: flow.outputs.map {
+                    PipelineBoundary(name: $0.id, type: $0.type)
+                },
+                nodes: flow.nodes.map { id, node in
+                    PipelineNode(id: id, kind: node.kind, module: node.uses,
+                                 config: node.with)
+                }.sorted { $0.id < $1.id },
+                edges: flow.edges.map {
+                    PipelineEdge(from: $0.from.reference, to: $0.to.reference)
+                }
+            )
+        }.sorted { $0.name < $1.name }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schema, forKey: .schema)
+        try container.encode(parameters, forKey: .parameters)
+        try container.encode([String: JSONValue](), forKey: .state)
+        let wireFlows = Dictionary(uniqueKeysWithValues: flows.map { flow in
+            (
+                flow.name,
+                FlowWire(
+                    inputs: flow.inputs.map { .init(id: $0.name, type: $0.type) },
+                    outputs: flow.outputs.map { .init(id: $0.name, type: $0.type) },
+                    nodes: Dictionary(uniqueKeysWithValues: flow.nodes.map {
+                        ($0.id, NodeWire(kind: $0.kind, uses: $0.module, with: $0.config))
+                    }),
+                    edges: flow.edges.map {
+                        EdgeWire(from: EndpointWire($0.from), to: EndpointWire($0.to))
+                    }
+                )
+            )
+        })
+        try container.encode(wireFlows, forKey: .flows)
+        try container.encode(refreshFlows, forKey: .refresh)
     }
 }
 

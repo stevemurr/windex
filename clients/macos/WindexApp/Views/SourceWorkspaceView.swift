@@ -140,6 +140,9 @@ private struct SourceDeploymentDetail: View {
     let openPipeline: () -> Void
     @State private var section: Section = .overview
     @State private var form: FormModel?
+    @State private var isSaving = false
+    @State private var saveError: String?
+    @Environment(BackendSession.self) private var session
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -235,9 +238,25 @@ private struct SourceDeploymentDetail: View {
             }
             if let form, !form.params.isEmpty {
                 SchemaForm(model: form)
-                Button("Save settings") {}
-                    .disabled(true)
-                    .help("Canonical Source configuration writes are awaiting the backend API.")
+                Button(isSaving ? "Saving…" : "Save settings") {
+                    Task {
+                        isSaving = true
+                        defer { isSaving = false }
+                        do {
+                            try await session.saveSourceSettings(
+                                source.name, values: form.changes)
+                            saveError = nil
+                        } catch {
+                            saveError = error.localizedDescription
+                        }
+                    }
+                }
+                .disabled(isSaving || !form.canSubmit)
+                if let saveError {
+                    Text(saveError)
+                        .windexStyle(Typography.body)
+                        .foregroundStyle(theme.palette.rust)
+                }
             } else {
                 Text("This Source has no configurable parameters.")
                     .windexStyle(Typography.body)
@@ -330,13 +349,13 @@ private struct SourceDeploymentDetail: View {
 private extension SourceActivityState {
     var badgeStatus: Status {
         switch self {
-        case .idle:
+        case .idle, .succeeded:
             .healthy
         case .queued, .running:
             .running
         case .blocked, .paused:
             .attention
-        case .failed, .archived:
+        case .failed, .cancelled, .archived:
             .fault
         }
     }

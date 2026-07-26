@@ -13,12 +13,20 @@ final class SettingsModel {
     private(set) var errorMessage: String?
     private(set) var confirmation: String?
     var selectedScope: String?
+    private var etags: [String: String] = [:]
 
-    func load(client: WindexClient, appModel: AppModel) async {
+    func load(client: WindexClient, session: BackendSession, appModel: AppModel) async {
         isLoading = scopes.isEmpty
         do {
-            let response = try await client.allSettings()
-            scopes = response.scopes.sorted {
+            let global = try await client.globalSettings()
+            var loaded = [try global.settingsScope()]
+            etags[global.scope] = global.etag
+            for source in session.sources.sources {
+                let response = try await client.sourceSettings(source.name)
+                loaded.append(try response.settingsScope())
+                etags[source.name] = response.etag
+            }
+            scopes = loaded.sorted {
                 if $0.isGlobal != $1.isGlobal { return $0.isGlobal }
                 return $0.scope.localizedStandardCompare($1.scope) == .orderedAscending
             }
@@ -51,11 +59,21 @@ final class SettingsModel {
         isSaving = true
         confirmation = nil
         do {
-            let updated = try await client.patchSettings(
-                scope: selectedScope,
-                values: form.changes)
-            replace(updated)
-            form.apply(updated.fields)
+            guard let etag = etags[selectedScope] else {
+                throw WindexError.preconditionRequired(message: "Settings ETag is unavailable.")
+            }
+            let updated: SettingsScope
+            if selectedScope == SettingsScope.global {
+                let response = try await client.patchGlobalSettings(form.changes, etag: etag)
+                etags[selectedScope] = response.etag
+                updated = try response.settingsScope()
+            } else {
+                let response = try await client.patchSourceSettings(
+                    selectedScope, values: form.changes, etag: etag)
+                etags[selectedScope] = response.etag
+                updated = try response.settingsScope()
+            }
+            replace(updated); form.apply(updated.fields)
             confirmation = "Settings saved."
             isSaving = false
             errorMessage = nil
@@ -75,9 +93,20 @@ final class SettingsModel {
         isSaving = true
         confirmation = nil
         do {
-            let updated = try await client.revertSetting(
-                scope: selectedScope,
-                key: key)
+            guard let etag = etags[selectedScope] else {
+                throw WindexError.preconditionRequired(message: "Settings ETag is unavailable.")
+            }
+            let updated: SettingsScope
+            if selectedScope == SettingsScope.global {
+                let response = try await client.deleteGlobalSetting(key, etag: etag)
+                etags[selectedScope] = response.etag
+                updated = try response.settingsScope()
+            } else {
+                let response = try await client.deleteSourceSetting(
+                    selectedScope, key: key, etag: etag)
+                etags[selectedScope] = response.etag
+                updated = try response.settingsScope()
+            }
             replace(updated)
             form = FormModel(scope: updated)
             confirmation = "\(key) now follows its environment or default value."
@@ -112,6 +141,7 @@ struct SettingsView: View {
     @Bindable var appModel: AppModel
     let client: WindexClient
     let backend: ConnectedBackend
+    @Environment(BackendSession.self) private var session
 
     @State private var model = SettingsModel()
     @Environment(\.windexTheme) private var theme
@@ -142,7 +172,7 @@ struct SettingsView: View {
         }
         .background(theme.palette.ink)
         .task(id: backend.profile) {
-            await model.load(client: client, appModel: appModel)
+            await model.load(client: client, session: session, appModel: appModel)
         }
     }
 
@@ -153,7 +183,7 @@ struct SettingsView: View {
                 Spacer()
                 Button {
                     Task {
-                        await model.load(client: client, appModel: appModel)
+                        await model.load(client: client, session: session, appModel: appModel)
                     }
                 } label: {
                     Image(systemName: "arrow.clockwise")
@@ -245,7 +275,7 @@ struct SettingsView: View {
             }
         } else if let error = model.errorMessage {
             SourceFailureView(message: error) {
-                Task { await model.load(client: client, appModel: appModel) }
+                Task { await model.load(client: client, session: session, appModel: appModel) }
             }
         } else {
             ProgressView()

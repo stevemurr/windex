@@ -83,6 +83,12 @@ final class PipelineComposerModel {
         validate(registry)
     }
 
+    func apply(_ layout: PipelineFlowLayout?) {
+        positions = layout?.positions.mapValues {
+            CGPoint(x: $0.x, y: $0.y)
+        } ?? [:]
+    }
+
     func restore(
         _ recovered: RecoveredPipelineDraft,
         registry: PipelineRegistry?
@@ -489,6 +495,7 @@ final class PipelineComposerModel {
 struct PipelinesView: View {
     @Environment(BackendSession.self) private var session
     @State private var model = PipelineComposerModel()
+    @State private var isSaving = false
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -574,6 +581,11 @@ struct PipelinesView: View {
                           let revision = session.pipelines.revisions[name]?.first
                     else { return }
                     model.open(revision, registry: session.registry.registry)
+                    model.apply(session.pipelines.layout(
+                        pipeline: name,
+                        version: revision.reference.version,
+                        flow: model.selectedFlow
+                    ))
                 }
             }
         }
@@ -631,6 +643,13 @@ struct PipelinesView: View {
                 .frame(maxWidth: 160)
                 .onChange(of: model.selectedFlow) {
                     model.select(nil, registry: session.registry.registry)
+                    guard let draft = model.draft,
+                          let version = model.baseVersion else { return }
+                    model.apply(session.pipelines.layout(
+                        pipeline: draft.name,
+                        version: version,
+                        flow: model.selectedFlow
+                    ))
                 }
 
                 Menu {
@@ -706,13 +725,48 @@ struct PipelinesView: View {
                 StatusBadge(.fault, word: "\(model.errorCount) errors")
             }
 
-            Button("Save revision") {}
-                .disabled(true)
-                .help("Revision writes will enable when the canonical Pipeline API lands.")
+            Button(isSaving ? "Saving…" : "Save revision") {
+                Task { await saveRevision() }
+            }
+            .disabled(isSaving || model.errorCount > 0 || model.draft == nil)
         }
         .padding(.horizontal, .md)
         .frame(height: 48)
         .background(theme.palette.plate)
+    }
+
+    private func saveRevision() async {
+        guard let draft = model.draft else { return }
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            let savedPositions = model.positions
+            let parent = model.baseVersion.flatMap { version in
+                session.pipelines.revisions[draft.name]?.first {
+                    $0.reference.version == version
+                }
+            }
+            try await session.publish(draft: draft, parent: parent)
+            guard let published = session.pipelines.revisions[draft.name]?.first else { return }
+            model.open(published, registry: session.registry.registry)
+            if var layout = session.pipelines.layout(
+                pipeline: draft.name,
+                version: published.reference.version,
+                flow: model.selectedFlow
+            ) {
+                layout.positions = savedPositions.mapValues {
+                    PipelineNodePosition(x: $0.x, y: $0.y)
+                }
+                try await session.saveLayout(layout)
+                model.apply(session.pipelines.layout(
+                    pipeline: draft.name,
+                    version: published.reference.version,
+                    flow: model.selectedFlow
+                ))
+            }
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
     }
 
     private var rightPane: some View {

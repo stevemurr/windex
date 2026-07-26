@@ -96,7 +96,7 @@ struct LogsView: View {
                 StatusBadge(.attention, word: "degraded")
             case .connecting:
                 StatusBadge(.running, word: "connecting")
-            case .idle, .awaitingContract:
+            case .idle:
                 StatusBadge(.attention, word: "awaiting stream")
             }
         }
