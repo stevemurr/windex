@@ -228,6 +228,115 @@ def test_warc_lane_allows_two_tasks_for_one_source(canonical_conn):
     }
 
 
+def test_expected_worker_exit_requeues_without_spending_attempt(canonical_conn):
+    run_id = submit_source(canonical_conn, "arxiv", dedupe=False)
+    task = canonical_claim.claim_task(
+        canonical_conn,
+        worker="pytest/drained",
+        lanes=["io"],
+        caps={"io": 1},
+        satisfied=[],
+        default_cap=1,
+    )
+    assert task is not None
+    assert task.run_id == run_id
+
+    assert canonical_claim.release_worker(
+        canonical_conn, task.worker) == [task.id]
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """SELECT state, attempts, lease_worker, lease_expires_at
+                 FROM run_tasks WHERE id = %s""",
+            (task.id,),
+        )
+        assert cur.fetchone() == ("ready", 0, None, None)
+
+    claimed_again = canonical_claim.claim_task(
+        canonical_conn,
+        worker="pytest/crashed",
+        lanes=["io"],
+        caps={"io": 1},
+        satisfied=[],
+        default_cap=1,
+    )
+    assert claimed_again is not None
+    assert claimed_again.id == task.id
+    assert canonical_claim.release_worker(
+        canonical_conn, claimed_again.worker, penalize=True) == [task.id]
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            "SELECT state, attempts, error FROM run_tasks WHERE id = %s",
+            (task.id,),
+        )
+        assert cur.fetchone() == (
+            "ready",
+            1,
+            "worker exited unexpectedly",
+        )
+
+
+def test_expired_lease_uses_separate_recovery_budget(canonical_conn):
+    run_id = submit_source(canonical_conn, "arxiv", dedupe=False)
+    task = canonical_claim.claim_task(
+        canonical_conn,
+        worker="pytest/lost",
+        lanes=["io"],
+        caps={"io": 1},
+        satisfied=[],
+        default_cap=1,
+    )
+    assert task is not None
+    assert task.run_id == run_id
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE run_tasks SET lease_expires_at = now() - interval '1 second' "
+            "WHERE id = %s",
+            (task.id,),
+        )
+    canonical_conn.commit()
+
+    assert canonical_claim.reclaim_expired(canonical_conn) == [{
+        "id": task.id,
+        "run_id": run_id,
+        "source_id": task.source_id,
+        "node": task.node,
+        "state": "ready",
+    }]
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """SELECT state, attempts, stats->>'lease_recoveries', error
+                 FROM run_tasks WHERE id = %s""",
+            (task.id,),
+        )
+        assert cur.fetchone() == ("ready", 0, "1", None)
+
+        cur.execute(
+            """UPDATE run_tasks
+                  SET state = 'running', lease_worker = 'pytest/lost-again',
+                      lease_expires_at = now() - interval '1 second',
+                      stats = jsonb_set(
+                          stats, '{lease_recoveries}', to_jsonb(%s::integer))
+                WHERE id = %s""",
+            (canonical_claim.MAX_LEASE_RECOVERIES - 1, task.id),
+        )
+    canonical_conn.commit()
+
+    recovered = canonical_claim.reclaim_expired(canonical_conn)
+    assert recovered[0]["state"] == "failed"
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """SELECT state, attempts, stats->>'lease_recoveries', error
+                 FROM run_tasks WHERE id = %s""",
+            (task.id,),
+        )
+        assert cur.fetchone() == (
+            "failed",
+            0,
+            str(canonical_claim.MAX_LEASE_RECOVERIES),
+            "lease recovery limit exceeded",
+        )
+
+
 def test_discovery_order_accepts_canonical_text_partition_keys(canonical_conn):
     run_id = submit_source(canonical_conn, "arxiv", dedupe=False)
     task = canonical_claim.claim_task(

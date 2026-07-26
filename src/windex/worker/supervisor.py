@@ -358,8 +358,9 @@ class Pool:
         dead = [i for i, p in self._procs.items() if not p.is_alive()]
         if not dead:
             return 0
-        workers = []
+        workers: list[tuple[str, bool]] = []
         for index in dead:
+            retiring = index in self._retiring
             self._retiring.pop(index, None)
             proc = self._procs.pop(index)
             status = self.slots.pop(index, None)
@@ -368,14 +369,21 @@ class Pool:
                 log.warning("slot %d (pid %s) exited with %s", index, proc.pid, code)
             proc.join(timeout=1)
             if status is not None:
-                workers.append(status.worker)
+                expected = self._stopping or retiring or code in (0, None)
+                workers.append((status.worker, not expected))
         if release and workers:
             with db.connect(self.dsn) as conn:
-                for worker in workers:
-                    freed = C.release_worker(conn, worker)
+                for worker, penalize in workers:
+                    freed = C.release_worker(
+                        conn, worker, penalize=penalize)
                     if freed:
-                        log.info("released %d task(s) held by dead slot %s",
-                                 len(freed), worker)
+                        level = log.warning if penalize else log.info
+                        level(
+                            "released %d task(s) held by %s slot %s",
+                            len(freed),
+                            "failed" if penalize else "drained",
+                            worker,
+                        )
         return len(dead)
 
     def _ensure_slots(self) -> int:

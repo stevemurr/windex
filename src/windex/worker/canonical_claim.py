@@ -19,6 +19,7 @@ from windex.worker.protocol import LeaseLost
 
 TERMINAL = ("succeeded", "failed", "skipped", "cancelled")
 _LOCK_NAMESPACE = "windex.worker.lane:"
+MAX_LEASE_RECOVERIES = 20
 _MAX_INLINE_OUTPUT = 1024 * 1024
 
 
@@ -391,7 +392,7 @@ def release(
                       units_total = CASE WHEN %(total)s >= 0
                                          THEN %(total)s ELSE units_total END,
                       cursor = coalesce(%(cursor)s::jsonb, cursor),
-                      stats = stats || %(stats)s::jsonb,
+                      stats = (stats - 'lease_recoveries') || %(stats)s::jsonb,
                       finished_at = CASE WHEN %(terminal)s THEN now() ELSE NULL END,
                       error = %(error)s
                 WHERE id = %(id)s AND lease_worker = %(worker)s""",
@@ -454,25 +455,59 @@ def release(
 
 
 def reclaim_expired(conn: psycopg.Connection) -> list[dict[str, Any]]:
+    """Recover infrastructure lease loss without spending execution attempts.
+
+    ``attempts`` belongs to failures reported by a runner. A worker restart or
+    host interruption says nothing about whether the task is bad, so it has a
+    separate, deliberately high recovery ceiling.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """UPDATE run_tasks SET
-                      state = CASE WHEN attempts + 1 >= max_attempts
+                      state = CASE
+                                   WHEN coalesce(
+                                       (stats->>'lease_recoveries')::integer, 0
+                                   ) + 1 >= %s
                                    THEN 'failed' ELSE 'ready' END,
-                      attempts = attempts + 1, lease_worker = NULL,
+                      stats = jsonb_set(
+                          stats, '{lease_recoveries}',
+                          to_jsonb(coalesce(
+                              (stats->>'lease_recoveries')::integer, 0
+                          ) + 1),
+                          true),
+                      lease_worker = NULL,
                       lease_expires_at = NULL, yield_requested = false,
-                      error = CASE WHEN attempts + 1 >= max_attempts
-                                   THEN 'lease expired' ELSE error END
+                      finished_at = CASE
+                          WHEN coalesce(
+                              (stats->>'lease_recoveries')::integer, 0
+                          ) + 1 >= %s
+                          THEN now() ELSE NULL END,
+                      error = CASE
+                          WHEN coalesce(
+                              (stats->>'lease_recoveries')::integer, 0
+                          ) + 1 >= %s
+                          THEN 'lease recovery limit exceeded' ELSE error END
                 WHERE state = 'running' AND lease_expires_at < now()
-                RETURNING id, run_id, source_id, source_name, node, module, state""")
+                RETURNING id, run_id, source_id, source_name, node, module,
+                          state, (stats->>'lease_recoveries')::integer""",
+            (
+                MAX_LEASE_RECOVERIES,
+                MAX_LEASE_RECOVERIES,
+                MAX_LEASE_RECOVERIES,
+            ),
+        )
         rows = cur.fetchall()
-        for task_id, run_id, source_id, source_name, node, module, state in rows:
+        for (
+            task_id, run_id, source_id, source_name, node, module, state,
+            recoveries,
+        ) in rows:
             _charge(cur, source_id, 0)
             append(
                 cur, component="worker", event="task.lease_expired",
                 level="error" if state == "failed" else "warn",
                 source_name=source_name, run_id=run_id, task_id=task_id,
-                node=node, module=module, data={"state": state},
+                node=node, module=module,
+                data={"state": state, "lease_recoveries": recoveries},
             )
     conn.commit()
     return [{
@@ -630,16 +665,43 @@ def reconcile_in_flight(conn: psycopg.Connection) -> int:
     return count
 
 
-def release_worker(conn: psycopg.Connection, worker: str) -> int:
+def release_worker(
+    conn: psycopg.Connection,
+    worker: str,
+    *,
+    penalize: bool = False,
+) -> list[int]:
+    """Immediately recover tasks held by an exited slot.
+
+    Expected drains/recycles do not consume retry attempts. An unexpected slot
+    crash does, preserving the bounded retry behavior for OOMs and process
+    faults that are plausibly caused by the task itself.
+    """
     with conn.cursor() as cur:
         cur.execute(
-            """UPDATE run_tasks SET lease_expires_at = now()
-                WHERE lease_worker = %s AND state = 'running'""",
-            (worker,),
+            """UPDATE run_tasks SET
+                      state = CASE
+                          WHEN %s AND attempts + 1 >= max_attempts
+                          THEN 'failed' ELSE 'ready' END,
+                      attempts = attempts + CASE WHEN %s THEN 1 ELSE 0 END,
+                      lease_worker = NULL, lease_expires_at = NULL,
+                      yield_requested = false,
+                      finished_at = CASE
+                          WHEN %s AND attempts + 1 >= max_attempts
+                          THEN now() ELSE NULL END,
+                      error = CASE
+                          WHEN %s THEN 'worker exited unexpectedly'
+                          ELSE error END
+                WHERE lease_worker = %s AND state = 'running'
+                RETURNING id, source_id""",
+            (penalize, penalize, penalize, penalize, worker),
         )
-        count = cur.rowcount or 0
+        rows = cur.fetchall()
+        for _task_id, source_id in rows:
+            _charge(cur, source_id, 0)
+        released = [row[0] for row in rows]
     conn.commit()
-    return count
+    return released
 
 
 __all__ = [
