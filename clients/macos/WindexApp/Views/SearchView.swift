@@ -10,7 +10,7 @@ final class SearchModel {
     var source: SearchSource = .all
     var mode: SearchMode = .hybrid
     var limit = 20
-    private(set) var sources = SearchSource.builtIn
+    private(set) var sources: [SearchSource] = [.all]
     private(set) var response: SearchResponse?
     private(set) var document: WindexKit.Document?
     private(set) var isSearching = false
@@ -18,17 +18,16 @@ final class SearchModel {
     private(set) var errorMessage: String?
     var selectedID: String?
 
-    func loadSources(client: WindexClient, appModel: AppModel) async {
-        do {
-            let recipes = try await client.recipes()
-            var names = SearchSource.builtIn.map(\.rawValue)
-            for recipe in recipes {
-                let value = recipe.searchName ?? recipe.source ?? recipe.name
-                if !names.contains(value) { names.append(value) }
-            }
-            sources = names.map { SearchSource($0) }
-        } catch {
-            appModel.handleClientError(error)
+    func useSources(_ deployments: [SourceDeployment]) {
+        guard !deployments.isEmpty else { return }
+        var names: [String] = []
+        if deployments.contains(where: \.search.includeInAll) {
+            names.append(SearchSource.all.rawValue)
+        }
+        names.append(contentsOf: deployments.map(\.search.searchName))
+        sources = Array(Set(names)).sorted().map { SearchSource($0) }
+        if !sources.contains(source), let first = sources.first {
+            source = first
         }
     }
 
@@ -80,6 +79,7 @@ struct SearchView: View {
     let backend: ConnectedBackend
 
     @State private var model = SearchModel()
+    @Environment(BackendSession.self) private var session
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -117,8 +117,8 @@ struct SearchView: View {
             }
         }
         .background(theme.palette.ink)
-        .task(id: backend.profile) {
-            await model.loadSources(client: client, appModel: appModel)
+        .task(id: session.sources.sources) {
+            model.useSources(session.sources.sources)
         }
     }
 

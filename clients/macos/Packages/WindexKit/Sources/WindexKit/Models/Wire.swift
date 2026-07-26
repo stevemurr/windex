@@ -66,20 +66,9 @@ public typealias CrawlStart = Components.Schemas.CrawlStart
 public typealias CrawlQueued = Components.Schemas.CrawlQueued
 public typealias CrawlCancelled = Components.Schemas.CrawlCancelled
 
-// MARK: - Recipes
+// MARK: - Module registry
 
 public typealias Registry = Components.Schemas.Registry
-public typealias Recipe = Components.Schemas.Recipe
-public typealias RecipeList = Components.Schemas.RecipeList
-public typealias RecipeTasks = Components.Schemas.RecipeTasks
-public typealias MarketplaceEntry = Components.Schemas.MarketplaceEntry
-public typealias MarketplaceList = Components.Schemas.MarketplaceList
-public typealias ValidationReport = Components.Schemas.ValidationReport
-public typealias RecipeRun = Components.Schemas.RecipeRun
-public typealias RecipeRunTask = Components.Schemas.RecipeRunTask
-public typealias RecipeRunList = Components.Schemas.RecipeRunList
-public typealias RecipeRunQueued = Components.Schemas.RecipeRunQueued
-public typealias RecipeRunEvents = Components.Schemas.RecipeRunEvents
 
 // MARK: - Bridging the generator's untyped containers
 
@@ -151,16 +140,5 @@ extension JobInfo {
     /// round-trip.
     public func parameters() throws -> [String: Param] {
         try params?.additionalProperties.decode([String: Param].self) ?? [:]
-    }
-}
-
-extension RecipeRun {
-    /// The frozen runtime config used to create this run.
-    public func parameters() throws -> [String: JSONValue] {
-        try params?.additionalProperties.decode([String: JSONValue].self) ?? [:]
-    }
-
-    public var isTerminal: Bool {
-        ["succeeded", "failed", "cancelled"].contains(state)
     }
 }

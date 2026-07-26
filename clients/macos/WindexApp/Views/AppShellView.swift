@@ -9,8 +9,9 @@ struct AppShellView: View {
     var body: some View {
         Group {
             if let backend = model.connectedBackend,
-               let client = model.client {
-                connectedShell(client: client, backend: backend)
+               let client = model.client,
+               let session = model.session {
+                connectedShell(client: client, backend: backend, session: session)
             } else {
                 PairingView(model: model)
             }
@@ -25,7 +26,8 @@ struct AppShellView: View {
 
     private func connectedShell(
         client: WindexClient,
-        backend: ConnectedBackend
+        backend: ConnectedBackend,
+        session: BackendSession
     ) -> some View {
         NavigationSplitView {
             sidebar(backend: backend)
@@ -33,6 +35,10 @@ struct AppShellView: View {
             destination(client: client, backend: backend)
         }
         .navigationSplitViewStyle(.balanced)
+        .environment(session)
+        .task(id: backend.profile) {
+            await session.start()
+        }
     }
 
     private func sidebar(backend: ConnectedBackend) -> some View {
@@ -60,19 +66,17 @@ struct AppShellView: View {
         case .overview:
             OverviewView(appModel: model, client: client, backend: backend)
         case .sources:
-            SourcesView(appModel: model, client: client, backend: backend)
+            SourcesView(appModel: model)
+        case .pipelines:
+            PipelinesView()
         case .settings:
             SettingsView(appModel: model, client: client, backend: backend)
         case .logs:
-            LogsView(appModel: model, client: client, backend: backend)
+            LogsView()
         case .search:
             SearchView(appModel: model, client: client, backend: backend)
         case .runs:
-            RunsView(appModel: model, client: client, backend: backend)
-        case .recipes:
-            RecipesView(appModel: model, client: client, backend: backend)
-        case .marketplace:
-            MarketplaceView(appModel: model, client: client, backend: backend)
+            RunsView()
         }
     }
 }

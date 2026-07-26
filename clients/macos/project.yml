@@ -1,5 +1,6 @@
 name: Windex
 options:
+  xcodeVersion: "27.0"
   bundleIdPrefix: com.stevemurr
   deploymentTarget:
     macOS: "14.0"

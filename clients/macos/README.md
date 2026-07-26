@@ -43,7 +43,7 @@ and the app should accept an `https://` base URL unchanged.
 
 ## The endpoint that matters most
 
-`GET /admin/v1/registry` — port types, node kinds, and every module's config
+`GET /admin/v1/registry` — Port types, Node kinds, and every Module's config
 schema. The graph editor renders its palette, its connection rules and every node
 inspector from this one document. **Hardcode no vocabulary.** It is ETag'd; cache
 it to Application Support and revalidate with `If-None-Match`, which is what keeps
@@ -54,9 +54,16 @@ an output type connects to an input type iff they are equal. Read it off `kinds[
 
 ## Status
 
-The app target and both packages are implemented. Pairing, Keychain storage,
-overview, sources, runs/Galley, settings, logs, search, the recipe editor, and the
-marketplace are wired to typed contracts.
+The app target and both packages are implemented. The current breaking-cutover
+track replaces Recipes with two explicit concepts:
+
+- A **Pipeline** is a reusable graph with immutable, content-addressed revisions.
+- A **Source** deploys one pinned Pipeline revision with origin, configuration,
+  durable state, and searchable corpus identity.
+
+Navigation is Overview, Sources, Pipelines, Runs, Logs, Search, and Settings.
+The Pipeline composer is registry-driven; Sources never become a second graph
+editor. Marketplace work is intentionally deferred.
 
 ```sh
 cd Packages/WindexKit && swift test

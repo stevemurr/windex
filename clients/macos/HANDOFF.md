@@ -1,6 +1,9 @@
 # windex macOS — handoff
 
-The original Phase 7 branch has been merged. Do not switch back to it.
+The original Phase 7 branch is merged. The Source/Pipeline redesign is a
+coordinated breaking cutover; backward compatibility and database migration are
+explicitly out of scope. The canonical plan is
+`../../docs/source-pipeline-implementation-plan.md`.
 
 Read `DESIGN.md` (visual language) and `Packages/WindexKit/README.md` (how the
 client is built) before writing code. This file is just state + next steps.
@@ -9,7 +12,7 @@ client is built) before writing code. This file is just state + next steps.
 
 ## Done
 
-`Packages/WindexKit` — transport + models. **91 tests, all passing.**
+`Packages/WindexKit` — transport + models. **93 tests, all passing.**
 
 | | |
 |---|---|
@@ -19,9 +22,9 @@ client is built) before writing code. This file is just state + next steps.
 | SSE | dashboard stream (6 typed feeds) + per-crawl-run stream |
 | Registry | ETag-cached to Application Support, falls back when backend blinks |
 | DTOs | 50 schema components generated from `openapi-admin.json`, checked in |
-| Recipes | create/update/validate, placement and executor availability |
-| Runs | list/detail/create/cancel, event pages and typed SSE |
-| Marketplace | list/install/update with schema-driven install config |
+| Pipelines | typed revision, Flow, Node, Edge, layout, registry, draft, and local validation models |
+| Sources | typed deployment, configuration, corpus counts, and Run summary models |
+| Runs | canonical frozen-revision summaries; transport awaits the new contract |
 
 `Packages/WindexKit/Sources/WindexUI` — design system + form renderer.
 
@@ -35,8 +38,38 @@ client is built) before writing code. This file is just state + next steps.
 cd Packages/WindexKit && swift test    # nothing needs to be running
 ```
 
-The app target, Keychain, fonts, planned screens, app icon, CI, and
-archive/notarization tooling are implemented. The Xcode app suite has 12 tests.
+The app target, Keychain, fonts, app icon, CI, and archive/notarization tooling
+are implemented. The active frontend branch adds a shared `BackendSession`,
+canonical navigation, Source deployment workspace, shared Overview/Run
+projections, a bounded structured Console, and an interactive Pipeline composer:
+registry palette, draggable Nodes, Flow and boundary editing, typed connections,
+undo/redo, local validation, auto-layout, draft recovery, and schema-driven Node
+configuration.
+
+The handwritten app and client surface no longer exposes Recipe or Marketplace.
+The checked-in generated OpenAPI artifacts still reflect the old server and must
+not be hand-edited; the backend cutover will replace them. Pipeline/Source
+transport, publication, layout synchronization, live shared state, Run actions,
+and Console history/streaming deliberately wait on the backend's canonical
+contract epoch and regenerated OpenAPI surfaces.
+
+### Backend integration checklist
+
+Once the canonical server contract lands:
+
+1. Regenerate both OpenAPI artifacts and replace the temporary registry adapter
+   with typed Kind, Port, Module, capability, role, and field DTO projections.
+2. Decode and enforce `contract_epoch` during pairing before constructing
+   `BackendSession` or enabling mutation.
+3. Add Pipeline/Source/Run/Overview/Event transports and make each shared store
+   reconcile on connect, foreground, reconnect, and mutation responses.
+4. Wire revision publication, independent layout ETags, Source create/upgrade/
+   settings/lifecycle, and distinct Re-run/Run latest actions.
+5. Connect the low-volume control SSE to Overview, Sources, Pipelines, and Runs;
+   connect cursor-based history and the independently bounded high-volume stream
+   to Console.
+6. Add the local Python/Bash Module editor only after the secure scoped Module
+   lifecycle API is available.
 
 ---
 
@@ -54,15 +87,14 @@ archive/notarization tooling are implemented. The Xcode app suite has 12 tests.
 
 ## Things that will bite
 
-**Execution availability is not validation.** Recipes can be installed, opened,
-edited, and type-checked while their modules are migrating. Registry responses
-report `implemented`, placement reports `executable`, and run creation returns
-409 rather than queueing a graph that cannot execute.
+**Execution availability is not validation.** Pipeline drafts can be opened,
+edited, and type-checked while their Modules are migrating. Registry responses
+report `implemented`; publication and Run creation must refuse unavailable or
+unapproved implementations.
 
-**The marketplace is server-owned and inert.** Bundled entries and
-`WINDEX_RECIPE_CATALOG_DIRS` contain YAML only. The admin API never fetches a
-caller-chosen URL. Local edits block upstream updates instead of being
-overwritten.
+**Source and Pipeline are intentionally different.** Editing a Pipeline publishes
+a new immutable revision and never silently upgrades a Source. Editing Source
+configuration affects future Runs only.
 
 **`/admin` is a mount prefix.** `openapi-admin.json` paths are mount-relative:
 its `/v1/health` is `/admin/v1/health` on the wire. `WindexSurface.admin` adds
