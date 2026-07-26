@@ -57,7 +57,9 @@ document.
   are rendered from the selected revision schema; secret-reference controls use
   configured secret names. Memory ingestion is a partitioned full replacement:
   one conversation per request, conversation-prefixed document IDs and fields,
-  with deletion represented by an empty full push for that partition.
+  with deletion represented by an empty full push for that partition. Per-Source
+  Module status shows frozen revision availability and disables new Runs and
+  ingestion while routing stranded Sources into the upgrade workflow.
 - Upgrade can target any eligible Source-capable revision and renders retained,
   defaulted, removed, clamped, missing, installation-stage, and state-impact
   details plus structured validation issues. The server-returned candidate is
@@ -71,7 +73,8 @@ document.
   history and routes every row to shared Run detail.
 - Canonical Overview projection: corpus totals, searchable/vector counts,
   indexed-last-hour, Run pressure, active/recent Runs, worker lanes and blocked
-  preconditions, Source schedules, recent documents, and service health.
+  preconditions, Source schedules, recent documents, service health, Module-lock
+  health, and detailed stranded-Source diagnostics.
 - Global and Source settings with independent ETags. One session-owned
   configuration draft per Source is shared by Source detail and global
   Settings, including unsaved edits. A 412 presents the operator’s edits beside

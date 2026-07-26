@@ -17,6 +17,22 @@ enum LiveConnectionState: Equatable, Sendable {
     case degraded(String)
 }
 
+struct SourceModuleUnavailableError: LocalizedError, Equatable, Sendable {
+    let source: String
+    let pipelineVersion: Int
+    let latestPipelineVersion: Int
+    let unavailableModules: [String]
+
+    var errorDescription: String? {
+        let modules = unavailableModules.isEmpty
+            ? "one or more frozen Modules"
+            : unavailableModules.joined(separator: ", ")
+        return "Pipeline upgrade required for \(source). "
+            + "Pipeline v\(pipelineVersion) cannot use \(modules); "
+            + "preview and confirm an upgrade to v\(latestPipelineVersion)."
+    }
+}
+
 @MainActor
 @Observable
 final class RegistryStore {
@@ -89,6 +105,9 @@ final class SourceStore {
     private(set) var settingsETags: [String: String] = [:]
     private(set) var triggers: [String: [SourceTriggerWire]] = [:]
     private(set) var configuredSecrets: [String] = []
+    private(set) var moduleHealth: ModuleHealthWire?
+    private(set) var moduleStatuses: [String: SourceModuleStatusWire] = [:]
+    private(set) var moduleDiagnosticsState: StoreLoadState = .idle
     private(set) var state: StoreLoadState = .idle
     func loading() { state = .loading }
     func fail(_ error: Error) { state = .failed(error.localizedDescription) }
@@ -108,6 +127,25 @@ final class SourceStore {
     }
     func setConfiguredSecrets(_ values: [String]) {
         configuredSecrets = values.sorted()
+    }
+    func loadingModuleDiagnostics() {
+        moduleDiagnosticsState = .loading
+    }
+    func failModuleDiagnostics(_ error: Error) {
+        moduleDiagnosticsState = .failed(error.localizedDescription)
+    }
+    func replaceModuleDiagnostics(
+        health: ModuleHealthWire,
+        statuses: [SourceModuleStatusWire]
+    ) {
+        moduleHealth = health
+        moduleStatuses = Dictionary(
+            uniqueKeysWithValues: statuses.map { ($0.source, $0) }
+        )
+        moduleDiagnosticsState = .loaded
+    }
+    func moduleStatus(for source: String) -> SourceModuleStatusWire? {
+        moduleStatuses[source]
     }
     func apply(_ source: SourceDeployment) {
         if let index = sources.firstIndex(where: { $0.name == source.name }) {
@@ -371,6 +409,7 @@ final class BackendSession {
         await loadRuns()
         await loadSources()
         await loadPipelines()
+        await loadModuleDiagnostics()
         await loadLogs()
         await loadOverview()
     }
@@ -510,6 +549,25 @@ final class BackendSession {
             logs.setFacets(facets.facets())
         } catch {
             logs.setConnection(.degraded(error.localizedDescription))
+        }
+    }
+
+    private func loadModuleDiagnostics() async {
+        sources.loadingModuleDiagnostics()
+        do {
+            let health = try await client.moduleHealth()
+            var statuses: [SourceModuleStatusWire] = []
+            for source in sources.sources {
+                statuses.append(
+                    try await client.sourceModuleStatus(source.name)
+                )
+            }
+            sources.replaceModuleDiagnostics(
+                health: health,
+                statuses: statuses
+            )
+        } catch {
+            sources.failModuleDiagnostics(error)
         }
     }
 
@@ -852,6 +910,7 @@ final class BackendSession {
         partition: String? = nil,
         idempotencyKey: String
     ) async throws {
+        try requireSourceAvailable(source)
         _ = try await client.ingest(
             documents,
             into: source,
@@ -931,8 +990,20 @@ final class BackendSession {
     }
 
     func runLatest(source: String) async throws {
+        try requireSourceAvailable(source)
         _ = try await client.runLatestSource(source)
         await refreshAll()
+    }
+
+    private func requireSourceAvailable(_ name: String) throws {
+        guard let status = sources.moduleStatus(for: name),
+              !status.available else { return }
+        throw SourceModuleUnavailableError(
+            source: name,
+            pipelineVersion: status.pipelineVersion,
+            latestPipelineVersion: status.latestPipelineVersion,
+            unavailableModules: status.unavailableModules
+        )
     }
 }
 

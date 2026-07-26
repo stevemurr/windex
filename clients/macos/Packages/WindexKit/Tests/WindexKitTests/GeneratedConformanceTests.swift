@@ -51,9 +51,17 @@ struct GeneratedConformanceTests {
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/WindexKit/Generated/Types.swift")
         let source = try String(contentsOf: url, encoding: .utf8)
-        for name in ["PipelineModel", "SourceModel", "RunModel"] {
+        for name in [
+            "PipelineModel",
+            "SourceModel",
+            "RunModel",
+            "ModuleHealthResponse",
+            "SourceModuleStatus",
+        ] {
             #expect(source.contains("struct \(name)"))
         }
+        #expect(source.contains("func moduleHealth("))
+        #expect(source.contains("func sourceModuleStatus("))
         #expect(!source.contains("struct Recipe"))
         #expect(!source.contains("Marketplace"))
     }

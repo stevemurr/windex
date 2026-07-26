@@ -19,6 +19,8 @@ struct OverviewView: View {
                 if let snapshot = session.overview.snapshot {
                     headline(snapshot)
                     Hairline()
+                    moduleLockHealth(snapshot)
+                    Hairline()
                     runPressure(snapshot)
                     if !snapshot.workerLanes.isEmpty {
                         Hairline()
@@ -134,6 +136,91 @@ struct OverviewView: View {
         }
     }
 
+    private func moduleLockHealth(
+        _ snapshot: OverviewSnapshot
+    ) -> some View {
+        VStack(alignment: .leading, spacing: .sm) {
+            HStack {
+                StyledText("Pipeline Module locks", Typography.eyebrow)
+                    .foregroundStyle(theme.palette.graphite)
+                Spacer()
+                StatusBadge(
+                    snapshot.moduleLocks.badgeStatus,
+                    word: snapshot.moduleLocks.rawValue
+                )
+            }
+
+            switch snapshot.moduleLocks {
+            case .ok:
+                Text("Every enabled Source is pinned to Modules available on this deployment.")
+                    .windexStyle(Typography.body)
+                    .foregroundStyle(theme.palette.graphite)
+            case .degraded:
+                Text(
+                    "\(snapshot.strandedSources.count) Source(s) require a Pipeline "
+                        + "upgrade before they can start new work."
+                )
+                .windexStyle(Typography.body)
+                moduleHealthRows
+            case .error:
+                Text(
+                    "Module-lock health could not be evaluated. Inspect the Source "
+                        + "diagnostics before starting new work."
+                )
+                .windexStyle(Typography.body)
+                .foregroundStyle(theme.palette.rust)
+            }
+
+            if case .failed(let message) = session.sources.moduleDiagnosticsState {
+                Text(message)
+                    .windexStyle(Typography.dataSM)
+                    .foregroundStyle(theme.palette.rust)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var moduleHealthRows: some View {
+        if let health = session.sources.moduleHealth {
+            ForEach(health.sources, id: \.source) { status in
+                HStack(alignment: .firstTextBaseline, spacing: .sm) {
+                    Button(status.source) {
+                        appModel.openSource(status.source)
+                    }
+                    .buttonStyle(.plain)
+                    .windexStyle(Typography.label)
+                    .frame(width: 150, alignment: .leading)
+                    Text(
+                        "revision \(status.pipelineRevisionId) · "
+                            + "v\(status.pipelineVersion) → v\(status.latestPipelineVersion)"
+                    )
+                    .windexStyle(Typography.dataSM)
+                    .frame(width: 220, alignment: .leading)
+                    Text(
+                        status.unavailableModules.isEmpty
+                            ? "Unavailable Modules not reported"
+                            : status.unavailableModules.joined(separator: ", ")
+                    )
+                    .windexStyle(Typography.dataSM)
+                    .foregroundStyle(theme.palette.rust)
+                    Spacer()
+                }
+            }
+        } else {
+            ForEach(
+                session.overview.snapshot?.strandedSources ?? [],
+                id: \.self
+            ) { source in
+                Button(source) {
+                    appModel.openSource(source)
+                }
+                .buttonStyle(.plain)
+                .windexStyle(Typography.label)
+            }
+        }
+    }
+
     private func workerPressure(_ snapshot: OverviewSnapshot) -> some View {
         VStack(alignment: .leading, spacing: .sm) {
             StyledText("Worker lanes", Typography.eyebrow)
@@ -196,10 +283,18 @@ struct OverviewView: View {
                         .frame(width: 90, alignment: .trailing)
                     Text(row.nextTrigger.map(shortTimestamp) ?? "—")
                         .frame(width: 180, alignment: .leading)
-                    StatusBadge(
-                        row.source.status.activity.overviewStatus,
-                        word: row.source.status.activity.rawValue
-                    )
+                    Group {
+                        if session.overview.snapshot?.strandedSources.contains(
+                            row.source.name
+                        ) == true {
+                            StatusBadge(.fault, word: "upgrade required")
+                        } else {
+                            StatusBadge(
+                                row.source.status.activity.overviewStatus,
+                                word: row.source.status.activity.rawValue
+                            )
+                        }
+                    }
                     .frame(width: 105, alignment: .leading)
                     Spacer()
                 }
@@ -368,6 +463,19 @@ private extension SourceActivityState {
         case .blocked, .paused:
             .attention
         case .failed, .cancelled, .archived:
+            .fault
+        }
+    }
+}
+
+private extension OverviewModuleLockHealth {
+    var badgeStatus: Status {
+        switch self {
+        case .ok:
+            .healthy
+        case .degraded:
+            .attention
+        case .error:
             .fault
         }
     }

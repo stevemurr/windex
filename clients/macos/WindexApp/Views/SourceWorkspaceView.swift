@@ -148,7 +148,10 @@ struct SourcesView: View {
                 emptyCatalogue
             } else {
                 List(session.sources.sources, selection: $selectedName) { source in
-                    SourceDeploymentRow(source: source)
+                    SourceDeploymentRow(
+                        source: source,
+                        moduleStatus: session.sources.moduleStatus(for: source.name)
+                    )
                         .tag(source.name)
                 }
                 .listStyle(.sidebar)
@@ -517,6 +520,7 @@ private enum SourceFormError: LocalizedError {
 
 private struct SourceDeploymentRow: View {
     let source: SourceDeployment
+    let moduleStatus: SourceModuleStatusWire?
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -525,10 +529,14 @@ private struct SourceDeploymentRow: View {
                 Text(source.displayTitle)
                     .windexStyle(Typography.label)
                 Spacer(minLength: 0)
-                StatusBadge(
-                    source.status.activity.badgeStatus,
-                    word: source.status.activity.rawValue
-                )
+                if moduleStatus?.available == false {
+                    StatusBadge(.fault, word: "upgrade required")
+                } else {
+                    StatusBadge(
+                        source.status.activity.badgeStatus,
+                        word: source.status.activity.rawValue
+                    )
+                }
             }
             Text("\(source.pipeline.pipeline) @ \(source.pipeline.version)")
                 .windexStyle(Typography.dataSM)
@@ -597,9 +605,33 @@ private struct SourceDeploymentDetail: View {
         let server: SettingsScope
     }
 
+    private var moduleStatus: SourceModuleStatusWire? {
+        session.sources.moduleStatus(for: source.name)
+    }
+
+    private var sourceUnavailable: Bool {
+        moduleStatus?.available == false
+    }
+
+    private var preferredUpgradeVersion: Int? {
+        guard moduleStatus?.upgradeRequired == true else { return nil }
+        return moduleStatus?.latestPipelineVersion
+    }
+
+    private var hasEligibleUpgrade: Bool {
+        session.pipelines.revisions[source.pipeline.pipeline]?.contains(where: {
+            $0.reference.version != source.pipeline.version
+                && $0.sourceCapability.capable
+        }) == true
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let moduleStatus, !moduleStatus.available {
+                Hairline()
+                upgradeRequiredBanner(moduleStatus)
+            }
             Picker("Source section", selection: $section) {
                 ForEach(Section.allCases) {
                     Text($0.title).tag($0)
@@ -640,7 +672,10 @@ private struct SourceDeploymentDetail: View {
                 .frame(minWidth: 480, minHeight: 360)
         }
         .sheet(isPresented: $isUpgrading) {
-            SourceUpgradeSheet(source: source)
+            SourceUpgradeSheet(
+                source: source,
+                preferredTargetVersion: preferredUpgradeVersion
+            )
                 .frame(minWidth: 680, minHeight: 720)
         }
         .confirmationDialog(
@@ -681,7 +716,12 @@ private struct SourceDeploymentDetail: View {
                         await perform { try await session.runLatest(source: source.name) }
                     }
                 }
-                .help("Runs the Source’s current revision and configuration.")
+                .disabled(sourceUnavailable || isMutating)
+                .help(
+                    sourceUnavailable
+                        ? "Pipeline upgrade required before this Source can start a new Run."
+                        : "Runs the Source’s current revision and configuration."
+                )
                 Button(source.paused ? "Resume" : "Pause") {
                     Task {
                         await perform {
@@ -711,10 +751,7 @@ private struct SourceDeploymentDetail: View {
                         ? "Disable automatic and manual Source execution without pausing active work."
                         : "Enable Source execution. Pause state remains independent."
                 )
-                if session.pipelines.revisions[source.pipeline.pipeline]?.contains(where: {
-                    $0.reference.version != source.pipeline.version
-                        && $0.sourceCapability.capable
-                }) == true {
+                if hasEligibleUpgrade {
                     Button("Upgrade Source…") {
                         isUpgrading = true
                     }
@@ -746,6 +783,42 @@ private struct SourceDeploymentDetail: View {
         }
         .padding(.horizontal, .xl)
         .padding(.top, .lg)
+    }
+
+    private func upgradeRequiredBanner(
+        _ status: SourceModuleStatusWire
+    ) -> some View {
+        VStack(alignment: .leading, spacing: .sm) {
+            HStack {
+                StatusBadge(.fault, word: "Pipeline upgrade required")
+                Spacer()
+                Button("Review upgrade…") {
+                    isUpgrading = true
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!hasEligibleUpgrade)
+            }
+            Text(
+                "This Source is pinned to Pipeline v\(status.pipelineVersion) "
+                    + "(revision \(status.pipelineRevisionId)), whose frozen Module "
+                    + "implementations are unavailable on this deployment. New Runs "
+                    + "and push ingestion are disabled."
+            )
+            .windexStyle(Typography.body)
+            Text(
+                "Unavailable Modules: "
+                    + (status.unavailableModules.isEmpty
+                        ? "not reported"
+                        : status.unavailableModules.joined(separator: ", "))
+                    + " · latest Pipeline v\(status.latestPipelineVersion)"
+            )
+            .windexStyle(Typography.dataSM)
+            .foregroundStyle(theme.palette.graphite)
+        }
+        .padding(.md)
+        .background(theme.palette.plate)
+        .padding(.horizontal, .xl)
+        .padding(.top, .md)
     }
 
     @ViewBuilder
@@ -782,6 +855,33 @@ private struct SourceDeploymentDetail: View {
                 dataRow("Staged", source.status.counts.staged.formatted())
                 dataRow("Pending embedding", source.status.counts.pendingEmbedding.formatted())
                 dataRow("Failed", source.status.counts.failed.formatted())
+            }
+            if let moduleStatus {
+                fieldGroup("Module availability") {
+                    dataRow("Available", moduleStatus.available ? "yes" : "no")
+                    dataRow(
+                        "Pipeline revision ID",
+                        moduleStatus.pipelineRevisionId.formatted()
+                    )
+                    dataRow(
+                        "Pinned Pipeline version",
+                        moduleStatus.pipelineVersion.formatted()
+                    )
+                    dataRow(
+                        "Latest Pipeline version",
+                        moduleStatus.latestPipelineVersion.formatted()
+                    )
+                    dataRow(
+                        "Upgrade required",
+                        moduleStatus.upgradeRequired ? "yes" : "no"
+                    )
+                    dataRow(
+                        "Unavailable Modules",
+                        moduleStatus.unavailableModules.isEmpty
+                            ? "none"
+                            : moduleStatus.unavailableModules.joined(separator: ", ")
+                    )
+                }
             }
 
         case .settings:
@@ -978,6 +1078,14 @@ private struct SourceDeploymentDetail: View {
     @ViewBuilder
     private var ingestionSection: some View {
         if let ingress = source.ingress {
+            if sourceUnavailable {
+                Text(
+                    "Push ingestion is disabled until the Source’s Pipeline "
+                        + "upgrade has been previewed and confirmed."
+                )
+                .windexStyle(Typography.body)
+                .foregroundStyle(theme.palette.rust)
+            }
             fieldGroup("Push contract") {
                 dataRow("Endpoint", pushURL(ingress.path))
                 dataRow("Authentication", ingress.authenticationRequired ? "Bearer write token" : "none")
@@ -1069,13 +1177,18 @@ private struct SourceDeploymentDetail: View {
                         || ingestChunkIndex < 0
                         || ingestMessageStart < 0
                         || ingestMessageEnd < ingestMessageStart
+                        || sourceUnavailable
                         || isMutating
                 )
 
                 Button("Delete conversation", role: .destructive) {
                     isConfirmingMemoryDelete = true
                 }
-                .disabled(memoryConversationID.isEmpty || isMutating)
+                .disabled(
+                    memoryConversationID.isEmpty
+                        || sourceUnavailable
+                        || isMutating
+                )
             }
         }
     }
@@ -1119,6 +1232,7 @@ private struct SourceDeploymentDetail: View {
                 ingestID.isEmpty
                     || ingestURL.isEmpty
                     || ingestText.isEmpty
+                    || sourceUnavailable
                     || isMutating
             )
         }
@@ -1355,6 +1469,7 @@ private struct LifecycleConfirmationSheet: View {
 
 private struct SourceUpgradeSheet: View {
     let source: SourceDeployment
+    let preferredTargetVersion: Int?
     @Environment(BackendSession.self) private var session
     @Environment(\.dismiss) private var dismiss
     @Environment(\.windexTheme) private var theme
@@ -1540,7 +1655,14 @@ private struct SourceUpgradeSheet: View {
         }
         .background(theme.palette.ink)
         .onAppear {
-            targetVersion = eligibleRevisions.first?.reference.version ?? 0
+            if let preferredTargetVersion,
+               eligibleRevisions.contains(where: {
+                   $0.reference.version == preferredTargetVersion
+               }) {
+                targetVersion = preferredTargetVersion
+            } else {
+                targetVersion = eligibleRevisions.first?.reference.version ?? 0
+            }
         }
         .onChange(of: targetVersion) {
             editor.reset()

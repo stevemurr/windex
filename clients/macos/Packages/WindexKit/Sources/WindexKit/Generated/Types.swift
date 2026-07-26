@@ -36,6 +36,11 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /v1/log-events/stream`.
     /// - Remark: Generated from `#/paths//v1/log-events/stream/get(log_events_stream)`.
     func logEventsStream(_ input: Operations.LogEventsStream.Input) async throws -> Operations.LogEventsStream.Output
+    /// Module Health
+    ///
+    /// - Remark: HTTP `GET /v1/module-health`.
+    /// - Remark: Generated from `#/paths//v1/module-health/get(module_health)`.
+    func moduleHealth(_ input: Operations.ModuleHealth.Input) async throws -> Operations.ModuleHealth.Output
     /// Module Versions
     ///
     /// - Remark: HTTP `GET /v1/modules`.
@@ -221,6 +226,11 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /v1/sources/{name}/archive`.
     /// - Remark: Generated from `#/paths//v1/sources/{name}/archive/post(source_archive)`.
     func sourceArchive(_ input: Operations.SourceArchive.Input) async throws -> Operations.SourceArchive.Output
+    /// Source Module Status
+    ///
+    /// - Remark: HTTP `GET /v1/sources/{name}/module-status`.
+    /// - Remark: Generated from `#/paths//v1/sources/{name}/module-status/get(source_module_status)`.
+    func sourceModuleStatus(_ input: Operations.SourceModuleStatus.Input) async throws -> Operations.SourceModuleStatus.Output
     /// Source Pause
     ///
     /// - Remark: HTTP `POST /v1/sources/{name}/pause`.
@@ -367,6 +377,13 @@ extension APIProtocol {
             query: query,
             headers: headers
         ))
+    }
+    /// Module Health
+    ///
+    /// - Remark: HTTP `GET /v1/module-health`.
+    /// - Remark: Generated from `#/paths//v1/module-health/get(module_health)`.
+    public func moduleHealth(headers: Operations.ModuleHealth.Input.Headers = .init()) async throws -> Operations.ModuleHealth.Output {
+        try await moduleHealth(Operations.ModuleHealth.Input(headers: headers))
     }
     /// Module Versions
     ///
@@ -833,6 +850,19 @@ extension APIProtocol {
         headers: Operations.SourceArchive.Input.Headers = .init()
     ) async throws -> Operations.SourceArchive.Output {
         try await sourceArchive(Operations.SourceArchive.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Source Module Status
+    ///
+    /// - Remark: HTTP `GET /v1/sources/{name}/module-status`.
+    /// - Remark: Generated from `#/paths//v1/sources/{name}/module-status/get(source_module_status)`.
+    public func sourceModuleStatus(
+        path: Operations.SourceModuleStatus.Input.Path,
+        headers: Operations.SourceModuleStatus.Input.Headers = .init()
+    ) async throws -> Operations.SourceModuleStatus.Output {
+        try await sourceModuleStatus(Operations.SourceModuleStatus.Input(
             path: path,
             headers: headers
         ))
@@ -2242,6 +2272,60 @@ public enum Components {
                     "thread_safe",
                     "title",
                     "version"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/ModuleHealthResponse`.
+        public struct ModuleHealthResponse: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ModuleHealthResponse/sources`.
+            public var sources: [Components.Schemas.SourceModuleStatus]
+            /// - Remark: Generated from `#/components/schemas/ModuleHealthResponse/status`.
+            @frozen public enum StatusPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case ok = "ok"
+                case degraded = "degraded"
+            }
+            /// - Remark: Generated from `#/components/schemas/ModuleHealthResponse/status`.
+            public var status: Components.Schemas.ModuleHealthResponse.StatusPayload
+            /// - Remark: Generated from `#/components/schemas/ModuleHealthResponse/stranded_sources`.
+            public var strandedSources: Swift.Int
+            /// Creates a new `ModuleHealthResponse`.
+            ///
+            /// - Parameters:
+            ///   - sources:
+            ///   - status:
+            ///   - strandedSources:
+            public init(
+                sources: [Components.Schemas.SourceModuleStatus],
+                status: Components.Schemas.ModuleHealthResponse.StatusPayload,
+                strandedSources: Swift.Int
+            ) {
+                self.sources = sources
+                self.status = status
+                self.strandedSources = strandedSources
+            }
+            public enum CodingKeys: String, CodingKey {
+                case sources
+                case status
+                case strandedSources = "stranded_sources"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.sources = try container.decode(
+                    [Components.Schemas.SourceModuleStatus].self,
+                    forKey: .sources
+                )
+                self.status = try container.decode(
+                    Components.Schemas.ModuleHealthResponse.StatusPayload.self,
+                    forKey: .status
+                )
+                self.strandedSources = try container.decode(
+                    Swift.Int.self,
+                    forKey: .strandedSources
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "sources",
+                    "status",
+                    "stranded_sources"
                 ])
             }
         }
@@ -6454,6 +6538,99 @@ public enum Components {
                 ])
             }
         }
+        /// - Remark: Generated from `#/components/schemas/SourceModuleStatus`.
+        public struct SourceModuleStatus: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SourceModuleStatus/available`.
+            public var available: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/SourceModuleStatus/latest_pipeline_version`.
+            public var latestPipelineVersion: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/SourceModuleStatus/pipeline_revision_id`.
+            public var pipelineRevisionId: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/SourceModuleStatus/pipeline_version`.
+            public var pipelineVersion: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/SourceModuleStatus/source`.
+            public var source: Swift.String
+            /// - Remark: Generated from `#/components/schemas/SourceModuleStatus/unavailable_modules`.
+            public var unavailableModules: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/SourceModuleStatus/upgrade_required`.
+            public var upgradeRequired: Swift.Bool
+            /// Creates a new `SourceModuleStatus`.
+            ///
+            /// - Parameters:
+            ///   - available:
+            ///   - latestPipelineVersion:
+            ///   - pipelineRevisionId:
+            ///   - pipelineVersion:
+            ///   - source:
+            ///   - unavailableModules:
+            ///   - upgradeRequired:
+            public init(
+                available: Swift.Bool,
+                latestPipelineVersion: Swift.Int,
+                pipelineRevisionId: Swift.Int,
+                pipelineVersion: Swift.Int,
+                source: Swift.String,
+                unavailableModules: [Swift.String],
+                upgradeRequired: Swift.Bool
+            ) {
+                self.available = available
+                self.latestPipelineVersion = latestPipelineVersion
+                self.pipelineRevisionId = pipelineRevisionId
+                self.pipelineVersion = pipelineVersion
+                self.source = source
+                self.unavailableModules = unavailableModules
+                self.upgradeRequired = upgradeRequired
+            }
+            public enum CodingKeys: String, CodingKey {
+                case available
+                case latestPipelineVersion = "latest_pipeline_version"
+                case pipelineRevisionId = "pipeline_revision_id"
+                case pipelineVersion = "pipeline_version"
+                case source
+                case unavailableModules = "unavailable_modules"
+                case upgradeRequired = "upgrade_required"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.available = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .available
+                )
+                self.latestPipelineVersion = try container.decode(
+                    Swift.Int.self,
+                    forKey: .latestPipelineVersion
+                )
+                self.pipelineRevisionId = try container.decode(
+                    Swift.Int.self,
+                    forKey: .pipelineRevisionId
+                )
+                self.pipelineVersion = try container.decode(
+                    Swift.Int.self,
+                    forKey: .pipelineVersion
+                )
+                self.source = try container.decode(
+                    Swift.String.self,
+                    forKey: .source
+                )
+                self.unavailableModules = try container.decode(
+                    [Swift.String].self,
+                    forKey: .unavailableModules
+                )
+                self.upgradeRequired = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .upgradeRequired
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "available",
+                    "latest_pipeline_version",
+                    "pipeline_revision_id",
+                    "pipeline_version",
+                    "source",
+                    "unavailable_modules",
+                    "upgrade_required"
+                ])
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/SourcePatch`.
         public struct SourcePatch: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/SourcePatch/description`.
@@ -9340,6 +9517,167 @@ public enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             public var unprocessableContent: Operations.LogEventsStream.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Module Health
+    ///
+    /// - Remark: HTTP `GET /v1/module-health`.
+    /// - Remark: Generated from `#/paths//v1/module-health/get(module_health)`.
+    public enum ModuleHealth {
+        public static let id: Swift.String = "module_health"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/module-health/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ModuleHealth.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ModuleHealth.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.ModuleHealth.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            public init(headers: Operations.ModuleHealth.Input.Headers = .init()) {
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/module-health/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/module-health/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.ModuleHealthResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ModuleHealthResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.ModuleHealth.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.ModuleHealth.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/module-health/get(module_health)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.ModuleHealth.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.ModuleHealth.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/module-health/GET/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/module-health/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.ModuleHealth.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.ModuleHealth.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/module-health/get(module_health)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.ModuleHealth.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.ModuleHealth.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):
@@ -16085,6 +16423,185 @@ public enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             public var unprocessableContent: Operations.SourceArchive.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Source Module Status
+    ///
+    /// - Remark: HTTP `GET /v1/sources/{name}/module-status`.
+    /// - Remark: Generated from `#/paths//v1/sources/{name}/module-status/get(source_module_status)`.
+    public enum SourceModuleStatus {
+        public static let id: Swift.String = "source_module_status"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/sources/{name}/module-status/GET/path`.
+            public struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/sources/{name}/module-status/GET/path/name`.
+                public var name: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - name:
+                public init(name: Swift.String) {
+                    self.name = name
+                }
+            }
+            public var path: Operations.SourceModuleStatus.Input.Path
+            /// - Remark: Generated from `#/paths/v1/sources/{name}/module-status/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.SourceModuleStatus.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.SourceModuleStatus.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.SourceModuleStatus.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.SourceModuleStatus.Input.Path,
+                headers: Operations.SourceModuleStatus.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/sources/{name}/module-status/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/sources/{name}/module-status/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.SourceModuleStatus)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.SourceModuleStatus {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.SourceModuleStatus.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.SourceModuleStatus.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/sources/{name}/module-status/get(source_module_status)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.SourceModuleStatus.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.SourceModuleStatus.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/sources/{name}/module-status/GET/responses/422/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/sources/{name}/module-status/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.SourceModuleStatus.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.SourceModuleStatus.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/sources/{name}/module-status/get(source_module_status)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.SourceModuleStatus.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            public var unprocessableContent: Operations.SourceModuleStatus.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

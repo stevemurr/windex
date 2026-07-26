@@ -217,6 +217,14 @@ extension WindexClient {
         try await send("GET", "/v1/sources/\(Self.escapePath(name))/status",
                        surface: .admin, as: SourceStatusWire.self)
     }
+    public func sourceModuleStatus(_ name: String) async throws -> SourceModuleStatusWire {
+        try await send(
+            "GET",
+            "/v1/sources/\(Self.escapePath(name))/module-status",
+            surface: .admin,
+            as: SourceModuleStatusWire.self
+        )
+    }
     public func sourceSettings(_ name: String) async throws -> SourceSettingsWire {
         try await send("GET", "/v1/sources/\(Self.escapePath(name))/settings",
                        surface: .admin, as: SourceSettingsWire.self)

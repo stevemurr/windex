@@ -537,6 +537,60 @@ struct AppModelTests {
         }
     }
 
+    @Test("unavailable Source Modules block new Runs and ingestion")
+    func unavailableSourceModulesBlockNewWork() async throws {
+        IngestRecordingURLProtocol.configure()
+        defer { IngestRecordingURLProtocol.reset() }
+        let profile = try ConnectionProfile("http://windex.test")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [IngestRecordingURLProtocol.self]
+        let client = WindexClient(
+            configuration: .init(baseURL: profile.baseURL),
+            token: "token",
+            session: URLSession(configuration: configuration)
+        )
+        let session = BackendSession(
+            client: client,
+            backend: ConnectedBackend(
+                profile: profile,
+                evidence: Self.evidence,
+                hasStoredToken: true
+            )
+        )
+        let moduleStatus = SourceModuleStatusWire(
+            available: false,
+            latestPipelineVersion: 4,
+            pipelineRevisionId: 21,
+            pipelineVersion: 3,
+            source: "memory",
+            unavailableModules: ["push.docs"],
+            upgradeRequired: true
+        )
+        session.sources.replaceModuleDiagnostics(
+            health: ModuleHealthWire(
+                sources: [moduleStatus],
+                status: .degraded,
+                strandedSources: 1
+            ),
+            statuses: [moduleStatus]
+        )
+
+        #expect(session.sources.moduleStatus(for: "memory") == moduleStatus)
+        await #expect(throws: SourceModuleUnavailableError.self) {
+            try await session.runLatest(source: "memory")
+        }
+        await #expect(throws: SourceModuleUnavailableError.self) {
+            try await session.ingest(
+                [],
+                source: "memory",
+                mode: "full",
+                partition: "conversation-1",
+                idempotencyKey: "blocked-memory-ingest"
+            )
+        }
+        #expect(IngestRecordingURLProtocol.requests.isEmpty)
+    }
+
     private static let evidence = PairingEvidence(
         version: "0.1.0",
         uptimeSeconds: 128,

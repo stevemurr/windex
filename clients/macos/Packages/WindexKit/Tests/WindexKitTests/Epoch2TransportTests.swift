@@ -19,6 +19,53 @@ struct Epoch2TransportTests {
         )
     }
 
+    @Test("Module health and per-Source Module status expose frozen revision diagnostics")
+    func moduleHealthDiagnostics() async throws {
+        let status = """
+        {
+          "source": "memory",
+          "pipeline_revision_id": 9,
+          "pipeline_version": 1,
+          "latest_pipeline_version": 2,
+          "available": false,
+          "upgrade_required": true,
+          "unavailable_modules": ["push.docs", "ledger.stage"]
+        }
+        """
+        let server = try MockWindexServer()
+        server.on(
+            "GET /admin/v1/module-health",
+            json: """
+            {
+              "status": "degraded",
+              "stranded_sources": 1,
+              "sources": [\(status)]
+            }
+            """
+        )
+        server.on(
+            "GET /admin/v1/sources/memory/module-status",
+            json: status
+        )
+        try await server.start()
+        defer { server.stop() }
+        let client = WindexClient(baseURL: server.baseURL, token: "token")
+
+        let health = try await client.moduleHealth()
+        let source = try await client.sourceModuleStatus("memory")
+
+        #expect(health.status == .degraded)
+        #expect(health.strandedSources == 1)
+        #expect(health.sources == [source])
+        #expect(source.source == "memory")
+        #expect(source.pipelineRevisionId == 9)
+        #expect(source.pipelineVersion == 1)
+        #expect(source.latestPipelineVersion == 2)
+        #expect(!source.available)
+        #expect(source.upgradeRequired)
+        #expect(source.unavailableModules == ["push.docs", "ledger.stage"])
+    }
+
     @Test("publication sends semantic parent concurrency data")
     func publicationPrecondition() async throws {
         let server = try MockWindexServer()

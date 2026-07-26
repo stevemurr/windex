@@ -38,6 +38,12 @@ public struct OverviewServiceStatus: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+public enum OverviewModuleLockHealth: String, Codable, Hashable, Sendable {
+    case ok
+    case degraded
+    case error
+}
+
 public struct OverviewSourceStatus: Codable, Hashable, Identifiable, Sendable {
     public var id: String { source.name }
     public let source: SourceDeployment
@@ -145,6 +151,8 @@ public struct OverviewSnapshot: Codable, Hashable, Sendable {
     public let runs: OverviewRunCounts
     public let sources: [OverviewSourceStatus]
     public let services: [OverviewServiceStatus]
+    public let moduleLocks: OverviewModuleLockHealth
+    public let strandedSources: [String]
     public let workerLanes: [OverviewWorkerLane]
     public let blockedPreconditions: [OverviewBlockedPrecondition]
     public let activeRuns: [OverviewRunStatus]
@@ -162,6 +170,8 @@ public struct OverviewSnapshot: Codable, Hashable, Sendable {
         runs: OverviewRunCounts = .init(),
         sources: [OverviewSourceStatus] = [],
         services: [OverviewServiceStatus] = [],
+        moduleLocks: OverviewModuleLockHealth = .error,
+        strandedSources: [String] = [],
         workerLanes: [OverviewWorkerLane] = [],
         blockedPreconditions: [OverviewBlockedPrecondition] = [],
         activeRuns: [OverviewRunStatus] = [],
@@ -178,6 +188,8 @@ public struct OverviewSnapshot: Codable, Hashable, Sendable {
         self.runs = runs
         self.sources = sources
         self.services = services
+        self.moduleLocks = moduleLocks
+        self.strandedSources = strandedSources
         self.workerLanes = workerLanes
         self.blockedPreconditions = blockedPreconditions
         self.activeRuns = activeRuns

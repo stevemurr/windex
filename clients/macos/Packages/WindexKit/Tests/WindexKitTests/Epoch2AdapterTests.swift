@@ -4,6 +4,21 @@ import Testing
 
 @Suite("Epoch-2 canonical adapters")
 struct Epoch2AdapterTests {
+    @Test(
+        "Overview preserves every Module-lock health state",
+        arguments: [
+            ("ok", OverviewModuleLockHealth.ok),
+            ("degraded", OverviewModuleLockHealth.degraded),
+            ("error", OverviewModuleLockHealth.error),
+        ]
+    )
+    func moduleLockHealthStates(
+        raw: String,
+        expected: OverviewModuleLockHealth
+    ) {
+        #expect(OverviewModuleLockHealth(rawValue: raw) == expected)
+    }
+
     @Test("canonical layout arrays survive an exact GET/edit/PUT round trip")
     func layoutNodes() throws {
         let wire = try JSONDecoder().decode(
@@ -123,6 +138,8 @@ struct Epoch2AdapterTests {
                     "postgres": "ok",
                     "vector": "ok",
                     "storage": "ok",
+                    "module_locks": "degraded",
+                    "stranded_sources": ["docs"],
                     "degraded": false
                   },
                   "runs": {
@@ -203,6 +220,8 @@ struct Epoch2AdapterTests {
         #expect(snapshot.searchable == 90)
         #expect(snapshot.vectors == 88)
         #expect(snapshot.indexedLastHour == 7)
+        #expect(snapshot.moduleLocks == .degraded)
+        #expect(snapshot.strandedSources == ["docs"])
         #expect(snapshot.runs.running == 1)
         #expect(snapshot.runs.blocked == 3)
         #expect(snapshot.sources.first?.documents == 100)

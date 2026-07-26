@@ -353,6 +353,11 @@ extension OverviewWire {
                     detail: status == "ok" ? nil : health["\(name)_error"]?.stringValue
                 )
             }.sorted { $0.name < $1.name },
+            moduleLocks: OverviewModuleLockHealth(
+                rawValue: health["module_locks"]?.stringValue ?? ""
+            ) ?? .error,
+            strandedSources: health["stranded_sources"]?.arrayValue?
+                .compactMap(\.stringValue) ?? [],
             workerLanes: (workers["lanes"]?.objectValue ?? [:]).map { name, value in
                 OverviewWorkerLane(
                     name: name,
