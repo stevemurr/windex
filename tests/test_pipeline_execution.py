@@ -17,10 +17,11 @@ from windex.api.canonical import (
 )
 from windex.db.canonical import init_canonical_db
 from windex.modules.discover import time_calendar, time_windows
+from windex.modules.collect import _write
 from windex.pipeline.events import append, list_events
 from windex.pipeline.indexing import _record_ownership
 from windex.pipeline import wire
-from windex.pipeline.ports import ExtractedDoc, PartitionRef
+from windex.pipeline.ports import ExtractedDoc, PartitionRecord, PartitionRef
 from windex.pipeline.run_store import (
     artifact,
     get_run,
@@ -248,6 +249,39 @@ def test_discovery_order_accepts_canonical_text_partition_keys(canonical_conn):
     assert total > 100
     assert bound == total
     assert ordered is True
+
+
+def test_store_upsert_defaults_missing_stage_and_preserves_existing(canonical_conn):
+    context = SimpleNamespace(
+        state_namespace="docs",
+        search_name="docs",
+        run_id=999,
+        conn=canonical_conn,
+    )
+    record = PartitionRecord(
+        store="docset",
+        key="markdown",
+        upstream={"mtime": 1},
+        payload={"slug": "markdown"},
+    )
+
+    _write(context, record, "merge")
+    canonical_conn.commit()
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """UPDATE source_units SET stage = 'ready'
+                WHERE state_namespace = 'docs'
+                  AND store = 'docset' AND unit_key = 'markdown'""")
+    canonical_conn.commit()
+
+    _write(context, record, "merge")
+    canonical_conn.commit()
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """SELECT stage FROM source_units
+                WHERE state_namespace = 'docs'
+                  AND store = 'docset' AND unit_key = 'markdown'""")
+        assert cur.fetchone()[0] == "ready"
 
 
 def _generic_output_pipeline():

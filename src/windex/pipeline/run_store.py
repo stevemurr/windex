@@ -110,11 +110,11 @@ def _insert(
         )
     } if source else None)
     tasks = list(compiled["tasks"])
-    if source and searchable_continuation:
-        terminal = [
-            task["node"] for task in tasks
-            if task["kind"] == "load"
-        ]
+    terminal = [
+        task["node"] for task in tasks
+        if task["kind"] == "load"
+    ]
+    if source and searchable_continuation and terminal:
         # Searchability is part of the Run, not an out-of-band embedding loop.
         tasks.append({
             "node": "__index__",

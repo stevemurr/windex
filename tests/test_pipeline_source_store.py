@@ -101,10 +101,10 @@ def test_multiflow_source_run_selects_only_its_flow_locks(canonical_conn):
 
     run_id = submit_source(canonical_conn, "docs", flow="sync", dedupe=False)
     run = get_run(canonical_conn, run_id, include_spec=True)
+    assert all(task["node"] != "__index__" for task in run["tasks"])
     task_modules = {
         task["module"]
         for task in run["tasks"]
-        if task["node"] != "__index__"
     }
 
     assert task_modules == {

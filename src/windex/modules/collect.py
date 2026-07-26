@@ -64,7 +64,7 @@ def _write(ctx: TaskContext, record: PartitionRecord, policy: str) -> None:
                 """
                 INSERT INTO source_units
                        (state_namespace, store, unit_key, upstream, stage, attrs, last_run_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, coalesce(%s, 'pending'), %s, %s)
                 ON CONFLICT (state_namespace, store, unit_key) DO NOTHING
                 """,
                 (state_namespace, record.store, record.key, Jsonb(record.upstream),
@@ -91,17 +91,17 @@ def _write(ctx: TaskContext, record: PartitionRecord, policy: str) -> None:
             """
             INSERT INTO source_units
                    (state_namespace, store, unit_key, upstream, stage, attrs, last_run_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, coalesce(%s, 'pending'), %s, %s)
             ON CONFLICT (state_namespace, store, unit_key) DO UPDATE
                SET upstream = EXCLUDED.upstream,
-                   stage = coalesce(EXCLUDED.stage, source_units.stage),
+                   stage = coalesce(%s, source_units.stage),
                    attrs = source_units.attrs || EXCLUDED.attrs,
                    status = 'pending',
                    last_run_id = EXCLUDED.last_run_id,
                    updated_at = now()
             """,
             (state_namespace, record.store, record.key, Jsonb(record.upstream),
-             record.stage, Jsonb(attrs), ctx.run_id),
+             record.stage, Jsonb(attrs), ctx.run_id, record.stage),
         )
 
 
