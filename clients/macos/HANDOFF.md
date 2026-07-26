@@ -23,6 +23,13 @@ than `2` before authenticating, constructing a session, or enabling mutations.
 `/admin` is a mount prefix, not part of the paths represented in the OpenAPI
 document.
 
+Health now carries an optional additive `readiness` object with redacted
+component diagnostics. A dependency outage changes `status` to `degraded` but
+does not change `contract_epoch` or prevent pairing: the operator must be able
+to connect to diagnose it. Existing generated clients safely ignore the new
+field. Regenerate the admin DTOs when the app is ready to render component
+readiness; no regeneration is required merely to remain compatible.
+
 ## Implemented frontend surfaces
 
 - Registry, health, pairing, and strict epoch enforcement.

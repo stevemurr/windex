@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from windex.api import prom, service
+from windex.api import prom, readiness, service
 from windex.api.canonical import data_router, router as canonical_router
 from windex.api.module_admin import router as module_admin_router
 from windex.config import get_settings
@@ -106,6 +106,33 @@ class Capabilities(_Strict):
     module_runtimes: list[str]
 
 
+class ReadinessComponent(_Strict):
+    status: Literal["ok", "degraded", "unavailable", "unknown"]
+    critical: bool = Field(
+        description=(
+            "True when this component is required for the serving plane to be "
+            "ready; false for degradations with a useful fallback."
+        ),
+    )
+    summary: str = Field(
+        description="Redacted operator-safe explanation; never contains exception text.",
+    )
+    observations: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Bounded non-secret counts and booleans for this component.",
+    )
+
+
+class HealthReadiness(_Strict):
+    status: Literal["ok", "degraded"]
+    ready: bool = Field(
+        description="False only when at least one critical component is unhealthy.",
+    )
+    checked_at: float
+    cache_ttl_s: float
+    components: dict[str, ReadinessComponent]
+
+
 class Health(_Strict):
     status: str
     service: str
@@ -117,6 +144,13 @@ class Health(_Strict):
     auth_required: bool
     started_at: float
     uptime_s: float
+    readiness: HealthReadiness | None = Field(
+        default=None,
+        description=(
+            "Additive component readiness. Older epoch-2 clients may ignore it; "
+            "dependency degradation never changes contract_epoch."
+        ),
+    )
 
 
 MessageRange = Annotated[
@@ -183,8 +217,9 @@ class DocumentResponse(_Strict):
 def admin_health() -> dict[str, Any]:
     settings = get_settings()
     module_admin = bool(settings.module_admin_token)
+    health_readiness = readiness.snapshot(settings)
     return {
-        "status": "ok",
+        "status": health_readiness["status"],
         "service": "windex",
         "version": app.version,
         "contract_epoch": CONTRACT_EPOCH,
@@ -203,6 +238,7 @@ def admin_health() -> dict[str, Any]:
         "auth_required": bool(settings.write_token),
         "started_at": STARTED_AT,
         "uptime_s": round(time.time() - STARTED_AT, 1),
+        "readiness": health_readiness,
     }
 
 

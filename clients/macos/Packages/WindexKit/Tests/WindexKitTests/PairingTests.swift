@@ -204,6 +204,35 @@ struct PairingTests {
         }
     }
 
+    /// Dependency readiness is operational state, not protocol identity. A
+    /// degraded epoch-2 backend must remain pairable so the operator can inspect
+    /// and repair it instead of seeing a misleading epoch-mismatch failure.
+    @Test("a degraded epoch-two backend still pairs")
+    func degradedBackendPairs() async throws {
+        let server = try MockWindexServer()
+        server.on("GET /admin/v1/health") { _ in
+            .json(Fixtures.health(
+                authRequired: false,
+                status: "degraded",
+                ready: false
+            ))
+        }
+        server.on("GET /admin/v1/whoami") { _ in .json(Fixtures.whoami) }
+        try await server.start()
+        defer { server.stop() }
+
+        let client = WindexClient(baseURL: server.baseURL)
+        let result = try await client.pair(with: nil)
+
+        guard case .paired(let health, _) = result else {
+            Issue.record("expected .paired, got \(result)")
+            return
+        }
+        #expect(health.status == "degraded")
+        #expect(health.isSupportedEpoch)
+        #expect(!health.isOK)
+    }
+
     /// An unreachable host must surface as `.transport`, not as a decode failure
     /// — on this LAN it is also how a macOS Local Network TCC denial presents.
     @Test("an unreachable backend is a transport error")

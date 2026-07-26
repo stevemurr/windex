@@ -52,14 +52,22 @@ enum Fixtures {
 
     // MARK: - Pairing
 
-    static func health(authRequired: Bool, service: String = "windex") -> String {
+    static func health(authRequired: Bool,
+                       service: String = "windex",
+                       status: String = "ok",
+                       ready: Bool = true) -> String {
         """
-        {"status":"ok","service":"\(service)","version":"0.1.0",
+        {"status":"\(status)","service":"\(service)","version":"0.1.0",
          "contract_epoch":2,"supported_contract_epochs":[2],"schema_generation":1,
          "capabilities":{"pipelines":true,"sources":true,"generic_runs":true,
           "source_ingest":true,"operational_events":true,"module_admin":false,
           "secure_module_upload":false,"module_runtimes":["python"]},
-         "auth_required":\(authRequired),"started_at":1753372800.0,"uptime_s":128.4}
+         "auth_required":\(authRequired),"started_at":1753372800.0,"uptime_s":128.4,
+         "readiness":{"status":"\(status)","ready":\(ready),
+          "checked_at":1753372928.4,"cache_ttl_s":10.0,
+          "components":{"postgres":{"status":"\(ready ? "ok" : "unavailable")",
+           "critical":true,"summary":"Canonical Postgres readiness.",
+           "observations":{}}}}}
         """
     }
 

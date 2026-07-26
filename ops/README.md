@@ -41,6 +41,24 @@ importing the dashboard.
 The API container must bind port 8100 to the host. `compose.yaml` already does
 this for `windex-serve`.
 
+## Readiness contract
+
+`GET /admin/v1/health` is an unauthenticated, cached liveness/capability
+response. It always remains HTTP 200 and carries `contract_epoch`, including
+during an outage, so a temporary dependency failure cannot masquerade as an
+incompatible backend during macOS pairing.
+
+The additive `readiness` object checks Postgres and its schema metadata, Qdrant,
+embedding configuration/reachability, work-sensitive worker capacity, Source
+scheduler lateness, and enabled Sources' frozen Module locks. Postgres/schema
+and Qdrant are **critical**: their failure sets `readiness.ready` to false.
+Embedding, workers, scheduler, and Module locks are **advisory** because lexical
+search or unaffected Sources remain useful. Any unhealthy component sets the
+top-level `status` to `degraded`, including advisory failures. Summaries are
+static/redacted and observations contain only bounded counts and booleans.
+Snapshots are cached for 10 seconds to keep pairing and probes from creating a
+dependency thundering herd.
+
 ## Grafana setup
 
 Import `grafana/dashboards/windex.json` and bind `${DS_PROMETHEUS}` to the
