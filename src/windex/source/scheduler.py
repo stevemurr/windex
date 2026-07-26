@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import UTC, datetime
 
 import psycopg
-from croniter import croniter
 
 from windex.config import Settings
 from windex.pipeline.events import append
 from windex.pipeline.run_store import RunConflictError, submit_source
 from windex.source.trigger_validation import (
     TriggerValidationError,
-    validate_trigger,
+    scheduled_next_fire,
 )
 
 
@@ -29,15 +27,7 @@ class TickResult:
 def next_fire(
     trigger_type: str, spec: dict, after: datetime,
 ) -> datetime | None:
-    validate_trigger(trigger_type, spec)
-    if trigger_type == "interval":
-        return after + timedelta(seconds=spec["seconds"])
-    if trigger_type == "cron":
-        expression = spec["cron"]
-        timezone = ZoneInfo(spec["timezone"])
-        local = after.astimezone(timezone)
-        return croniter(expression, local).get_next(datetime).astimezone(UTC)
-    return None
+    return scheduled_next_fire(trigger_type, spec, after)
 
 
 def _quarantine_invalid(

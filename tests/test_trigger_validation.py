@@ -13,7 +13,7 @@ from windex.api.app import admin
 from windex.config import Settings
 from windex.db.canonical import init_canonical_db
 from windex.pipeline.events import list_events
-from windex.source.scheduler import arm_unplanned, tick
+from windex.source.scheduler import arm_unplanned, next_fire, tick
 from windex.source.store import (
     TriggerValidationError,
     create_trigger,
@@ -104,6 +104,183 @@ def test_store_rejects_invalid_create_and_validates_merged_update(
     assert unchanged["trigger_spec"] == {"seconds": 60}
 
 
+def _transaction_time(conn) -> datetime:
+    with conn.cursor() as cur:
+        cur.execute("SELECT now()")
+        return cur.fetchone()[0]
+
+
+def _deadline(trigger: dict) -> datetime | None:
+    value = trigger["next_fire_at"]
+    return datetime.fromisoformat(value) if value else None
+
+
+def test_create_arms_enabled_schedules_and_leaves_other_triggers_unarmed(
+    canonical_conn,
+):
+    instant = _transaction_time(canonical_conn)
+    scheduled = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "interval",
+        "trigger_spec": {"seconds": 90},
+    })
+    assert _deadline(scheduled) == instant + timedelta(seconds=90)
+
+    event = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "event",
+        "trigger_spec": {"event": "source.ready"},
+    })
+    manual = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "manual",
+        "trigger_spec": {},
+    })
+    disabled = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "interval",
+        "trigger_spec": {"seconds": 90},
+        "enabled": False,
+        "next_fire_at": "2099-01-01T00:00:00+00:00",
+    })
+    assert event["next_fire_at"] is None
+    assert manual["next_fire_at"] is None
+    assert disabled["next_fire_at"] is None
+
+
+def test_cron_and_interval_cadence_edits_rearm_from_transaction_clock(
+    canonical_conn,
+):
+    stale = "2099-01-01T00:00:00+00:00"
+    cron = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "cron",
+        "trigger_spec": {"cron": "0 0 * * *", "timezone": "UTC"},
+        "next_fire_at": stale,
+    })
+    instant = _transaction_time(canonical_conn)
+    cron_spec = {
+        "cron": "30 9 * * 1-5",
+        "timezone": "America/Los_Angeles",
+    }
+    cron = update_trigger(
+        canonical_conn,
+        "hn",
+        cron["id"],
+        {"trigger_spec": cron_spec},
+    )
+    assert _deadline(cron) == next_fire("cron", cron_spec, instant)
+    assert cron["next_fire_at"] != stale
+
+    interval = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "interval",
+        "trigger_spec": {"seconds": 3600},
+        "next_fire_at": stale,
+    })
+    instant = _transaction_time(canonical_conn)
+    interval = update_trigger(
+        canonical_conn,
+        "hn",
+        interval["id"],
+        {"trigger_spec": {"seconds": 17}},
+    )
+    assert _deadline(interval) == instant + timedelta(seconds=17)
+    assert interval["next_fire_at"] != stale
+
+
+def test_disable_reenable_and_trigger_kind_changes_set_safe_deadlines(
+    canonical_conn,
+):
+    trigger = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "interval",
+        "trigger_spec": {"seconds": 120},
+    })
+    trigger = update_trigger(
+        canonical_conn, "hn", trigger["id"], {"enabled": False})
+    assert trigger["enabled"] is False
+    assert trigger["next_fire_at"] is None
+
+    instant = _transaction_time(canonical_conn)
+    trigger = update_trigger(
+        canonical_conn, "hn", trigger["id"], {"enabled": True})
+    assert _deadline(trigger) == instant + timedelta(seconds=120)
+
+    trigger = update_trigger(canonical_conn, "hn", trigger["id"], {
+        "trigger_type": "event",
+        "trigger_spec": {"event": "source.changed"},
+    })
+    assert trigger["trigger_type"] == "event"
+    assert trigger["next_fire_at"] is None
+
+    instant = _transaction_time(canonical_conn)
+    trigger = update_trigger(canonical_conn, "hn", trigger["id"], {
+        "trigger_type": "cron",
+        "trigger_spec": {"cron": "*/10 * * * *", "timezone": "UTC"},
+    })
+    assert _deadline(trigger) == next_fire(
+        "cron", trigger["trigger_spec"], instant)
+
+
+def test_explicit_deadline_wins_and_flow_only_edit_preserves_it(
+    canonical_conn,
+):
+    trigger = create_trigger(canonical_conn, "ccnews", {
+        "flow_name": "sync",
+        "trigger_type": "interval",
+        "trigger_spec": {"seconds": 300},
+    })
+    explicit = "2032-03-04T05:06:07+00:00"
+    trigger = update_trigger(canonical_conn, "ccnews", trigger["id"], {
+        "trigger_spec": {"seconds": 600},
+        "next_fire_at": explicit,
+    })
+    assert _deadline(trigger) == datetime.fromisoformat(explicit)
+
+    trigger = update_trigger(
+        canonical_conn,
+        "ccnews",
+        trigger["id"],
+        {"flow_name": "ingest"},
+    )
+    assert trigger["flow_name"] == "ingest"
+    assert _deadline(trigger) == datetime.fromisoformat(explicit)
+
+
+def test_effective_noop_patch_does_not_touch_trigger_row(canonical_conn):
+    trigger = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "interval",
+        "trigger_spec": {"seconds": 60},
+    })
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """UPDATE source_triggers
+                  SET updated_at = '2020-01-02T03:04:05+00:00'
+                WHERE id = %s""",
+            (trigger["id"],),
+        )
+    canonical_conn.commit()
+
+    unchanged = update_trigger(canonical_conn, "hn", trigger["id"], {
+        "flow_name": "harvest",
+        "trigger_type": "interval",
+        "trigger_spec": {"seconds": 60},
+        "enabled": True,
+        "next_fire_at": trigger["next_fire_at"],
+    })
+    assert unchanged == trigger
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            "SELECT updated_at FROM source_triggers WHERE id = %s",
+            (trigger["id"],),
+        )
+        assert cur.fetchone()[0] == datetime(
+            2020, 1, 2, 3, 4, 5, tzinfo=UTC)
+    canonical_conn.commit()
+
+
 def test_canonical_api_returns_field_addressable_trigger_errors(
     canonical_conn, monkeypatch,
 ):
@@ -161,6 +338,89 @@ def test_canonical_api_returns_field_addressable_trigger_errors(
         assert issue["loc"] == ["body", "trigger_spec", "seconds"]
 
     assert list_triggers(canonical_conn, "hn") == []
+
+
+def test_canonical_api_preserves_explicit_deadline_and_null_resets_it(
+    canonical_conn, monkeypatch,
+):
+    from windex.api import app as app_module
+    from windex.api import canonical
+
+    settings = Settings(
+        _env_file=None,
+        pg_dsn="postgresql://unused",
+        write_token="",
+        serve_host="127.0.0.1",
+    )
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(canonical, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        canonical.db,
+        "pooled",
+        lambda _dsn: nullcontext(canonical_conn),
+    )
+    client = TestClient(admin)
+    trigger = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "interval",
+        "trigger_spec": {"seconds": 60},
+        "next_fire_at": "2099-01-01T00:00:00+00:00",
+    })
+
+    explicit = "2034-05-06T07:08:09+00:00"
+    response = client.patch(
+        f"/v1/sources/hn/triggers/{trigger['id']}",
+        json={
+            "trigger_spec": {"seconds": 120},
+            "next_fire_at": explicit,
+        },
+    )
+    assert response.status_code == 200
+    assert datetime.fromisoformat(
+        response.json()["next_fire_at"],
+    ) == datetime.fromisoformat(explicit)
+
+    # The production pool context commits the response projection read on exit;
+    # this test's nullcontext uses the raw connection, so mirror that boundary.
+    canonical_conn.commit()
+    before = datetime.now(UTC)
+    response = client.patch(
+        f"/v1/sources/hn/triggers/{trigger['id']}",
+        json={"next_fire_at": None},
+    )
+    after = datetime.now(UTC)
+    assert response.status_code == 200
+    reset = datetime.fromisoformat(response.json()["next_fire_at"])
+    assert before + timedelta(seconds=120) <= reset
+    assert reset <= after + timedelta(seconds=120)
+
+
+def test_rearm_is_visible_to_scheduler_without_old_deadline_fire(
+    canonical_conn,
+):
+    old_due = datetime.now(UTC) - timedelta(minutes=5)
+    trigger = create_trigger(canonical_conn, "hn", {
+        "flow_name": "harvest",
+        "trigger_type": "interval",
+        "trigger_spec": {"seconds": 60},
+        "next_fire_at": old_due.isoformat(),
+    })
+
+    instant = _transaction_time(canonical_conn)
+    trigger = update_trigger(canonical_conn, "hn", trigger["id"], {
+        "trigger_spec": {"seconds": 3600},
+    })
+    assert _deadline(trigger) == instant + timedelta(hours=1)
+    result = tick(canonical_conn, now=instant + timedelta(seconds=1))
+    assert result.fired == []
+    assert result.coalesced == []
+
+    trigger = update_trigger(canonical_conn, "hn", trigger["id"], {
+        "next_fire_at": old_due.isoformat(),
+    })
+    assert _deadline(trigger) == old_due
+    result = tick(canonical_conn, now=instant + timedelta(seconds=2))
+    assert [item["trigger_id"] for item in result.fired] == [trigger["id"]]
 
 
 def _raw_trigger(

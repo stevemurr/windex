@@ -1047,8 +1047,14 @@ def source_trigger_patch(
 ) -> dict[str, Any]:
     try:
         with db.pooled(get_settings().pg_dsn) as conn:
+            changes = body.model_dump(exclude_unset=True)
+            changes = {
+                key: value
+                for key, value in changes.items()
+                if value is not None or key == "next_fire_at"
+            }
             return source_store.update_trigger(
-                conn, name, trigger_id, body.model_dump(exclude_none=True))
+                conn, name, trigger_id, changes)
     except Exception as exc:
         _raise(exc)
 
