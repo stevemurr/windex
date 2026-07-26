@@ -430,10 +430,10 @@ _EXTRACT = (
             "ccnews/pipeline.py:48-101", batched=True,
             fields=(
                 _p("language", "str", default="en"),
-                _p("workers", "int", lo=1, hi=8, default=4,
-                   help="Was cpu_count()-2, which forked 18 extraction processes on "
-                        "a 20-core box and is the prime suspect for the memory-"
-                        "pressure resets. Capped deliberately."),
+                _p("workers", "int", lo=1, hi=8, default=1,
+                   help="One WARC is one DataTrove task, so values above one only "
+                        "spawn idle processes. Parallelism is provided by distinct "
+                        "WARC task lanes, not this per-task pool."),
                 _p("records_per_slice", "int", lo=250, hi=10_000, default=1500,
                    help="Maximum WARC response records per durable worker slice. "
                         "The default keeps a 1GB CC-News shard within the two-minute "

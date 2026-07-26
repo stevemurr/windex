@@ -132,12 +132,13 @@ services:
         command: ["source-scheduler"]
 
     # --- Pipeline worker pool -----------------------------------------------
-    # Executes canonical run_tasks. Four recyclable subprocess
-    # slots share fleet-wide lane caps; cpu_heavy stays capped at one so a wiki
-    # shard and datatrove extraction can never peak together.
+    # Executes canonical run_tasks. Six recyclable subprocess slots let all four
+    # network lanes coexist with one CPU-heavy and one GPU/IO task. Fleet-wide
+    # lane caps still keep cpu_heavy at one so a wiki shard and datatrove
+    # extraction can never peak together.
     windex-worker:
         <<: *windex-worker
-        command: ["worker", "--slots", "4", "--name", "production"]
+        command: ["worker", "--slots", "6", "--name", "production"]
         mem_limit: 40g
         stop_grace_period: 40s
         networks:

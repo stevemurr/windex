@@ -50,7 +50,7 @@ class PoolConfig:
     # WINDEX_WORKER_SLOTS. Subprocesses, not threads (plan §C.1): CPython does
     # not return arena memory to the OS, so recycling a *process* is the only
     # mechanism that actually reclaims a 333 MB wiki shard's high-water mark.
-    slots: int = 4
+    slots: int = 6
     name: str = "pool"                 # identifies this pool in lease_worker ids
     lanes: tuple[str, ...] = LANES     # lanes this pool is willing to serve
     lane_caps: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_LANE_CAPS))

@@ -4,21 +4,27 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 import psycopg
 from psycopg.types.json import Jsonb
 
 from windex.config import Settings
+from windex.modules.common import _load_outputs
 from windex.pipeline import compile as pipeline_compile
 from windex.pipeline import registry
 from windex.pipeline.events import append
+from windex.pipeline.ports import RawBlob
 from windex.pipeline.store import get_revision
 from windex.source.store import get_source
 
 RUN_STATES = frozenset(
     {"queued", "running", "succeeded", "failed", "cancelled", "blocked"})
+_TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled"})
+log = logging.getLogger(__name__)
 
 
 class RunConflictError(RuntimeError):
@@ -394,7 +400,97 @@ def _advance_cur(cur: psycopg.Cursor, run_id: int) -> None:
         )
 
 
+def _download_outputs(cur: psycopg.Cursor, run_id: int) -> list[Any]:
+    """Return disposable download outputs owned by one terminal Run."""
+    cur.execute(
+        """
+        SELECT u.outputs
+          FROM run_tasks t
+          JOIN task_units u ON u.task_id = t.id
+         WHERE t.run_id = %s
+           AND t.module = 'http.download'
+           AND NOT coalesce((t.config->>'keep')::boolean, false)
+           AND u.state = 'done'
+        """,
+        (run_id,),
+    )
+    return [row[0] for row in cur.fetchall()]
+
+
+def _remove_download_outputs(
+    stored_outputs: Sequence[Any],
+    *,
+    downloads_dir: Path,
+) -> int:
+    """Remove spooled RawBlobs without permitting paths outside downloads."""
+    root = downloads_dir.resolve()
+    removed = 0
+    seen: set[Path] = set()
+    for stored in stored_outputs:
+        try:
+            values = _load_outputs(stored)
+        except Exception:
+            log.warning(
+                "could not decode terminal download output during cleanup",
+                exc_info=True,
+            )
+            continue
+        for value in values:
+            if not isinstance(value, RawBlob) or value.path is None:
+                continue
+            path = Path(value.path).resolve()
+            if path in seen:
+                continue
+            seen.add(path)
+            if not path.is_relative_to(root):
+                log.warning(
+                    "refusing to clean download outside managed root: %s", path)
+                continue
+            if not path.is_file():
+                continue
+            try:
+                path.unlink()
+            except OSError:
+                log.warning("could not clean terminal download %s", path,
+                            exc_info=True)
+                continue
+            removed += 1
+            parent = path.parent
+            while parent != root and parent.is_relative_to(root):
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+                parent = parent.parent
+    return removed
+
+
+def cleanup_terminal_downloads(
+    conn: psycopg.Connection,
+    run_id: int,
+    *,
+    settings: Settings | None = None,
+) -> int:
+    """Best-effort cleanup for a terminal Run, including historic Runs."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT state FROM runs WHERE id = %s", (run_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        stored_outputs = (
+            _download_outputs(cur, run_id)
+            if row[0] in _TERMINAL_STATES
+            else []
+        )
+    conn.commit()
+    return _remove_download_outputs(
+        stored_outputs,
+        downloads_dir=(settings or Settings()).downloads_dir,
+    )
+
+
 def advance(conn: psycopg.Connection, run_id: int) -> str:
+    cleanup_outputs: list[Any] = []
     with conn.cursor() as cur:
         _advance_cur(cur, run_id)
         cur.execute(
@@ -462,7 +558,17 @@ def advance(conn: psycopg.Connection, run_id: int) -> str:
                 data={"tasks": total, "failed": failed},
             )
             state = final
+            cleanup_outputs = _download_outputs(cur, run_id)
     conn.commit()
+    if cleanup_outputs:
+        removed = _remove_download_outputs(
+            cleanup_outputs, downloads_dir=Settings().downloads_dir)
+        if removed:
+            log.info(
+                "cleaned %d terminal download artifact(s) for run %d",
+                removed,
+                run_id,
+            )
     return state
 
 
@@ -714,6 +820,7 @@ __all__ = [
     "advance",
     "artifact",
     "cancel",
+    "cleanup_terminal_downloads",
     "get_run",
     "list_runs",
     "outputs",

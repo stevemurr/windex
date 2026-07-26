@@ -104,7 +104,7 @@ flows:
         uses: warc.datatrove
         with:
           language: '@param.language'
-          workers: 4
+          workers: 1
       canon:
         kind: transform
         uses: canonical.url
