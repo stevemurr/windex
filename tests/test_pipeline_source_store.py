@@ -567,7 +567,7 @@ def _publish_hn_upgrade_target(
         spec,
         expected_version=pipeline["version"],
         expected_hash=pipeline["spec_hash"],
-    )
+    ).revision
 
 
 def _interval_trigger(conn, *, enabled: bool = True):
