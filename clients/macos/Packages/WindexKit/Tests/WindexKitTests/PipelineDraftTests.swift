@@ -263,6 +263,86 @@ struct PipelineDraftTests {
         #expect(!encoded.contains("annotations"))
     }
 
+    @Test("Source-only Module roles gate generic Runs per Flow")
+    func genericRunCapability() throws {
+        let registry = PipelineRegistry(
+            version: 1,
+            portTypes: [],
+            kinds: [],
+            modules: [
+                .init(
+                    id: "pure.transform",
+                    kind: "transform",
+                    version: "1",
+                    title: "Pure transform"
+                ),
+                .init(
+                    id: "time.windows",
+                    kind: "discover",
+                    version: "1",
+                    title: "Time windows",
+                    contractRoles: ["ingress.pull", "state.read"]
+                ),
+                .init(
+                    id: "ledger.stage",
+                    kind: "load",
+                    version: "1",
+                    title: "Stage documents",
+                    contractRoles: [
+                        "document.staging",
+                        "document.identity",
+                        "document.provenance",
+                    ]
+                ),
+            ]
+        )
+        let pure = PipelineFlow(
+            name: "pure",
+            nodes: [
+                .init(
+                    id: "transform",
+                    kind: "transform",
+                    module: "pure.transform"
+                ),
+            ]
+        )
+        let sourceBound = PipelineFlow(
+            name: "harvest",
+            nodes: [
+                .init(
+                    id: "windows",
+                    kind: "discover",
+                    module: "time.windows"
+                ),
+                .init(
+                    id: "stage",
+                    kind: "load",
+                    module: "ledger.stage"
+                ),
+                .init(
+                    id: "stage_again",
+                    kind: "load",
+                    module: "ledger.stage"
+                ),
+            ]
+        )
+
+        #expect(registry.genericRunCapability(for: pure) == .runnable)
+        let capability = registry.genericRunCapability(for: sourceBound)
+        #expect(!capability.canRun)
+        #expect(capability.requiresSource)
+        #expect(capability.blockers.map(\.moduleID) == [
+            "ledger.stage",
+            "time.windows",
+        ])
+        #expect(capability.blockers[0].roles == [
+            "document.identity",
+            "document.provenance",
+            "document.staging",
+        ])
+        #expect(capability.explanation.contains("ledger.stage, time.windows"))
+    }
+
     private static let registry = PipelineRegistry(
         version: 1,
         portTypes: [

@@ -17,6 +17,7 @@ targets:
       - path: WindexApp
         excludes:
           - Tests
+          - UITests
           - Resources/Info.plist
     resources:
       - path: WindexApp/Resources/Assets.xcassets
@@ -55,6 +56,19 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         SWIFT_VERSION: "6.0"
+  WindexUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: WindexApp/UITests
+    dependencies:
+      - target: Windex
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.stevemurr.windex.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        SWIFT_VERSION: "6.0"
 schemes:
   Windex:
     build:
@@ -66,3 +80,12 @@ schemes:
       targets:
         - WindexTests
       gatherCoverageData: true
+  WindexUITests:
+    build:
+      targets:
+        Windex: all
+        WindexUITests:
+          - test
+    test:
+      targets:
+        - WindexUITests

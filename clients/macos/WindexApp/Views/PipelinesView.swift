@@ -1000,6 +1000,7 @@ struct PipelinesView: View {
                let revision = session.pipelines.revisions[draft.name]?
                 .first(where: { $0.reference.version == version }) {
                 PipelineRunSheet(
+                    appModel: appModel,
                     revision: revision,
                     selectedFlow: model.selectedFlow
                 )
@@ -1118,6 +1119,43 @@ struct PipelinesView: View {
                     model: model,
                     registry: session.registry.registry)
             }
+        }
+    }
+
+    private var selectedGenericRunCapability: PipelineGenericRunCapability {
+        guard let registry = session.registry.registry else { return .unavailable }
+        return registry.genericRunCapability(for: model.currentFlow)
+    }
+
+    private var matchingSources: [SourceDeployment] {
+        guard let draft = model.draft, let version = model.baseVersion else {
+            return []
+        }
+        return session.sources.sources.filter {
+            !$0.archived
+                && $0.pipeline.pipeline == draft.name
+                && $0.pipeline.version == version
+        }
+    }
+
+    @ViewBuilder
+    private var sourceDestinationControl: some View {
+        if matchingSources.count == 1, let source = matchingSources.first {
+            Button("Open Source") {
+                appModel.openSource(source.name)
+            }
+            .help(
+                "Open \(source.displayTitle) and use Run latest with its Source binding."
+            )
+        } else if !matchingSources.isEmpty {
+            Menu("Open Source") {
+                ForEach(matchingSources) { source in
+                    Button(source.displayTitle) {
+                        appModel.openSource(source.name)
+                    }
+                }
+            }
+            .help("Choose a Source deployment to run.")
         }
     }
 
@@ -1286,7 +1324,17 @@ struct PipelinesView: View {
                 Button("Run") {
                     isPresentingRun = true
                 }
-                .help("Run this explicit immutable Pipeline revision.")
+                .disabled(!selectedGenericRunCapability.canRun)
+                .help(
+                    selectedGenericRunCapability.canRun
+                        ? "Run this explicit immutable Pipeline revision."
+                        : selectedGenericRunCapability.explanation
+                )
+                if selectedGenericRunCapability.requiresSource {
+                    StatusBadge(.attention, word: "Source required")
+                        .help(selectedGenericRunCapability.explanation)
+                    sourceDestinationControl
+                }
             }
 
             if model.semanticEditable {
@@ -1302,7 +1350,7 @@ struct PipelinesView: View {
                     Task { await saveCurrentLayout() }
                 }
                 .disabled(isSaving || !model.layoutDirty)
-                if model.sourceCapability.capable {
+                if model.sourceCapability.capable && matchingSources.isEmpty {
                     Button("Use as Source") {
                         appModel.createSource(
                             using: .init(
@@ -1508,6 +1556,7 @@ struct PipelinesView: View {
 }
 
 private struct PipelineRunSheet: View {
+    let appModel: AppModel
     let revision: PipelineRevision
     @State var selectedFlow: String
 
@@ -1521,7 +1570,12 @@ private struct PipelineRunSheet: View {
     @State private var isRunning = false
     @State private var errorMessage: String?
 
-    init(revision: PipelineRevision, selectedFlow: String) {
+    init(
+        appModel: AppModel,
+        revision: PipelineRevision,
+        selectedFlow: String
+    ) {
+        self.appModel = appModel
         self.revision = revision
         _selectedFlow = State(initialValue: selectedFlow)
         _inputValues = State(
@@ -1538,6 +1592,19 @@ private struct PipelineRunSheet: View {
 
     private var currentFlow: PipelineFlow? {
         revision.spec.flows.first { $0.name == selectedFlow }
+    }
+
+    private var genericRunCapability: PipelineGenericRunCapability {
+        guard let registry = session.registry.registry else { return .unavailable }
+        return registry.genericRunCapability(for: currentFlow)
+    }
+
+    private var matchingSources: [SourceDeployment] {
+        session.sources.sources.filter {
+            !$0.archived
+                && $0.pipeline.pipeline == revision.reference.pipeline
+                && $0.pipeline.version == revision.reference.version
+        }
     }
 
     var body: some View {
@@ -1591,6 +1658,56 @@ private struct PipelineRunSheet: View {
                                 ($0.name, "")
                             }
                         )
+                        errorMessage = nil
+                    }
+
+                    if !genericRunCapability.canRun {
+                        VStack(alignment: .leading, spacing: .sm) {
+                            StatusBadge(
+                                genericRunCapability.requiresSource
+                                    ? .attention
+                                    : .fault,
+                                word: genericRunCapability.requiresSource
+                                    ? "Source required"
+                                    : "Run unavailable"
+                            )
+                            Text(genericRunCapability.explanation)
+                                .windexStyle(Typography.body)
+                                .foregroundStyle(theme.palette.graphite)
+
+                            ForEach(genericRunCapability.blockers) { blocker in
+                                Text(
+                                    "\(blocker.moduleID) · "
+                                        + blocker.roles.joined(separator: ", ")
+                                )
+                                .windexStyle(Typography.dataSM)
+                                .textSelection(.enabled)
+                            }
+
+                            if matchingSources.count == 1,
+                               let source = matchingSources.first {
+                                Button("Open \(source.displayTitle)") {
+                                    dismiss()
+                                    appModel.openSource(source.name)
+                                }
+                            } else if !matchingSources.isEmpty {
+                                Menu("Open Source") {
+                                    ForEach(matchingSources) { source in
+                                        Button(source.displayTitle) {
+                                            dismiss()
+                                            appModel.openSource(source.name)
+                                        }
+                                    }
+                                }
+                            } else if revision.sourceCapability.capable {
+                                Button("Use as Source") {
+                                    dismiss()
+                                    appModel.createSource(using: revision.reference)
+                                }
+                            }
+                        }
+                        .padding(.md)
+                        .background(theme.palette.plate)
                     }
 
                     StyledText("Explicit inputs", Typography.eyebrow)
@@ -1649,6 +1766,7 @@ private struct PipelineRunSheet: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(
                     isRunning || selectedFlow.isEmpty
+                        || !genericRunCapability.canRun
                         || !parameterForm.errors.isEmpty
                         || inputValues.values.contains {
                             $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1679,6 +1797,10 @@ private struct PipelineRunSheet: View {
     }
 
     private func queue() async {
+        guard genericRunCapability.canRun else {
+            errorMessage = genericRunCapability.explanation
+            return
+        }
         isRunning = true
         defer { isRunning = false }
         do {
