@@ -19,6 +19,67 @@ from windex.pipeline import registry
 from windex.pipeline.contracts import CONTRACT_EPOCH
 
 
+def _push_source(*, max_documents: int = 10_000) -> dict:
+    return {
+        "origin": {"ingress": "push"},
+        "search_name": "fixture",
+        "spec": {
+            "flows": {
+                "receive": {
+                    "nodes": {
+                        "push": {
+                            "uses": "push.docs",
+                            "with": {
+                                "mode": "delta",
+                                "max_docs": max_documents,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+
+@pytest.fixture
+def ingest_api(monkeypatch):
+    from windex.api import app as app_module
+    from windex.api import canonical
+    from windex.config import Settings
+
+    settings = Settings(
+        _env_file=None,
+        write_token="",
+        serve_host="127.0.0.1",
+    )
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(canonical, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        canonical.db, "pooled", lambda _dsn: nullcontext(object()))
+    monkeypatch.setattr(
+        canonical.run_store, "submit_source",
+        lambda *_args, **_kwargs: 42,
+    )
+    return TestClient(app), canonical
+
+
+def _ingest(client: TestClient, **changes):
+    body = {
+        "mode": "delta",
+        "documents": [{
+            "id": "fixture/1",
+            "url": "https://example.test/1",
+            "text": "hello",
+        }],
+    }
+    body.update(changes)
+    return client.post(
+        "/v1/sources/fixture/ingest",
+        headers={"Idempotency-Key": "batch-0001"},
+        json=body,
+    )
+
+
 def test_openapi_is_one_pipeline_source_contract_epoch():
     admin_schema = admin.openapi()
     public_schema = app.openapi()
@@ -150,6 +211,117 @@ def test_memory_identity_errors_are_rejected_before_queueing(monkeypatch):
         source_ingest("memory", body, "batch-0001")
     assert raised.value.status_code == 422
     assert "does not match partition" in str(raised.value.detail)
+
+
+def test_ingest_document_count_limit_remains_payload_too_large(
+    ingest_api, monkeypatch,
+):
+    client, canonical = ingest_api
+    monkeypatch.setattr(
+        canonical.source_store, "get_source",
+        lambda *_args, **_kwargs: _push_source(max_documents=1),
+    )
+
+    response = _ingest(client, documents=[
+        {
+            "id": "fixture/1",
+            "url": "https://example.test/1",
+            "text": "one",
+        },
+        {
+            "id": "fixture/2",
+            "url": "https://example.test/2",
+            "text": "two",
+        },
+    ])
+
+    assert response.status_code == 413
+    assert response.json() == {
+        "detail": "Source accepts at most 1 documents",
+    }
+
+
+def test_ingest_byte_limit_remains_payload_too_large(ingest_api, monkeypatch):
+    client, canonical = ingest_api
+    assert canonical.MAX_INGEST_TEXT_BYTES == 64 * 1024 * 1024
+    monkeypatch.setattr(canonical, "MAX_INGEST_TEXT_BYTES", 3)
+
+    response = _ingest(client, documents=[{
+        "id": "fixture/1",
+        "url": "https://example.test/1",
+        "text": "four",
+    }])
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": "ingest payload exceeds 64 MiB"}
+
+
+def test_ingest_request_validation_remains_unprocessable(ingest_api):
+    client, _canonical = ingest_api
+
+    response = _ingest(client, mode="replace")
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "mode"]
+
+
+def test_ingest_missing_source_remains_not_found(ingest_api, monkeypatch):
+    client, canonical = ingest_api
+    monkeypatch.setattr(
+        canonical.source_store, "get_source",
+        lambda *_args, **_kwargs: None,
+    )
+
+    response = _ingest(client)
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "resource not found"}
+
+
+def test_ingest_push_conflict_remains_conflict(ingest_api, monkeypatch):
+    client, canonical = ingest_api
+    source = _push_source()
+    source["origin"] = {"ingress": "pull"}
+    monkeypatch.setattr(
+        canonical.source_store, "get_source",
+        lambda *_args, **_kwargs: source,
+    )
+
+    response = _ingest(client)
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Source is not push-rooted"}
+
+
+def test_canonical_exception_mapping_preserves_response_metadata():
+    from windex.api import canonical
+
+    original = HTTPException(
+        413,
+        detail={"message": "bounded"},
+        headers={"Retry-After": "9"},
+    )
+    with pytest.raises(HTTPException) as raised:
+        canonical._raise(original)
+
+    assert raised.value is original
+    assert raised.value.detail == {"message": "bounded"}
+    assert raised.value.headers == {"Retry-After": "9"}
+
+
+def test_ingest_internal_failure_is_not_misreported_as_validation(
+    ingest_api, monkeypatch,
+):
+    _client, canonical = ingest_api
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("database transport failed")
+
+    monkeypatch.setattr(canonical.source_store, "get_source", fail)
+    response = _ingest(TestClient(app, raise_server_exceptions=False))
+
+    assert response.status_code == 500
+    assert response.text == "Internal Server Error"
 
 
 def test_plaintext_module_authoring_is_refused(monkeypatch):

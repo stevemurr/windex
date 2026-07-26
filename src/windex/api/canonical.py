@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from windex import db
 from windex.config import get_settings
@@ -32,6 +33,7 @@ from windex.pipeline import run_store
 from windex.pipeline import store as pipeline_store
 from windex.pipeline.spec import validate as validate_pipeline
 from windex.source import store as source_store
+from windex.worker.protocol import PermanentTaskError
 
 router = APIRouter(prefix="/v1")
 data_router = APIRouter(prefix="/v1")
@@ -625,6 +627,9 @@ class ActionResponse(Strict):
     run_id: int | None = None
 
 
+MAX_INGEST_TEXT_BYTES = 64 * 1024 * 1024
+
+
 def _detail(exc: Exception) -> Any:
     if isinstance(exc, ContractError):
         return {
@@ -637,6 +642,13 @@ def _detail(exc: Exception) -> Any:
 
 
 def _raise(exc: Exception) -> None:
+    # Routes use this mapper from broad exception boundaries around store
+    # operations.  A response deliberately raised inside one of those
+    # boundaries must retain its status, structured detail, and headers.
+    # Match Starlette's base class so both FastAPI and mounted-app response
+    # exceptions are preserved.
+    if isinstance(exc, StarletteHTTPException):
+        raise exc
     if isinstance(exc, source_store.TriggerValidationError):
         raise HTTPException(422, exc.api_detail())
     if isinstance(exc, KeyError):
@@ -652,7 +664,13 @@ def _raise(exc: Exception) -> None:
         source_store.SourceConflictError, run_store.RunConflictError,
     )):
         raise HTTPException(409, _detail(exc))
-    raise HTTPException(422, _detail(exc))
+    if isinstance(exc, (
+        ContractError, PermanentTaskError, ValueError, LookupError,
+    )):
+        raise HTTPException(422, _detail(exc))
+    # Do not disguise database, network, or programming failures as invalid
+    # client input.  Let FastAPI's exception boundary report an internal error.
+    raise exc
 
 
 def _pipeline_revision_guard(
@@ -1415,7 +1433,7 @@ def source_ingest(
     idempotency_key: str = Header(..., min_length=8, max_length=128),
 ) -> dict[str, Any]:
     total = sum(len(item.text.encode()) for item in body.documents)
-    if total > 64 * 1024 * 1024:
+    if total > MAX_INGEST_TEXT_BYTES:
         raise HTTPException(413, "ingest payload exceeds 64 MiB")
     documents = [item.model_dump() for item in body.documents]
     try:
