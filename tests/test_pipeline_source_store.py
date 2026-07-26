@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import copy
 import uuid
 
 import psycopg
 import pytest
 
 from windex.config import Settings
+from windex.api.canonical import UpgradePreviewResponse
 from windex.db.canonical import init_canonical_db
 from windex.pipeline.run_store import get_run, submit_source
 from windex.pipeline.store import (
@@ -16,10 +18,13 @@ from windex.pipeline.store import (
     put_layout,
 )
 from windex.source.store import (
+    SourceConflictError,
     StaleSourceError,
     get_source,
     patch_settings,
     settings_projection,
+    upgrade,
+    upgrade_preview,
 )
 
 
@@ -85,3 +90,69 @@ def test_source_run_freezes_binding_and_index_continuation(canonical_conn):
     assert run["pipeline_name"] == "hn"
     assert run["tasks"][-1]["node"] == "__index__"
     assert run["tasks"][-1]["depends_on"]
+
+
+def test_source_upgrade_accepts_edited_candidate_and_is_atomic(canonical_conn):
+    pipeline = get_pipeline(canonical_conn, "hn")
+    source = get_source(canonical_conn, "hn")
+    assert pipeline and source
+
+    spec = copy.deepcopy(pipeline["spec"])
+    spec["parameters"].append({
+        "key": "install_profile",
+        "kind": "str",
+        "required": True,
+        "stage": "install",
+    })
+    revision = publish_revision(
+        canonical_conn,
+        "hn",
+        spec,
+        expected_version=pipeline["version"],
+        expected_hash=pipeline["spec_hash"],
+    )
+    assert revision["version"] == 2
+
+    incomplete = upgrade_preview(canonical_conn, "hn", 2)
+    UpgradePreviewResponse.model_validate(incomplete)
+    assert incomplete["valid"] is False
+    assert incomplete["confirmation_token"] is None
+    assert incomplete["missing"] == ["install_profile"]
+
+    edited_values = {
+        **source["values"],
+        "install_profile": "standard",
+    }
+    preview = upgrade_preview(
+        canonical_conn,
+        "hn",
+        2,
+        values=edited_values,
+    )
+    UpgradePreviewResponse.model_validate(preview)
+    assert preview["valid"] is True
+    assert preview["candidate"]["install_profile"] == "standard"
+    assert preview["install_stage_changed"] == ["install_profile"]
+    assert preview["confirmation_token"]
+
+    with pytest.raises(SourceConflictError):
+        upgrade(
+            canonical_conn,
+            "hn",
+            2,
+            {**edited_values, "install_profile": "tampered"},
+            preview["confirmation_token"],
+        )
+    unchanged = get_source(canonical_conn, "hn")
+    assert unchanged["pipeline_version"] == 1
+    assert "install_profile" not in unchanged["values"]
+
+    upgraded = upgrade(
+        canonical_conn,
+        "hn",
+        2,
+        edited_values,
+        preview["confirmation_token"],
+    )
+    assert upgraded["pipeline_version"] == 2
+    assert upgraded["values"]["install_profile"] == "standard"

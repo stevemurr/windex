@@ -568,11 +568,12 @@ def reset(conn: psycopg.Connection, name: str, token: str) -> dict[str, Any]:
     }
 
 
-def upgrade_preview(
+def _upgrade_plan(
     conn: psycopg.Connection,
     name: str,
     target_version: int,
     *,
+    values: Mapping[str, Any] | None = None,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     source = get_source(conn, name, include_spec=True)
@@ -582,32 +583,74 @@ def upgrade_preview(
     if target is None:
         raise KeyError((source["pipeline_name"], target_version))
     pipeline = parse(target["spec"], settings)
+    active_settings = settings or Settings()
     old_values = dict(source["values"])
     declarations = {item.key: item for item in pipeline.parameters}
     retained: dict[str, Any] = {}
     defaulted: dict[str, Any] = {}
-    clamped: dict[str, dict[str, Any]] = {}
-    missing: list[str] = []
+    migration_clamped: dict[str, dict[str, Any]] = {}
     for key, declaration in declarations.items():
         if key in old_values and old_values[key] is not None:
             try:
-                value = declaration.coerce(old_values[key], settings or Settings())
+                value = declaration.coerce(old_values[key], active_settings)
             except ValueError:
-                if declaration.required and declaration.default is None:
-                    missing.append(key)
                 continue
             retained[key] = value
             if value != old_values[key]:
-                clamped[key] = {"from": old_values[key], "to": value}
+                migration_clamped[key] = {
+                    "from": old_values[key],
+                    "to": value,
+                }
         elif declaration.default is not None:
             defaulted[key] = declaration.default
-        elif declaration.required:
-            missing.append(key)
     removed = sorted(set(old_values) - set(declarations))
-    candidate = {**retained, **defaulted}
+    requested = dict(values) if values is not None else {**retained, **defaulted}
+    validation = validate_candidate(
+        conn,
+        {
+            **source,
+            "pipeline_name": source["pipeline_name"],
+            "pipeline_version": target_version,
+            "values": requested,
+        },
+        settings=active_settings,
+        exclude=name,
+    )
+    issues = list(validation["issues"])
+    candidate: dict[str, Any]
+    normalization_error: ValueError | None = None
+    try:
+        candidate = resolve_parameters(pipeline, active_settings, requested)
+    except ValueError as exc:
+        candidate = requested
+        normalization_error = exc
+    valid = bool(validation["valid"])
+    if normalization_error is not None and valid:
+        # Deployment validation and normalization must agree before a token can
+        # authorize the atomic pointer/config write.
+        valid = False
+        issues.append({
+            "path": "values",
+            "code": "invalid_candidate",
+            "severity": "error",
+            "message": str(normalization_error),
+        })
+    clamped = dict(migration_clamped if values is None else {})
+    clamped.update({
+        key: {"from": requested[key], "to": candidate[key]}
+        for key in requested.keys() & candidate.keys()
+        if requested[key] != candidate[key]
+    })
+    missing = sorted({
+        issue["path"].removeprefix("values.")
+        for issue in issues
+        if issue["code"] == "required"
+        and issue["path"].startswith("values.")
+    })
     install_changed = sorted(
         key for key in candidate
-        if declarations[key].stage == "install"
+        if key in declarations
+        and declarations[key].stage == "install"
         and candidate.get(key) != old_values.get(key)
     )
     payload = {
@@ -618,9 +661,9 @@ def upgrade_preview(
         "expected_etag": source["values_hash"],
         "candidate_hash": values_hash(candidate),
     }
-    token = _confirmation(conn, "upgrade", name, payload)
     return {
         **payload,
+        "candidate": candidate,
         "retained": retained,
         "defaulted": defaulted,
         "removed": removed,
@@ -631,15 +674,38 @@ def upgrade_preview(
             "stores_preserved": sorted(pipeline.state),
             "requires_confirmation": bool(install_changed),
         },
-        "confirmation_token": token,
-        "valid": not missing,
+        "issues": issues,
+        "valid": valid,
     }
+
+
+def upgrade_preview(
+    conn: psycopg.Connection,
+    name: str,
+    target_version: int,
+    *,
+    values: Mapping[str, Any] | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    plan = _upgrade_plan(
+        conn,
+        name,
+        target_version,
+        values=values,
+        settings=settings,
+    )
+    token = (
+        _confirmation(conn, "upgrade", name, plan)
+        if plan["valid"] else None
+    )
+    return {**plan, "confirmation_token": token}
 
 
 def upgrade(
     conn: psycopg.Connection,
     name: str,
     target_version: int,
+    values: Mapping[str, Any],
     token: str,
     *,
     settings: Settings | None = None,
@@ -650,33 +716,19 @@ def upgrade(
     target = get_revision(conn, source["pipeline_name"], target_version)
     if target is None:
         raise KeyError((source["pipeline_name"], target_version))
-    pipeline = parse(target["spec"], settings)
-    declarations = {item.key: item for item in pipeline.parameters}
-    candidate: dict[str, Any] = {}
-    missing: list[str] = []
-    for key, declaration in declarations.items():
-        if key in source["values"] and source["values"][key] is not None:
-            try:
-                candidate[key] = declaration.coerce(
-                    source["values"][key], settings or Settings())
-            except ValueError:
-                if declaration.required and declaration.default is None:
-                    missing.append(key)
-        elif declaration.default is not None:
-            candidate[key] = declaration.default
-        elif declaration.required:
-            missing.append(key)
-    if missing:
-        raise SourceConflictError(
-            "upgrade has missing required values: " + ", ".join(missing))
-    payload = {
-        "source_id": source["id"],
-        "from_version": source["pipeline_version"],
-        "target_version": target_version,
-        "target_hash": target["spec_hash"],
-        "expected_etag": source["values_hash"],
-        "candidate_hash": values_hash(candidate),
-    }
+    plan = _upgrade_plan(
+        conn,
+        name,
+        target_version,
+        values=values,
+        settings=settings,
+    )
+    if not plan["valid"]:
+        raise SourceConflictError({
+            "message": "Source upgrade candidate is invalid",
+            "issues": plan["issues"],
+        })
+    candidate = plan["candidate"]
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     try:
         with conn.cursor() as cur:
@@ -687,7 +739,7 @@ def upgrade(
                       AND subject = %s AND payload_hash = %s
                       AND consumed_at IS NULL AND expires_at > now()
                     RETURNING token_hash""",
-                (token_hash, name, values_hash(payload)),
+                (token_hash, name, values_hash(plan)),
             )
             if cur.fetchone() is None:
                 raise SourceConflictError(
@@ -698,8 +750,8 @@ def upgrade(
                     WHERE source_id = %s AND values_hash = %s
                     RETURNING source_id""",
                 (
-                    Jsonb(candidate), payload["candidate_hash"], source["id"],
-                    payload["expected_etag"],
+                    Jsonb(candidate), plan["candidate_hash"], source["id"],
+                    plan["expected_etag"],
                 ),
             )
             if cur.fetchone() is None:

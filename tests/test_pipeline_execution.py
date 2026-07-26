@@ -290,6 +290,40 @@ def test_generic_boundary_output_uses_typed_durable_artifact(
     assert path.stat().st_size == metadata["size_bytes"]
 
 
+def test_generic_dry_run_is_frozen_and_reaches_worker_context(canonical_conn):
+    create_pipeline(
+        canonical_conn,
+        name="generic_dry_run",
+        spec=_generic_output_pipeline(),
+    )
+    run_id = submit_pipeline(
+        canonical_conn,
+        "generic_dry_run",
+        version=1,
+        flow="receive",
+        inputs={"documents": {"documents": []}},
+        parameters={},
+        dry_run=True,
+    )
+    run = get_run(canonical_conn, run_id)
+    RunModel.model_validate(run)
+    assert run["mode"] == "dry_run"
+    assert run["pipeline_version"] == 1
+    assert run["source_id"] is None
+
+    task = canonical_claim.claim_task(
+        canonical_conn,
+        worker="pytest/dry-run",
+        lanes=["io"],
+        caps={"io": 1},
+        satisfied=[],
+        default_cap=1,
+    )
+    assert task is not None
+    assert task.run_id == run_id
+    assert task.mode == "dry_run"
+
+
 def test_scheduler_fire_and_watermark_are_atomic(canonical_conn):
     trigger = create_trigger(canonical_conn, "hn", {
         "flow_name": "harvest",

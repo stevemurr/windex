@@ -216,12 +216,24 @@ class TriggerPatch(Strict):
     next_fire_at: str | None = None
 
 
+class SourceUpgradePreviewRequest(Strict):
+    target_version: int
+    values: dict[str, Any] | None = None
+
+
+class SourceUpgradeRequest(Strict):
+    target_version: int
+    values: dict[str, Any]
+    confirmation_token: str
+
+
 class PipelineRunCreate(Strict):
     version: int | None = None
     flow: str | None = None
     inputs: dict[str, Any] = Field(default_factory=dict)
     parameters: dict[str, Any] = Field(default_factory=dict)
     priority: int = Field(50, ge=0, le=100)
+    dry_run: bool = False
 
 
 class SourceRunCreate(Strict):
@@ -532,6 +544,7 @@ class UpgradePreviewResponse(Strict):
     target_hash: str
     expected_etag: str
     candidate_hash: str
+    candidate: dict[str, Any]
     retained: dict[str, Any]
     defaulted: dict[str, Any]
     removed: list[str]
@@ -539,7 +552,8 @@ class UpgradePreviewResponse(Strict):
     missing: list[str]
     install_stage_changed: list[str]
     state_impact: dict[str, Any]
-    confirmation_token: str
+    issues: list[ValidationIssueModel]
+    confirmation_token: str | None
     valid: bool
 
 
@@ -850,12 +864,17 @@ def source_validate_existing(name: str) -> dict[str, Any]:
     response_model=UpgradePreviewResponse,
 )
 def source_upgrade_preview(
-    name: str, target_version: int = Body(..., embed=True),
+    name: str, body: SourceUpgradePreviewRequest,
 ) -> dict[str, Any]:
     try:
         with db.pooled(get_settings().pg_dsn) as conn:
             return source_store.upgrade_preview(
-                conn, name, target_version, settings=get_settings())
+                conn,
+                name,
+                body.target_version,
+                values=body.values,
+                settings=get_settings(),
+            )
     except Exception as exc:
         _raise(exc)
 
@@ -863,14 +882,18 @@ def source_upgrade_preview(
 @router.post("/sources/{name}/upgrade", response_model=SourceModel)
 def source_upgrade(
     name: str,
-    target_version: int = Body(...),
-    confirmation_token: str = Body(...),
+    body: SourceUpgradeRequest,
 ) -> dict[str, Any]:
     try:
         with db.pooled(get_settings().pg_dsn) as conn:
             return source_store.upgrade(
-                conn, name, target_version, confirmation_token,
-                settings=get_settings())
+                conn,
+                name,
+                body.target_version,
+                body.values,
+                body.confirmation_token,
+                settings=get_settings(),
+            )
     except Exception as exc:
         _raise(exc)
 
@@ -1051,7 +1074,9 @@ def source_run_create(name: str, body: SourceRunCreate) -> dict[str, Any]:
     response_model=QueuedRunResponse,
 )
 def pipeline_run_create(
-    name: str, body: PipelineRunCreate, if_match: str | None = Header(None),
+    name: str,
+    body: PipelineRunCreate,
+    if_match: str | None = Header(None),
 ) -> dict[str, Any]:
     if body.version is None and if_match is None:
         raise HTTPException(
@@ -1064,7 +1089,8 @@ def pipeline_run_create(
                 conn, name, version=body.version, flow=body.flow,
                 inputs=body.inputs, parameters=body.parameters,
                 expected_head=if_match.strip('"') if if_match else None,
-                priority=body.priority, settings=get_settings())
+                priority=body.priority, dry_run=body.dry_run,
+                settings=get_settings())
         return {"run_id": run_id, "queued": True}
     except Exception as exc:
         _raise(exc)
