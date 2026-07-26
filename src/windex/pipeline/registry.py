@@ -416,7 +416,7 @@ _EXTRACT = (
             fields=(_p("chunk_rows", "int", lo=100, hi=50_000, default=2000),)),
     _simple("warc.datatrove", "extract", "WARC via datatrove",
             "The FineWeb block pipeline: extraction, language and quality in one "
-            "pass, with its own task-per-WARC parallelism and resume.",
+            "pass, resumable at bounded response-record chunks.",
             "ccnews/pipeline.py:48-101", batched=True,
             fields=(
                 _p("language", "str", default="en"),
@@ -424,6 +424,10 @@ _EXTRACT = (
                    help="Was cpu_count()-2, which forked 18 extraction processes on "
                         "a 20-core box and is the prime suspect for the memory-"
                         "pressure resets. Capped deliberately."),
+                _p("records_per_slice", "int", lo=250, hi=10_000, default=3000,
+                   help="Maximum WARC response records per durable worker slice. "
+                        "The default keeps a 1GB CC-News shard within the two-minute "
+                        "cooperative scheduling budget on the production host."),
             )),
     _simple("github.compose_doc", "extract", "Compose repo document",
             "Repo metadata + cleaned README into one document.",

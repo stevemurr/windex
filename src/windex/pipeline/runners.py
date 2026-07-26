@@ -45,7 +45,6 @@ from windex.modules.extract import (
     markdown_passthrough,
     oai_arxiv_records,
     parquet_rows,
-    warc_datatrove,
 )
 from windex.modules.fetch import (
     github_graphql_batch,
@@ -56,6 +55,7 @@ from windex.modules.fetch import (
 )
 from windex.modules.load import ledger_stage
 from windex.modules.receive import push_docs
+from windex.modules.warc import warc_datatrove
 from windex.modules.transform import (
     canonical_url,
     dedup_boilerplate,

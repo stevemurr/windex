@@ -5,6 +5,7 @@ drops article titles, so NewsExtractor uses trafilatura.bare_extraction to keep
 title/date metadata alongside the text.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -45,7 +46,15 @@ class NewsExtractor(PipelineStep):
             yield doc
 
 
-def build_pipeline(warc_dir: Path, rel_paths_file: Path, out_dir: Path, language: str):
+def build_pipeline(
+    warc_dir: Path,
+    rel_paths_file: Path,
+    out_dir: Path,
+    language: str,
+    *,
+    skip: int = 0,
+    limit: int = -1,
+):
     from datatrove.pipeline.filters import (
         C4QualityFilter,
         FineWebQualityFilter,
@@ -58,7 +67,8 @@ def build_pipeline(warc_dir: Path, rel_paths_file: Path, out_dir: Path, language
     from datatrove.pipeline.writers import ParquetWriter
 
     return [
-        WarcReader(str(warc_dir), paths_file=str(rel_paths_file)),
+        WarcReader(
+            str(warc_dir), paths_file=str(rel_paths_file), skip=skip, limit=limit),
         URLFilter(),
         NewsExtractor(),
         LanguageFilter(languages=[language]),
@@ -77,9 +87,17 @@ def process_batch(
     logging_dir: Path,
     language: str,
     workers: int = 0,
-) -> None:
+    *,
+    skip: int = 0,
+    limit: int = -1,
+) -> int:
     """Run the extraction pipeline over the given WARC files (one datatrove task
-    per file). Raises on failure; datatrove resumes completed tasks on retry."""
+    per file). Raises on failure; datatrove resumes completed tasks on retry.
+
+    ``skip`` and ``limit`` make a large WARC cooperatively resumable at response
+    record boundaries. Returns the number of reader records processed after
+    ``skip``.
+    """
     import shutil
 
     from datatrove.executor import LocalPipelineExecutor
@@ -93,9 +111,29 @@ def process_batch(
     rel_paths_file.write_text("\n".join(local_names))
 
     executor = LocalPipelineExecutor(
-        pipeline=build_pipeline(warc_dir, rel_paths_file, out_dir, language),
+        pipeline=build_pipeline(
+            warc_dir, rel_paths_file, out_dir, language,
+            skip=skip, limit=limit),
         tasks=len(local_names),
         workers=workers or max((os.cpu_count() or 4) - 2, 1),
         logging_dir=str(logging_dir),
     )
     executor.run()
+
+    stats_paths = sorted((logging_dir / "stats").glob("*.json"))
+    if not stats_paths:
+        raise RuntimeError(f"datatrove wrote no reader stats under {logging_dir}")
+    input_documents = 0
+    for stats_path in stats_paths:
+        blocks = json.loads(stats_path.read_text())
+        reader = next(
+            (block for block in blocks
+             if "READER:" in str(block.get("name", ""))),
+            None,
+        )
+        if reader is None:
+            raise RuntimeError(
+                f"datatrove reader stats missing from {stats_path}")
+        documents = (reader.get("stats") or {}).get("documents") or {}
+        input_documents += int(documents.get("total", 0))
+    return input_documents
