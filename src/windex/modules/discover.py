@@ -17,8 +17,8 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from windex.crawl.scope import canonicalize
-from windex.recipe.ports import PartitionRef, WorkUnit
-from windex.recipe.wire import encode_many
+from windex.pipeline.ports import PartitionRef, WorkUnit
+from windex.pipeline.wire import encode_many
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 
@@ -155,7 +155,7 @@ def state_pending(ctx: TaskContext) -> SliceResult:
     store = str(ctx.config.get("store", ""))
     if not store:
         raise PermanentTaskError("state.pending requires a store")
-    source = ctx.recipe or ctx.source
+    state_namespace = ctx.state_namespace or ctx.search_name
     batch = int(ctx.config.get("batch", 50))
     overall = int(ctx.config.get("limit") or 0)
     with ctx.conn.cursor() as cur:
@@ -168,20 +168,20 @@ def state_pending(ctx: TaskContext) -> SliceResult:
         ctx.conn.commit()
         return SliceResult(exhausted=True, units_total=overall)
     take = min(batch, overall - already) if overall else batch
-    if source == "gh" and store == "gh_shards":
-        threshold = int(ctx.params.get("star_threshold", 10))
+    if state_namespace == "gh" and store == "gh_shards":
+        threshold = int(ctx.effective_config.get("star_threshold", 10))
         rows = _github_shard_rows(date.today(), threshold)
         with ctx.conn.cursor() as cur:
             cur.executemany(
                 """
                 INSERT INTO source_units
-                       (source, store, unit_key, ord, upstream, attrs)
+                       (state_namespace, store, unit_key, ord, upstream, attrs)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (source, store, unit_key) DO NOTHING
+                ON CONFLICT (state_namespace, store, unit_key) DO NOTHING
                 """,
                 [
                     (
-                        source, store, key, payload["from"],
+                        state_namespace, store, key, payload["from"],
                         Jsonb(payload), Jsonb(payload),
                     )
                     for key, payload in rows
@@ -200,7 +200,7 @@ def state_pending(ctx: TaskContext) -> SliceResult:
     anchor_args: list[Any] = []
     source_filter = sql.SQL("")
     source_args: list[Any] = []
-    if source == "hf" and store == "root":
+    if state_namespace == "hf" and store == "root":
         # The sitemap includes a few client-rendered roots with no llms.txt.
         # Sync records them with a null hash for observability; they are not a
         # crawl frontier because there is no complete page enumeration. A few
@@ -210,7 +210,7 @@ def state_pending(ctx: TaskContext) -> SliceResult:
             "AND u.upstream->>'llms_hash' IS NOT NULL "
             "AND (NOT (u.attrs ? 'pages') "
             "     OR coalesce((u.attrs->>'pages')::integer, 0) > 0)")
-        raw_roots = ctx.params.get("roots")
+        raw_roots = ctx.effective_config.get("roots")
         roots = [
             str(value).strip().strip("/")
             for value in (
@@ -222,8 +222,8 @@ def state_pending(ctx: TaskContext) -> SliceResult:
         if roots:
             source_filter += sql.SQL(" AND u.unit_key = ANY(%s)")
             source_args.append(roots)
-    raw_anchors = ctx.params.get("anchor_ids")
-    if source == "hf" and raw_anchors:
+    raw_anchors = ctx.effective_config.get("anchor_ids")
+    if state_namespace == "hf" and raw_anchors:
         anchors = (
             [value.strip() for value in raw_anchors.split(",")]
             if isinstance(raw_anchors, str) else
@@ -254,7 +254,7 @@ def state_pending(ctx: TaskContext) -> SliceResult:
         """
         SELECT u.unit_key, u.upstream, u.attempts, u.attrs
           FROM source_units u
-         WHERE u.source = %s AND u.store = %s
+         WHERE u.state_namespace = %s AND u.store = %s
            AND {pending}
            {lease}
            {source_filter}
@@ -271,7 +271,7 @@ def state_pending(ctx: TaskContext) -> SliceResult:
             anchor_filter=anchor_filter,
             order=order,
         )
-    params: list[Any] = [source, store, *args]
+    params: list[Any] = [state_namespace, store, *args]
     if claim == "lease":
         params.append(stale)
     params.extend(source_args)
@@ -314,18 +314,18 @@ def state_pending(ctx: TaskContext) -> SliceResult:
                     UPDATE source_units
                        SET status = 'processing', claimed_at = now(),
                            last_run_id = %s, updated_at = now()
-                     WHERE source = %s AND store = %s AND unit_key = ANY(%s)
+                     WHERE state_namespace = %s AND store = %s AND unit_key = ANY(%s)
                     """,
-                    (ctx.run_id, source, store, keys),
+                    (ctx.run_id, state_namespace, store, keys),
                 )
             else:
                 cur.execute(
                     """
                     UPDATE source_units
                        SET last_run_id = %s, updated_at = now()
-                     WHERE source = %s AND store = %s AND unit_key = ANY(%s)
+                     WHERE state_namespace = %s AND store = %s AND unit_key = ANY(%s)
                     """,
-                    (ctx.run_id, source, store, keys),
+                    (ctx.run_id, state_namespace, store, keys),
                 )
     ctx.conn.commit()
     done = len(selected)
@@ -380,8 +380,8 @@ def state_repos_pending(ctx: TaskContext) -> SliceResult:
                        r.description, r.topics, r.primary_language,
                        r.default_branch, r.pushed_at, r.readme_fetched_at,
                        r.status
-                  FROM repos r
-                 WHERE r.status = ANY(%s)
+                 FROM repos r
+                 WHERE r.source_id = %s AND r.status = ANY(%s)
                    AND coalesce(r.star_events, 0) >= %s
                    AND NOT EXISTS (
                          SELECT 1 FROM task_units t
@@ -392,7 +392,7 @@ def state_repos_pending(ctx: TaskContext) -> SliceResult:
                 """).format(order=order)
             cur.execute(
                 query,
-                (stages, minimum, ctx.task_id, room + 1),
+                (ctx.source_id, stages, minimum, ctx.task_id, room + 1),
             )
             rows = cur.fetchall()
         else:
@@ -468,17 +468,17 @@ def time_calendar(ctx: TaskContext) -> SliceResult:
         raise PermanentTaskError("time.calendar requires into")
     pattern = str(ctx.config.get("format", ""))
     keys = _calendar_keys(unit, trailing, pattern, date.today())
-    source = ctx.recipe or ctx.source
+    state_namespace = ctx.state_namespace or ctx.search_name
     with ctx.conn.cursor() as cur:
         cur.executemany(
             """
             INSERT INTO source_units
-                   (source, store, unit_key, ord, upstream, attrs)
+                   (state_namespace, store, unit_key, ord, upstream, attrs)
             VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (source, store, unit_key) DO NOTHING
+            ON CONFLICT (state_namespace, store, unit_key) DO NOTHING
             """,
             [
-                (source, store, key, key, Jsonb({"key": key}),
+                (state_namespace, store, key, key, Jsonb({"key": key}),
                  Jsonb({"calendar_unit": unit}))
                 for key in keys
             ],
@@ -487,7 +487,7 @@ def time_calendar(ctx: TaskContext) -> SliceResult:
             """
             SELECT u.unit_key, u.upstream, u.attrs
               FROM source_units u
-             WHERE u.source = %s AND u.store = %s
+             WHERE u.state_namespace = %s AND u.store = %s
                AND u.unit_key = ANY(%s) AND u.ingested IS NULL
                AND NOT EXISTS (
                      SELECT 1 FROM task_units t
@@ -495,7 +495,7 @@ def time_calendar(ctx: TaskContext) -> SliceResult:
              ORDER BY u.ord
              LIMIT 501
             """,
-            (source, store, keys, ctx.task_id),
+            (state_namespace, store, keys, ctx.task_id),
         )
         rows = cur.fetchall()
     selected = []
@@ -537,7 +537,7 @@ def _window_rows(ctx: TaskContext, today: date) -> list[tuple[str, dict, bool]]:
     if unit not in {"day", "month", "year"}:
         raise PermanentTaskError(f"time.windows has unknown unit {unit!r}")
     incremental = int(ctx.config.get("incremental_days", 7))
-    if ctx.source == "hn":
+    if ctx.search_name == "hn":
         floor = date(2006, 10, 1)
         rows = []
         for year, month in _months(floor, today):
@@ -601,22 +601,22 @@ def _window_rows(ctx: TaskContext, today: date) -> list[tuple[str, dict, bool]]:
 
 def time_windows(ctx: TaskContext) -> SliceResult:
     """Plan stable backfill windows plus a rolling re-armed tail."""
-    source = ctx.recipe or ctx.source
+    state_namespace = ctx.state_namespace or ctx.search_name
     store = "window"
     rows = _window_rows(ctx, date.today())
     with ctx.conn.cursor() as cur:
         cur.executemany(
             """
             INSERT INTO source_units
-                   (source, store, unit_key, ord, upstream, attrs)
+                   (state_namespace, store, unit_key, ord, upstream, attrs)
             VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (source, store, unit_key) DO UPDATE
+            ON CONFLICT (state_namespace, store, unit_key) DO UPDATE
                SET upstream = EXCLUDED.upstream,
                    attrs = source_units.attrs || EXCLUDED.attrs,
                    updated_at = now()
             """,
             [
-                (source, store, key, key, Jsonb(payload),
+                (state_namespace, store, key, key, Jsonb(payload),
                  Jsonb({"rolling": rolling, **payload}))
                 for key, payload, rolling in rows
             ],
@@ -626,7 +626,7 @@ def time_windows(ctx: TaskContext) -> SliceResult:
             """
             SELECT u.unit_key, u.upstream, u.attrs
               FROM source_units u
-             WHERE u.source = %s AND u.store = %s
+             WHERE u.state_namespace = %s AND u.store = %s
                AND u.unit_key = ANY(%s)
                AND (u.ingested IS NULL OR (u.attrs->>'rolling')::boolean)
                AND NOT EXISTS (
@@ -635,7 +635,7 @@ def time_windows(ctx: TaskContext) -> SliceResult:
              ORDER BY (u.attrs->>'rolling')::boolean, u.ord
              LIMIT 101
             """,
-            (source, store, keys, ctx.task_id),
+            (state_namespace, store, keys, ctx.task_id),
         )
         pending = cur.fetchall()
     selected = []

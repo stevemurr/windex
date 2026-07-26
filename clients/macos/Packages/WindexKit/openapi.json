@@ -1,308 +1,10 @@
 {
   "components": {
     "schemas": {
-      "ActionResult": {
-        "additionalProperties": true,
-        "description": "A mutating call's acknowledgement. Shapes vary by action (each returns the\nstate it just set), so only the common keys are declared.",
-        "properties": {
-          "detail": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Detail"
-          },
-          "ok": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ok"
-          }
-        },
-        "title": "ActionResult",
-        "type": "object"
-      },
-      "ActivityItem": {
-        "additionalProperties": true,
-        "properties": {
-          "error": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
-          "group": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Group"
-          },
-          "label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Label"
-          },
-          "last_ts": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Ts"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "running": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Running"
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "title": "ActivityItem",
-        "type": "object"
-      },
-      "ControlState": {
-        "additionalProperties": true,
-        "properties": {
-          "indexing": {
-            "title": "Indexing",
-            "type": "string"
-          }
-        },
-        "required": [
-          "indexing"
-        ],
-        "title": "ControlState",
-        "type": "object"
-      },
-      "CrawlCancelled": {
-        "additionalProperties": true,
-        "properties": {
-          "run_id": {
-            "title": "Run Id",
-            "type": "integer"
-          },
-          "status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Status"
-          }
-        },
-        "required": [
-          "run_id"
-        ],
-        "title": "CrawlCancelled",
-        "type": "object"
-      },
-      "CrawlDedup": {
+      "DocumentResponse": {
         "additionalProperties": false,
         "properties": {
-          "drop_boilerplate": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Drop Boilerplate"
-          },
-          "prune": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Prune"
-          }
-        },
-        "title": "CrawlDedup",
-        "type": "object"
-      },
-      "CrawlExtract": {
-        "additionalProperties": false,
-        "properties": {
-          "min_chars": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Min Chars"
-          },
-          "quality_filters": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Quality Filters"
-          }
-        },
-        "title": "CrawlExtract",
-        "type": "object"
-      },
-      "CrawlLimits": {
-        "additionalProperties": false,
-        "properties": {
-          "host_interval": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Host Interval"
-          },
-          "max_depth": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Depth"
-          },
-          "max_page_bytes": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Page Bytes"
-          },
-          "max_pages": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Pages"
-          },
-          "request_timeout": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Request Timeout"
-          }
-        },
-        "title": "CrawlLimits",
-        "type": "object"
-      },
-      "CrawlPreview-Input": {
-        "additionalProperties": false,
-        "properties": {
-          "dedup": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CrawlDedup"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "extract": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CrawlExtract"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "limits": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CrawlLimits"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "scope": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CrawlScope"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "seed": {
+          "duplicate_of": {
             "anyOf": [
               {
                 "type": "string"
@@ -311,575 +13,26 @@
                 "type": "null"
               }
             ],
-            "title": "Seed"
-          },
-          "seeds": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Seeds"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "CrawlPreview",
-        "type": "object"
-      },
-      "CrawlPreview-Output": {
-        "additionalProperties": true,
-        "description": "A dry run over the seeds only: fetches, writes nothing.\n\n`suggest` is the affordance worth preserving \u2014 when every link lives under a\ndifferent prefix than the seed, it proposes the one that would actually work,\nwhich turns a zero-result crawl into a one-click fix.",
-        "properties": {
-          "in_scope": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "In Scope"
-          },
-          "recipe": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Recipe"
-          },
-          "rejected": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "default": {},
-            "title": "Rejected",
-            "type": "object"
-          },
-          "sample": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sample"
-          },
-          "seeds": {
-            "default": [],
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "title": "Seeds",
-            "type": "array"
-          },
-          "suggest": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Suggest"
-          },
-          "truncated": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Truncated"
-          },
-          "urls": {
-            "default": [],
-            "items": {
-              "type": "string"
-            },
-            "title": "Urls",
-            "type": "array"
-          }
-        },
-        "title": "CrawlPreview",
-        "type": "object"
-      },
-      "CrawlQueued": {
-        "additionalProperties": true,
-        "properties": {
-          "recipe": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Recipe"
-          },
-          "run_id": {
-            "title": "Run Id",
-            "type": "integer"
-          },
-          "source": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source"
-          }
-        },
-        "required": [
-          "run_id"
-        ],
-        "title": "CrawlQueued",
-        "type": "object"
-      },
-      "CrawlRun": {
-        "additionalProperties": true,
-        "properties": {
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
-          "finished_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Finished At"
-          },
-          "id": {
-            "title": "Id",
-            "type": "integer"
-          },
-          "recipe": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Recipe"
-          },
-          "requested_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Requested At"
-          },
-          "source": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source"
-          },
-          "started_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Started At"
-          },
-          "stats": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stats"
-          },
-          "status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Status"
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "title": "CrawlRun",
-        "type": "object"
-      },
-      "CrawlRunDetail": {
-        "additionalProperties": true,
-        "properties": {
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
-          "finished_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Finished At"
-          },
-          "id": {
-            "title": "Id",
-            "type": "integer"
-          },
-          "recipe": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Recipe"
-          },
-          "requested_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Requested At"
-          },
-          "source": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source"
-          },
-          "started_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Started At"
-          },
-          "stats": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stats"
-          },
-          "status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Status"
-          },
-          "urls": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "default": {},
-            "title": "Urls",
-            "type": "object"
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "title": "CrawlRunDetail",
-        "type": "object"
-      },
-      "CrawlRunList": {
-        "additionalProperties": true,
-        "properties": {
-          "runs": {
-            "default": [],
-            "items": {
-              "$ref": "#/components/schemas/CrawlRun"
-            },
-            "title": "Runs",
-            "type": "array"
-          }
-        },
-        "title": "CrawlRunList",
-        "type": "object"
-      },
-      "CrawlScope": {
-        "additionalProperties": false,
-        "properties": {
-          "exclude": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exclude"
-          },
-          "include": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Include"
-          },
-          "path_prefix": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Path Prefix"
-          },
-          "same_host": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Same Host"
-          }
-        },
-        "title": "CrawlScope",
-        "type": "object"
-      },
-      "CrawlStart": {
-        "additionalProperties": false,
-        "properties": {
-          "dedup": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CrawlDedup"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "description": {
-            "default": "",
-            "title": "Description",
-            "type": "string"
-          },
-          "extract": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CrawlExtract"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "limits": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CrawlLimits"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "scope": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CrawlScope"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "seed": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Seed"
-          },
-          "seeds": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Seeds"
-          },
-          "source": {
-            "title": "Source",
-            "type": "string"
-          },
-          "title": {
-            "default": "",
-            "title": "Title",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "source"
-        ],
-        "title": "CrawlStart",
-        "type": "object"
-      },
-      "CustomDoc": {
-        "properties": {
-          "extra": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Extra"
+            "title": "Duplicate Of"
           },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "lang": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lang"
           },
           "published_at": {
             "anyOf": [
               {
-                "format": "date-time",
                 "type": "string"
               },
               {
@@ -888,113 +41,53 @@
             ],
             "title": "Published At"
           },
-          "text": {
-            "title": "Text",
-            "type": "string"
-          },
-          "title": {
-            "default": "",
-            "title": "Title",
-            "type": "string"
-          },
-          "url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
-          }
-        },
-        "required": [
-          "id",
-          "text"
-        ],
-        "title": "CustomDoc",
-        "type": "object"
-      },
-      "DatasetStats": {
-        "additionalProperties": true,
-        "properties": {
-          "by_status": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "default": {},
-            "title": "By Status",
-            "type": "object"
-          },
-          "content_from": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Content From"
-          },
-          "content_to": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Content To"
-          },
           "source": {
             "title": "Source",
             "type": "string"
           },
-          "total": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "text": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Total"
+            "title": "Text"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
           }
         },
         "required": [
-          "source"
+          "id",
+          "source",
+          "url",
+          "title",
+          "published_at",
+          "lang",
+          "status",
+          "duplicate_of",
+          "text"
         ],
-        "title": "DatasetStats",
-        "type": "object"
-      },
-      "DocsDelete": {
-        "properties": {
-          "ids": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Ids",
-            "type": "array"
-          }
-        },
-        "title": "DocsDelete",
-        "type": "object"
-      },
-      "DocsPush": {
-        "properties": {
-          "docs": {
-            "items": {
-              "$ref": "#/components/schemas/CustomDoc"
-            },
-            "title": "Docs",
-            "type": "array"
-          }
-        },
-        "title": "DocsPush",
+        "title": "DocumentResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1010,10 +103,10 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
-      "JobInfo": {
-        "additionalProperties": true,
+      "IngestDocument": {
+        "additionalProperties": false,
         "properties": {
-          "category": {
+          "canonical_url": {
             "anyOf": [
               {
                 "type": "string"
@@ -1022,71 +115,23 @@
                 "type": "null"
               }
             ],
-            "title": "Category"
+            "title": "Canonical Url"
           },
-          "confirm": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Confirm"
+          "deleted": {
+            "default": false,
+            "title": "Deleted",
+            "type": "boolean"
           },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "last_log": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Log"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "params": {
+          "fields": {
             "additionalProperties": true,
-            "default": {},
-            "title": "Params",
+            "title": "Fields",
             "type": "object"
           },
-          "pids": {
-            "default": [],
-            "items": {
-              "type": "integer"
-            },
-            "title": "Pids",
-            "type": "array"
+          "id": {
+            "title": "Id",
+            "type": "string"
           },
-          "running": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Running"
-          },
-          "title": {
+          "lang": {
             "anyOf": [
               {
                 "type": "string"
@@ -1095,19 +140,79 @@
                 "type": "null"
               }
             ],
-            "title": "Title"
+            "title": "Lang"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "text": {
+            "maxLength": 1000000,
+            "title": "Text",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
           }
         },
         "required": [
-          "name"
+          "id",
+          "url",
+          "text"
         ],
-        "title": "JobInfo",
+        "title": "IngestDocument",
         "type": "object"
       },
-      "LogSource": {
-        "additionalProperties": true,
+      "IngestRequest": {
+        "additionalProperties": false,
         "properties": {
-          "available": {
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/IngestDocument"
+            },
+            "maxItems": 10000,
+            "title": "Documents",
+            "type": "array"
+          },
+          "mode": {
+            "default": "delta",
+            "enum": [
+              "delta",
+              "full"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "windex.ingest/1",
+            "default": "windex.ingest/1",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "documents"
+        ],
+        "title": "IngestRequest",
+        "type": "object"
+      },
+      "QueuedRunResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "coalesced": {
             "anyOf": [
               {
                 "type": "boolean"
@@ -1116,9 +221,87 @@
                 "type": "null"
               }
             ],
-            "title": "Available"
+            "title": "Coalesced"
           },
-          "category": {
+          "queued": {
+            "title": "Queued",
+            "type": "boolean"
+          },
+          "rerun_of": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerun Of"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "run_id",
+          "queued"
+        ],
+        "title": "QueuedRunResponse",
+        "type": "object"
+      },
+      "SearchResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "timings": {
+            "additionalProperties": true,
+            "title": "Timings",
+            "type": "object"
+          },
+          "took_ms": {
+            "title": "Took Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query",
+          "results",
+          "mode",
+          "timings",
+          "took_ms"
+        ],
+        "title": "SearchResponse",
+        "type": "object"
+      },
+      "SearchResult": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "title": "Attribution"
+          },
+          "author": {
             "anyOf": [
               {
                 "type": "string"
@@ -1127,9 +310,48 @@
                 "type": "null"
               }
             ],
-            "title": "Category"
+            "title": "Author"
           },
-          "description": {
+          "authors": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authors"
+          },
+          "categories": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categories"
+          },
+          "chunk_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Index"
+          },
+          "conversation_id": {
             "anyOf": [
               {
                 "type": "string"
@@ -1138,7 +360,52 @@
                 "type": "null"
               }
             ],
-            "title": "Description"
+            "title": "Conversation Id"
+          },
+          "extra": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra"
+          },
+          "framework": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Framework"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "incoming_links": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Incoming Links"
           },
           "kind": {
             "anyOf": [
@@ -1151,22 +418,29 @@
             ],
             "title": "Kind"
           },
-          "mtime": {
+          "lang": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Mtime"
+            "title": "Lang"
           },
-          "name": {
-            "title": "Name",
-            "type": "string"
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
           },
-          "size": {
+          "num_comments": {
             "anyOf": [
               {
                 "type": "integer"
@@ -1175,9 +449,9 @@
                 "type": "null"
               }
             ],
-            "title": "Size"
+            "title": "Num Comments"
           },
-          "title": {
+          "outlet": {
             "anyOf": [
               {
                 "type": "string"
@@ -1186,85 +460,20 @@
                 "type": "null"
               }
             ],
-            "title": "Title"
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "title": "LogSource",
-        "type": "object"
-      },
-      "LogTail": {
-        "additionalProperties": true,
-        "properties": {
-          "available": {
+            "title": "Outlet"
+          },
+          "points": {
             "anyOf": [
               {
-                "type": "boolean"
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Available"
+            "title": "Points"
           },
-          "lines": {
-            "default": [],
-            "items": {
-              "type": "string"
-            },
-            "title": "Lines",
-            "type": "array"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "truncated": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Truncated"
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "title": "LogTail",
-        "type": "object"
-      },
-      "LoopState": {
-        "additionalProperties": true,
-        "properties": {
-          "enabled": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Enabled"
-          },
-          "ingest_enabled": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ingest Enabled"
-          },
-          "log": {
+          "primary_category": {
             "anyOf": [
               {
                 "type": "string"
@@ -1273,32 +482,15 @@
                 "type": "null"
               }
             ],
-            "title": "Log"
+            "title": "Primary Category"
           },
-          "pids": {
-            "default": [],
-            "items": {
-              "type": "integer"
-            },
-            "title": "Pids",
-            "type": "array"
+          "published_at": {
+            "title": "Published At"
           },
-          "running": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Running"
+          "pushed_at": {
+            "title": "Pushed At"
           },
-          "source": {
-            "title": "Source",
-            "type": "string"
-          },
-          "state": {
+          "root": {
             "anyOf": [
               {
                 "type": "string"
@@ -1307,142 +499,13 @@
                 "type": "null"
               }
             ],
-            "title": "State"
-          }
-        },
-        "required": [
-          "source"
-        ],
-        "title": "LoopState",
-        "type": "object"
-      },
-      "LoopsState": {
-        "additionalProperties": true,
-        "properties": {
-          "indexing_paused": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Indexing Paused"
+            "title": "Root"
           },
-          "loops": {
-            "default": [],
-            "items": {
-              "$ref": "#/components/schemas/LoopState"
-            },
-            "title": "Loops",
-            "type": "array"
+          "score": {
+            "title": "Score",
+            "type": "number"
           },
-          "watchdog_running": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Watchdog Running"
-          }
-        },
-        "title": "LoopsState",
-        "type": "object"
-      },
-      "MemoryChunk": {
-        "properties": {
-          "ended_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ended At"
-          },
-          "index": {
-            "minimum": 0.0,
-            "title": "Index",
-            "type": "integer"
-          },
-          "message_range": {
-            "anyOf": [
-              {
-                "maxItems": 2,
-                "minItems": 2,
-                "prefixItems": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "integer"
-                  }
-                ],
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Message Range"
-          },
-          "started_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Started At"
-          },
-          "text": {
-            "title": "Text",
-            "type": "string"
-          }
-        },
-        "required": [
-          "index",
-          "text"
-        ],
-        "title": "MemoryChunk",
-        "type": "object"
-      },
-      "MemoryPush": {
-        "properties": {
-          "chunks": {
-            "items": {
-              "$ref": "#/components/schemas/MemoryChunk"
-            },
-            "title": "Chunks",
-            "type": "array"
-          },
-          "title": {
-            "default": "",
-            "title": "Title",
-            "type": "string"
-          }
-        },
-        "title": "MemoryPush",
-        "type": "object"
-      },
-      "RecentDoc": {
-        "additionalProperties": true,
-        "properties": {
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "indexed_at": {
+          "snippet": {
             "anyOf": [
               {
                 "type": "string"
@@ -1451,7 +514,7 @@
                 "type": "null"
               }
             ],
-            "title": "Indexed At"
+            "title": "Snippet"
           },
           "source": {
             "anyOf": [
@@ -1464,6 +527,28 @@
             ],
             "title": "Source"
           },
+          "stars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stars"
+          },
+          "target_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Url"
+          },
           "title": {
             "anyOf": [
               {
@@ -1475,16 +560,19 @@
             ],
             "title": "Title"
           },
-          "ts": {
+          "topics": {
             "anyOf": [
               {
-                "type": "number"
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Ts"
+            "title": "Topics"
           },
           "url": {
             "anyOf": [
@@ -1496,742 +584,24 @@
               }
             ],
             "title": "Url"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
           }
         },
         "required": [
-          "id"
+          "id",
+          "score"
         ],
-        "title": "RecentDoc",
-        "type": "object"
-      },
-      "ScheduleEntry": {
-        "additionalProperties": true,
-        "properties": {
-          "cadence": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cadence"
-          },
-          "enabled": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Enabled"
-          },
-          "hour": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Hour"
-          },
-          "kind": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Kind"
-          },
-          "label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Label"
-          },
-          "last_run": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Run"
-          },
-          "last_run_ts": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Run Ts"
-          },
-          "minute": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Minute"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "running": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Running"
-          },
-          "target": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Target"
-          },
-          "weekday": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Weekday"
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "title": "ScheduleEntry",
-        "type": "object"
-      },
-      "SearchMetrics": {
-        "additionalProperties": true,
-        "properties": {
-          "by_source": {
-            "additionalProperties": true,
-            "default": {},
-            "title": "By Source",
-            "type": "object"
-          },
-          "degraded": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Degraded"
-          },
-          "degraded_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Degraded Pct"
-          },
-          "embed_p95_ms": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Embed P95 Ms"
-          },
-          "p50_ms": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "P50 Ms"
-          },
-          "p95_ms": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "P95 Ms"
-          },
-          "p99_ms": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "P99 Ms"
-          },
-          "search_p95_ms": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Search P95 Ms"
-          },
-          "searches": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Searches"
-          },
-          "window_minutes": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Window Minutes"
-          }
-        },
-        "title": "SearchMetrics",
-        "type": "object"
-      },
-      "SettingsAll": {
-        "additionalProperties": true,
-        "properties": {
-          "scopes": {
-            "default": [],
-            "items": {
-              "$ref": "#/components/schemas/SettingsScope"
-            },
-            "title": "Scopes",
-            "type": "array"
-          }
-        },
-        "title": "SettingsAll",
-        "type": "object"
-      },
-      "SettingsField": {
-        "additionalProperties": true,
-        "description": "One control. A superset of `Param.describe()` plus the resolved value and\nwhere it came from \u2014 the client renders entirely from this and hardcodes no\nfield. See windex/schema/param.py for what each attribute means.",
-        "properties": {
-          "advanced": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Advanced"
-          },
-          "choices": {
-            "default": [],
-            "items": {},
-            "title": "Choices",
-            "type": "array"
-          },
-          "clamp": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Clamp"
-          },
-          "clampNote": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Clampnote"
-          },
-          "dependsOn": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Dependson"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "editor": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Editor"
-          },
-          "enforce": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Enforce"
-          },
-          "help": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Help"
-          },
-          "hi": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Hi"
-          },
-          "key": {
-            "title": "Key",
-            "type": "string"
-          },
-          "kind": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Kind"
-          },
-          "label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Label"
-          },
-          "lo": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Lo"
-          },
-          "lockedReason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Lockedreason"
-          },
-          "origin": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Origin"
-          },
-          "required": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Required"
-          },
-          "secret": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Secret"
-          },
-          "stage": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stage"
-          },
-          "title": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Title"
-          },
-          "type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Type"
-          },
-          "value": {
-            "title": "Value"
-          }
-        },
-        "required": [
-          "key"
-        ],
-        "title": "SettingsField",
-        "type": "object"
-      },
-      "SettingsPatch": {
-        "properties": {
-          "values": {
-            "additionalProperties": true,
-            "title": "Values",
-            "type": "object"
-          }
-        },
-        "required": [
-          "values"
-        ],
-        "title": "SettingsPatch",
-        "type": "object"
-      },
-      "SettingsScope": {
-        "additionalProperties": true,
-        "properties": {
-          "fields": {
-            "default": [],
-            "items": {
-              "$ref": "#/components/schemas/SettingsField"
-            },
-            "title": "Fields",
-            "type": "array"
-          },
-          "scope": {
-            "title": "Scope",
-            "type": "string"
-          }
-        },
-        "required": [
-          "scope"
-        ],
-        "title": "SettingsScope",
-        "type": "object"
-      },
-      "SourceCreate": {
-        "properties": {
-          "description": {
-            "default": "",
-            "title": "Description",
-            "type": "string"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "recipe": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Recipe"
-          },
-          "title": {
-            "default": "",
-            "title": "Title",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "title": "SourceCreate",
-        "type": "object"
-      },
-      "SourceFreshness": {
-        "additionalProperties": true,
-        "properties": {
-          "indexed": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Indexed"
-          },
-          "last_embed_ts": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Embed Ts"
-          },
-          "last_update_ts": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Update Ts"
-          },
-          "pending": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Pending"
-          },
-          "source": {
-            "title": "Source",
-            "type": "string"
-          }
-        },
-        "required": [
-          "source"
-        ],
-        "title": "SourceFreshness",
-        "type": "object"
-      },
-      "SourcePatch": {
-        "properties": {
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "recipe": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Recipe"
-          },
-          "title": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Title"
-          }
-        },
-        "title": "SourcePatch",
-        "type": "object"
-      },
-      "ThrottleState": {
-        "additionalProperties": true,
-        "properties": {
-          "embed_profile": {
-            "title": "Embed Profile",
-            "type": "string"
-          }
-        },
-        "required": [
-          "embed_profile"
-        ],
-        "title": "ThrottleState",
-        "type": "object"
-      },
-      "TimeseriesPoint": {
-        "additionalProperties": true,
-        "properties": {
-          "docs": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Docs"
-          },
-          "ingested": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ingested"
-          },
-          "mb": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mb"
-          },
-          "t": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "T"
-          }
-        },
-        "title": "TimeseriesPoint",
+        "title": "SearchResult",
         "type": "object"
       },
       "ValidationError": {
@@ -2273,506 +643,16 @@
         ],
         "title": "ValidationError",
         "type": "object"
-      },
-      "WorkersState": {
-        "additionalProperties": true,
-        "properties": {
-          "active": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Active"
-          },
-          "stage": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stage"
-          }
-        },
-        "title": "WorkersState",
-        "type": "object"
       }
     }
   },
   "info": {
-    "description": "Self-hosted web index for search agents",
+    "description": "Self-hosted searchable Pipeline runtime",
     "title": "windex",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "openapi": "3.1.0",
   "paths": {
-    "/v1/activity": {
-      "get": {
-        "deprecated": true,
-        "description": "Watchable things for the log drawer: actions, loops, services \u2014 with\nrunning state, last activity, and crash flag. Tail any via GET /v1/logs/{name}.",
-        "operationId": "activity_state",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ActivityItem",
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "title": "Response 200 Activity State",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Activity State"
-      }
-    },
-    "/v1/control/{action}": {
-      "post": {
-        "deprecated": true,
-        "operationId": "control",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "action",
-            "required": true,
-            "schema": {
-              "enum": [
-                "start",
-                "pause"
-              ],
-              "title": "Action",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ControlState",
-                  "additionalProperties": true,
-                  "title": "Response Control",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Control"
-      }
-    },
-    "/v1/crawl": {
-      "post": {
-        "deprecated": true,
-        "description": "Queue a crawl. 202 + {run_id} \u2014 the worker picks it up; 422 on a bad\nrecipe or source name.",
-        "operationId": "crawl_start",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CrawlStart"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CrawlQueued",
-                  "additionalProperties": true,
-                  "title": "Response Crawl Start",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Crawl Start"
-      }
-    },
-    "/v1/crawl/preview": {
-      "post": {
-        "deprecated": true,
-        "description": "Dry run: fetch only the seed(s) and report what WOULD be crawled.\n\nWrite-gated despite writing nothing \u2014 it makes the server issue outbound\nrequests to a caller-chosen host, which is the same capability as starting a\ncrawl and should carry the same gate.",
-        "operationId": "crawl_preview",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CrawlPreview-Input"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CrawlPreview-Output",
-                  "additionalProperties": true,
-                  "title": "Response Crawl Preview",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Crawl Preview"
-      }
-    },
-    "/v1/crawl/runs": {
-      "get": {
-        "deprecated": true,
-        "operationId": "crawl_runs",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "source",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Source"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 50,
-              "maximum": 200,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CrawlRunList",
-                  "additionalProperties": true,
-                  "title": "Response Crawl Runs",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Crawl Runs"
-      }
-    },
-    "/v1/crawl/runs/{run_id}": {
-      "get": {
-        "deprecated": true,
-        "operationId": "crawl_run_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CrawlRunDetail",
-                  "additionalProperties": true,
-                  "title": "Response Crawl Run Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Crawl Run Get"
-      }
-    },
-    "/v1/crawl/runs/{run_id}/cancel": {
-      "post": {
-        "deprecated": true,
-        "operationId": "crawl_cancel",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CrawlCancelled",
-                  "additionalProperties": true,
-                  "title": "Response Crawl Cancel",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Crawl Cancel"
-      }
-    },
-    "/v1/crawl/runs/{run_id}/events": {
-      "get": {
-        "deprecated": true,
-        "description": "SSE for one crawl: `run` (status + stats) each tick, `urls` for frontier\nrows that reached a terminal state since the last event. Same shape as\n/v1/events; `ticks` bounds the stream for tests.\n\nURLs are streamed by a monotonic `seq` cursor rather than re-sent wholesale,\nso a long crawl's stream stays O(new rows) instead of O(frontier) per tick.\nThe stream ends on its own once the run is finished AND its backlog has been\nflushed \u2014 an EventSource that closes cleanly is what stops the browser\nreconnecting forever to a run that ended.",
-        "operationId": "crawl_events",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "ticks",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maximum": 10000,
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Ticks"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              },
-              "text/event-stream": {}
-            },
-            "description": "Server-sent events."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Crawl Events"
-      }
-    },
-    "/v1/datasets/{source}/stats": {
-      "get": {
-        "deprecated": true,
-        "description": "Per-dataset detail (freshness row-click): counts by pipeline status +\ncontent date range.",
-        "operationId": "dataset_stats",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "source",
-            "required": true,
-            "schema": {
-              "title": "Source",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DatasetStats",
-                  "additionalProperties": true,
-                  "title": "Response Dataset Stats",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Dataset Stats"
-      }
-    },
     "/v1/docs/{doc_id}": {
       "get": {
         "operationId": "get_doc",
@@ -2792,9 +672,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Doc",
-                  "type": "object"
+                  "$ref": "#/components/schemas/DocumentResponse"
                 }
               }
             },
@@ -2814,994 +692,6 @@
         "summary": "Get Doc"
       }
     },
-    "/v1/events": {
-      "get": {
-        "deprecated": true,
-        "description": "SSE stream for the dashboard: `stats` every ~2s, `recent` only when it\nchanges, `timeseries` every ~16s. REST endpoints remain the poll/agent API;\n`ticks` bounds the stream for tests.",
-        "operationId": "events",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "ticks",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maximum": 100,
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Ticks"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              },
-              "text/event-stream": {}
-            },
-            "description": "Server-sent events."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Events"
-      }
-    },
-    "/v1/freshness": {
-      "get": {
-        "deprecated": true,
-        "description": "Per-source indexed/pending counts + last embed-loop activity.",
-        "operationId": "freshness_state",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/SourceFreshness",
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "title": "Response 200 Freshness State",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Freshness State"
-      }
-    },
-    "/v1/ingest/{source}": {
-      "post": {
-        "deprecated": true,
-        "description": "Turn a source's auto-ingest on/off (desired-state). Off means the refresh\nsweep and the scheduler skip fetching it; a manual 'check now' still runs.",
-        "operationId": "ingest_set",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "source",
-            "required": true,
-            "schema": {
-              "title": "Source",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "default": {},
-                "title": "Params",
-                "type": "object"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActionResult",
-                  "additionalProperties": true,
-                  "title": "Response Ingest Set",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Ingest Set"
-      }
-    },
-    "/v1/jobs": {
-      "get": {
-        "deprecated": true,
-        "operationId": "jobs_list",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/JobInfo",
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "title": "Response 200 Jobs List",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Jobs List"
-      }
-    },
-    "/v1/jobs/{name}/start": {
-      "post": {
-        "deprecated": true,
-        "operationId": "jobs_start",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "default": {},
-                "title": "Params",
-                "type": "object"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActionResult",
-                  "additionalProperties": true,
-                  "title": "Response Jobs Start",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Jobs Start"
-      }
-    },
-    "/v1/jobs/{name}/stop": {
-      "post": {
-        "deprecated": true,
-        "operationId": "jobs_stop",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActionResult",
-                  "additionalProperties": true,
-                  "title": "Response Jobs Stop",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Jobs Stop"
-      }
-    },
-    "/v1/logs": {
-      "get": {
-        "deprecated": true,
-        "operationId": "logs_list",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/LogSource",
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "title": "Response 200 Logs List",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Logs List"
-      }
-    },
-    "/v1/logs/{name}": {
-      "get": {
-        "deprecated": true,
-        "operationId": "logs_tail",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "lines",
-            "required": false,
-            "schema": {
-              "default": 200,
-              "maximum": 2000,
-              "minimum": 1,
-              "title": "Lines",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "grep",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 200,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Grep"
-            }
-          },
-          {
-            "in": "query",
-            "name": "level",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "info",
-                    "warn",
-                    "error"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Level"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LogTail",
-                  "additionalProperties": true,
-                  "title": "Response Logs Tail",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Logs Tail"
-      }
-    },
-    "/v1/loops": {
-      "get": {
-        "deprecated": true,
-        "description": "Per-source loop desired-state + running, and whether the supervisor is\nalive. Lightweight (pgrep + one control read) so the console control panel\ncan poll it responsively, independent of the heavier /v1/stats.",
-        "operationId": "loops_state",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LoopsState",
-                  "additionalProperties": true,
-                  "title": "Response Loops State",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Loops State"
-      }
-    },
-    "/v1/loops/{source}": {
-      "post": {
-        "deprecated": true,
-        "description": "Turn an embed loop on/off (desired-state). `off` stops it and keeps it off\n\u2014 `windex up` and the watchdog both honor the flag, so it won't come back.",
-        "operationId": "loop_set",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "source",
-            "required": true,
-            "schema": {
-              "title": "Source",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "default": {},
-                "title": "Params",
-                "type": "object"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActionResult",
-                  "additionalProperties": true,
-                  "title": "Response Loop Set",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Loop Set"
-      }
-    },
-    "/v1/memory/conversations/{conversation_id}": {
-      "delete": {
-        "description": "Tombstone every chunk of a conversation. Idempotent (deleting nothing \u2192\ndeleted: 0).",
-        "operationId": "memory_delete",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "conversation_id",
-            "required": true,
-            "schema": {
-              "title": "Conversation Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Memory Delete",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Memory Delete"
-      },
-      "post": {
-        "description": "Full-replace one conversation's chat-memory chunks. Returns\n{conversation_id, chunks, staged, skipped, deleted}; staged+deleted>0 means\nwork happened. 422 on a malformed push, 503 when staging isn't writable.",
-        "operationId": "memory_push",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "conversation_id",
-            "required": true,
-            "schema": {
-              "title": "Conversation Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemoryPush"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Memory Push",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Memory Push"
-      }
-    },
-    "/v1/memory/status": {
-      "get": {
-        "description": "Corpus-wide memory rollup: conversation count, chunk counts by status,\nlast embed time. The app's Settings status row + health probe.",
-        "operationId": "memory_status",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Memory Status",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Memory Status"
-      }
-    },
-    "/v1/metrics": {
-      "get": {
-        "deprecated": true,
-        "description": "Search-performance rollup: latency percentiles + hybrid\u2192keyword\ndegradation counts over the trailing window.",
-        "operationId": "metrics",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "minutes",
-            "required": false,
-            "schema": {
-              "default": 60,
-              "maximum": 43200,
-              "minimum": 1,
-              "title": "Minutes",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SearchMetrics",
-                  "additionalProperties": true,
-                  "title": "Response Metrics",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Metrics"
-      }
-    },
-    "/v1/recent": {
-      "get": {
-        "deprecated": true,
-        "operationId": "recent",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 30,
-              "maximum": 100,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/RecentDoc",
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "title": "Response 200 Recent",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Recent"
-      }
-    },
-    "/v1/recent/embedded": {
-      "get": {
-        "deprecated": true,
-        "description": "Recently embedded (landed in Qdrant), newest first \u2014 console progress feed.",
-        "operationId": "recent_embedded",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 25,
-              "maximum": 100,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/RecentDoc",
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "title": "Response 200 Recent Embedded",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Recent Embedded"
-      }
-    },
-    "/v1/recent/indexed": {
-      "get": {
-        "deprecated": true,
-        "description": "Recently indexed (harvested/staged), newest first \u2014 console progress feed.",
-        "operationId": "recent_indexed",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 25,
-              "maximum": 100,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/RecentDoc",
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "title": "Response 200 Recent Indexed",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Recent Indexed"
-      }
-    },
-    "/v1/schedule": {
-      "get": {
-        "deprecated": true,
-        "description": "The editable schedule entries with running + last-run \u2014 what the console\nschedule editor reads (name, kind, target, hour, minute, weekday, enabled).",
-        "operationId": "schedule_state",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ScheduleEntry",
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "title": "Response 200 Schedule State",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Schedule State"
-      }
-    },
-    "/v1/schedule/{name}": {
-      "delete": {
-        "deprecated": true,
-        "description": "Delete a schedule entry (404 if it doesn't exist).",
-        "operationId": "schedule_delete",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActionResult",
-                  "additionalProperties": true,
-                  "title": "Response Schedule Delete",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Schedule Delete"
-      },
-      "put": {
-        "deprecated": true,
-        "description": "Create or edit a schedule entry. Body: any of hour/minute/weekday/enabled\n/target/kind. Editing an existing entry preserves unspecified fields;\ncreating a new one requires kind + target. 422 on an invalid entry.",
-        "operationId": "schedule_upsert",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "default": {},
-                "title": "Params",
-                "type": "object"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ScheduleEntry",
-                  "additionalProperties": true,
-                  "title": "Response Schedule Upsert",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Schedule Upsert"
-      }
-    },
-    "/v1/schedule/{name}/run": {
-      "post": {
-        "deprecated": true,
-        "description": "Run a scheduled entry now (detached), ignoring the ingest desired-state\nflag (a manual run is an explicit 'check now').",
-        "operationId": "schedule_run",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActionResult",
-                  "additionalProperties": true,
-                  "title": "Response Schedule Run",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Schedule Run"
-      }
-    },
     "/v1/search": {
       "get": {
         "operationId": "search",
@@ -3817,13 +707,11 @@
             }
           },
           {
-            "description": "news | github | wiki | arxiv | smallweb | docs | hn | hf | memory | all, or a registered custom source name",
             "in": "query",
             "name": "source",
             "required": false,
             "schema": {
               "default": "all",
-              "description": "news | github | wiki | arxiv | smallweb | docs | hn | hf | memory | all, or a registered custom source name",
               "title": "Source",
               "type": "string"
             }
@@ -3906,7 +794,6 @@
             }
           },
           {
-            "description": "Minimum HN points, e.g. 50",
             "in": "query",
             "name": "min_points",
             "required": false,
@@ -3920,7 +807,6 @@
                   "type": "null"
                 }
               ],
-              "description": "Minimum HN points, e.g. 50",
               "title": "Min Points"
             }
           },
@@ -3941,7 +827,6 @@
             }
           },
           {
-            "description": "arXiv primary category, e.g. cs.LG",
             "in": "query",
             "name": "category",
             "required": false,
@@ -3955,12 +840,10 @@
                   "type": "null"
                 }
               ],
-              "description": "arXiv primary category, e.g. cs.LG",
               "title": "Category"
             }
           },
           {
-            "description": "Small Web feed host, e.g. example.com",
             "in": "query",
             "name": "outlet",
             "required": false,
@@ -3974,12 +857,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Small Web feed host, e.g. example.com",
               "title": "Outlet"
             }
           },
           {
-            "description": "Docs framework, e.g. python or react",
             "in": "query",
             "name": "framework",
             "required": false,
@@ -3993,12 +874,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Docs framework, e.g. python or react",
               "title": "Framework"
             }
           },
           {
-            "description": "HF doc root, e.g. transformers or agents-course",
             "in": "query",
             "name": "root",
             "required": false,
@@ -4012,12 +891,10 @@
                   "type": "null"
                 }
               ],
-              "description": "HF doc root, e.g. transformers or agents-course",
               "title": "Root"
             }
           },
           {
-            "description": "HF page kind: docs, learn or blog",
             "in": "query",
             "name": "kind",
             "required": false,
@@ -4031,12 +908,10 @@
                   "type": "null"
                 }
               ],
-              "description": "HF page kind: docs, learn or blog",
               "title": "Kind"
             }
           },
           {
-            "description": "Memory: scope recall to one conversation uuid",
             "in": "query",
             "name": "conversation_id",
             "required": false,
@@ -4050,7 +925,6 @@
                   "type": "null"
                 }
               ],
-              "description": "Memory: scope recall to one conversation uuid",
               "title": "Conversation Id"
             }
           }
@@ -4060,9 +934,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Search",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SearchResponse"
                 }
               }
             },
@@ -4082,291 +954,9 @@
         "summary": "Search"
       }
     },
-    "/v1/settings": {
-      "get": {
-        "deprecated": true,
-        "description": "Every scope: field schema, effective value, and where the value came\nfrom (default | env | db).",
-        "operationId": "source_settings_all",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SettingsAll",
-                  "additionalProperties": true,
-                  "title": "Response Source Settings All",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Source Settings All"
-      }
-    },
-    "/v1/settings/{scope}": {
-      "get": {
-        "deprecated": true,
-        "operationId": "source_settings_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "scope",
-            "required": true,
-            "schema": {
-              "title": "Scope",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SettingsScope",
-                  "additionalProperties": true,
-                  "title": "Response Source Settings Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Settings Get"
-      },
-      "patch": {
-        "deprecated": true,
-        "description": "Set one or more overrides. 422 for an unknown key, a key belonging to a\ndifferent scope, or a value of the wrong type; numbers are clamped to their\ndeclared range rather than rejected.",
-        "operationId": "source_settings_patch",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "scope",
-            "required": true,
-            "schema": {
-              "title": "Scope",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SettingsPatch"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SettingsScope",
-                  "additionalProperties": true,
-                  "title": "Response Source Settings Patch",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Settings Patch"
-      }
-    },
-    "/v1/settings/{scope}/{key}": {
-      "delete": {
-        "deprecated": true,
-        "description": "Drop one override so the key falls back to env, then the code default.",
-        "operationId": "source_settings_revert",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "scope",
-            "required": true,
-            "schema": {
-              "title": "Scope",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "key",
-            "required": true,
-            "schema": {
-              "title": "Key",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SettingsScope",
-                  "additionalProperties": true,
-                  "title": "Response Source Settings Revert",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Settings Revert"
-      }
-    },
-    "/v1/sources": {
-      "get": {
-        "description": "Every registered custom source with doc counts: {\"sources\": [IndexInfo\u2026]}.",
-        "operationId": "sources_list",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Sources List",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Sources List"
-      },
+    "/v1/sources/{name}/ingest": {
       "post": {
-        "description": "Register a custom source. 201 with its IndexInfo; 409 if it already\nexists; 422 for a malformed or reserved name.",
-        "operationId": "source_create",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SourceCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Source Create",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Create"
-      }
-    },
-    "/v1/sources/{name}": {
-      "delete": {
-        "description": "Delete a whole custom source: tombstone its docs, drop the registry row,\nremove its staging. Returns {\"deleted\": N}; 404 if the source is unknown.",
-        "operationId": "source_delete",
+        "operationId": "source_ingest",
         "parameters": [
           {
             "in": "path",
@@ -4379,97 +969,12 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Source Delete",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Delete"
-      },
-      "get": {
-        "description": "One custom source's IndexInfo (recipe + doc_count + pending). 404 unknown.",
-        "operationId": "source_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
+            "name": "idempotency-key",
             "required": true,
             "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Source Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Get"
-      },
-      "patch": {
-        "description": "Update a source's title/description/recipe (only the fields sent). 404\nunknown.",
-        "operationId": "source_patch",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
+              "maxLength": 128,
+              "minLength": 8,
+              "title": "Idempotency-Key",
               "type": "string"
             }
           },
@@ -4494,20 +999,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SourcePatch"
+                "$ref": "#/components/schemas/IngestRequest"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Source Patch",
-                  "type": "object"
+                  "$ref": "#/components/schemas/QueuedRunResponse"
                 }
               }
             },
@@ -4524,442 +1027,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Source Patch"
-      }
-    },
-    "/v1/sources/{name}/docs": {
-      "post": {
-        "description": "Upsert docs into a custom source (changed-text delta staged + embedded;\nunchanged docs skipped). Returns {source, docs, staged, skipped}. 404 unknown\nsource, 422 on a malformed push, 503 when staging isn't writable.",
-        "operationId": "source_push",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DocsPush"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Source Push",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Push"
-      }
-    },
-    "/v1/sources/{name}/docs/delete": {
-      "post": {
-        "description": "Tombstone specific docs by id suffix. Returns {\"deleted\": N}. 404 unknown\nsource; idempotent (already-deleted / unknown ids don't count).",
-        "operationId": "source_delete_docs",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DocsDelete"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Source Delete Docs",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Source Delete Docs"
-      }
-    },
-    "/v1/stats": {
-      "get": {
-        "operationId": "stats",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Stats",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Stats"
-      }
-    },
-    "/v1/system/loops": {
-      "post": {
-        "deprecated": true,
-        "description": "Bulk on/off for every embed loop ('start all' / 'stop all').",
-        "operationId": "loops_bulk",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "default": {},
-                "title": "Params",
-                "type": "object"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActionResult",
-                  "additionalProperties": true,
-                  "title": "Response Loops Bulk",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Loops Bulk"
-      }
-    },
-    "/v1/system/refresh": {
-      "post": {
-        "deprecated": true,
-        "description": "Kick off a freshness sweep \u2014 detached `windex refresh [--source \u2026]`.",
-        "operationId": "system_refresh",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "default": {},
-                "title": "Params",
-                "type": "object"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActionResult",
-                  "additionalProperties": true,
-                  "title": "Response System Refresh",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "System Refresh"
-      }
-    },
-    "/v1/system/refresh-stats": {
-      "post": {
-        "deprecated": true,
-        "description": "Force-drop the cached doc rollups so /metrics + /v1/stats recompute now\n(used after a bulk cleanup so dashboards reflect immediately).",
-        "operationId": "refresh_stats",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActionResult",
-                  "additionalProperties": true,
-                  "title": "Response Refresh Stats",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Refresh Stats"
-      }
-    },
-    "/v1/system/restart": {
-      "post": {
-        "deprecated": true,
-        "description": "Bounce the loops \u2014 stop every one, then `windex up` restarts the enabled.",
-        "operationId": "system_restart",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActionResult",
-                  "additionalProperties": true,
-                  "title": "Response System Restart",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "System Restart"
-      }
-    },
-    "/v1/system/up": {
-      "post": {
-        "deprecated": true,
-        "description": "Reconcile to desired state \u2014 detached `windex up` (starts enabled loops\nand serve that are down).",
-        "operationId": "system_up",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActionResult",
-                  "additionalProperties": true,
-                  "title": "Response System Up",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "System Up"
-      }
-    },
-    "/v1/throttle/{profile}": {
-      "post": {
-        "deprecated": true,
-        "description": "Embedding throughput profile \u2014 read by embedders at each pass, so it\napplies within about a minute without restarting anything.",
-        "operationId": "throttle",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "profile",
-            "required": true,
-            "schema": {
-              "enum": [
-                "polite",
-                "full",
-                "env"
-              ],
-              "title": "Profile",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ThrottleState",
-                  "additionalProperties": true,
-                  "title": "Response Throttle",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Throttle"
-      }
-    },
-    "/v1/timeseries": {
-      "get": {
-        "deprecated": true,
-        "operationId": "timeseries",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "minutes",
-            "required": false,
-            "schema": {
-              "default": 60,
-              "maximum": 1440,
-              "minimum": 5,
-              "title": "Minutes",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/TimeseriesPoint",
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "title": "Response 200 Timeseries",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Timeseries"
-      }
-    },
-    "/v1/workers": {
-      "get": {
-        "deprecated": true,
-        "operationId": "workers",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkersState",
-                  "additionalProperties": true,
-                  "title": "Response Workers",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Workers"
+        "summary": "Source Ingest"
       }
     }
   }

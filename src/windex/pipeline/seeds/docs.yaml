@@ -1,0 +1,102 @@
+schema: windex.pipeline/1
+parameters:
+- key: slugs
+  kind: csv
+  stage: install
+  label: Docsets
+  help: 'Which DevDocs slugs to track, e.g. python~3.14. Empty means every docset in the manifest, which
+    is 819 of them.
+
+    '
+state:
+  docset:
+    key: docset slug
+    order: key
+flows:
+  sync:
+    inputs: []
+    outputs: []
+    nodes:
+      once:
+        kind: discover
+        uses: static.once
+        with:
+          key: manifest
+      manifest:
+        kind: fetch
+        uses: http.download
+        with:
+          url_template: https://devdocs.io/docs.json
+          allowed_hosts: devdocs.io
+          keep: false
+      entries:
+        kind: catalog
+        uses: list.json_manifest
+        with:
+          key_field: slug
+          upstream_field: mtime
+      record:
+        kind: collect
+        uses: store.upsert
+        with:
+          store: docset
+          on_conflict: merge
+    edges:
+    - from:
+        node: once
+      to:
+        node: manifest
+    - from:
+        node: entries
+      to:
+        node: record
+    - from:
+        node: manifest
+      to:
+        node: entries
+  ingest:
+    inputs: []
+    outputs: []
+    nodes:
+      pending:
+        kind: discover
+        uses: state.pending
+        with:
+          store: docset
+          predicate: token_moved
+          order: key
+          batch: 4
+      bundle:
+        kind: fetch
+        uses: http.download
+        with:
+          url_template: https://documents.devdocs.io/{key}/db.json
+          allowed_hosts: documents.devdocs.io
+          keep: false
+      pages:
+        kind: extract
+        uses: html.devdocs_page
+        with: {}
+      stage:
+        kind: load
+        uses: ledger.stage
+        with:
+          replace: true
+          replace_scope: partition
+          replace_guard: census
+    edges:
+    - from:
+        node: pending
+      to:
+        node: bundle
+    - from:
+        node: bundle
+      to:
+        node: pages
+    - from:
+        node: pages
+      to:
+        node: stage
+refresh:
+- sync
+- ingest

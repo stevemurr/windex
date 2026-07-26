@@ -1,6 +1,6 @@
 """Crawl an arbitrary cluster of the web from a single seed link.
 
-The unit of work is a **recipe** — a seed URL plus scope rules and limits — which
+The unit of work is a crawl policy — a seed URL plus scope rules and limits — which
 is persisted so a cluster can be re-crawled or scheduled. Everything downstream of
 "produce documents" is deliberately NOT reimplemented here: a crawl stages its
 pages through ``custom_source.ingest.upsert_docs``, so a crawled cluster is just
@@ -9,7 +9,7 @@ ledger, Qdrant collection, embed loop, and search path unchanged.
 
 Modules:
 
-  * ``recipe`` — parse/validate/normalize the recipe document (the API contract).
+  * ``policy`` — parse, validate, and normalize the crawl policy.
   * ``scope``  — URL canonicalization and the in/out-of-scope decision.
   * ``fetch``  — the network seam: PageFetcher + the SSRF guard.
   * ``run``    — the BFS driver over the persisted ``crawl_urls`` frontier.
@@ -22,7 +22,7 @@ would attach to later.
 """
 
 # Honest and descriptive, matching every other windex source's UA constant. The
-# `crawl` token distinguishes recipe-driven cluster crawls from the fixed-source
+# `crawl` token distinguishes policy-driven cluster crawls from fixed-source
 # fetchers in a target's access log, so an operator who wants to rate-limit or
 # block just this behaviour can do so without touching the rest.
 USER_AGENT = (

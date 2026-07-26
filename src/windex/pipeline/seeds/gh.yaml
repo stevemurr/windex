@@ -1,0 +1,200 @@
+schema: windex.pipeline/1
+parameters:
+- key: tokens
+  kind: secret_ref
+  allow:
+  - github_tokens
+  required: true
+  stage: install
+  label: GitHub tokens
+- key: star_threshold
+  kind: int
+  lo: 0
+  hi: 100000
+  default: 10
+  label: Star threshold
+  help: Minimum stars for a repo to be indexed.
+- key: archive_tail_days
+  kind: int
+  lo: 0
+  hi: 3650
+  default: 2
+  label: GH Archive tail (days)
+- key: hydrate_limit
+  kind: int
+  lo: 1
+  hi: 500000
+  default: 100000
+state:
+  gh_hours:
+    key: YYYY-MM-DD-H.json.gz
+    order: key
+  gh_shards:
+    key: from..to@threshold
+  repos:
+    key: repo id
+    order: stars desc
+flows:
+  discover:
+    inputs: []
+    outputs: []
+    nodes:
+      hours:
+        kind: discover
+        uses: time.calendar
+        with:
+          unit: hour
+          trailing_days: '@param.archive_tail_days'
+          into: gh_hours
+          format: '%Y-%m-%d-{h}.json.gz'
+      hourfile:
+        kind: fetch
+        uses: http.download
+        with:
+          url_template: https://data.gharchive.org/{key}
+          allowed_hosts: data.gharchive.org
+          missing_ok: true
+      watch:
+        kind: catalog
+        uses: github.watch_events
+        with:
+          event_type: WatchEvent
+      shards:
+        kind: discover
+        uses: state.pending
+        with:
+          store: gh_shards
+          predicate: rearm
+          rearm_days: 7
+      search:
+        kind: fetch
+        uses: http.paginate
+        with:
+          protocol: github_search_pages
+          allowed_hosts: api.github.com
+          token_ref: '@secret.github_tokens'
+          page_size: 100
+          result_cap: 1000
+          split_on_cap: true
+          request_interval: 2.1
+      items:
+        kind: catalog
+        uses: github.search_items
+        with: {}
+      repos:
+        kind: collect
+        uses: store.repos
+        with:
+          store: repos
+    edges:
+    - from:
+        node: hours
+      to:
+        node: hourfile
+    - from:
+        node: hourfile
+      to:
+        node: watch
+    - from:
+        node: watch
+      to:
+        node: repos
+    - from:
+        node: shards
+      to:
+        node: search
+    - from:
+        node: search
+      to:
+        node: items
+    - from:
+        node: items
+      to:
+        node: repos
+  hydrate:
+    inputs: []
+    outputs: []
+    nodes:
+      cands:
+        kind: discover
+        uses: state.repos_pending
+        with:
+          store: repos
+          stages: candidate
+          order: star_events_desc
+          batch: 40
+          limit: '@param.hydrate_limit'
+      gql:
+        kind: fetch
+        uses: github.graphql_batch
+        with:
+          batch: 40
+          token_ref: '@secret.github_tokens'
+      meta:
+        kind: catalog
+        uses: github.hydrated_repos
+        with:
+          stars_gte: '@param.star_threshold'
+      back:
+        kind: collect
+        uses: store.repos
+        with:
+          store: repos
+    edges:
+    - from:
+        node: cands
+      to:
+        node: gql
+    - from:
+        node: gql
+      to:
+        node: meta
+    - from:
+        node: meta
+      to:
+        node: back
+  compose:
+    inputs: []
+    outputs: []
+    nodes:
+      ready:
+        kind: discover
+        uses: state.repos_pending
+        with:
+          store: repos
+          stages: hydrated
+          order: stars_desc
+          batch: 512
+      readme:
+        kind: fetch
+        uses: local.parquet_lookup
+        with:
+          dir: repos/readme
+          key_column: repo_id
+          value_column: readme
+      doc:
+        kind: extract
+        uses: github.compose_doc
+        with: {}
+      stage:
+        kind: load
+        uses: ledger.stage
+        with:
+          replace: false
+    edges:
+    - from:
+        node: ready
+      to:
+        node: readme
+    - from:
+        node: readme
+      to:
+        node: doc
+    - from:
+        node: doc
+      to:
+        node: stage
+refresh:
+- discover
+- hydrate
+- compose

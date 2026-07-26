@@ -2,7 +2,7 @@
 
 This module is deliberately the *only* thing a task module has to know about the
 pool, and it imports nothing from windex. That is not tidiness — it is what lets
-the pool (Phase 8) and the recipe engine (Phase 6) be built and tested
+the pool and Pipeline compiler be built and tested
 independently: the pool takes a ``resolve: Callable[[str], Runner]`` mapping
 ``run_tasks.module`` to something executable, tests pass fakes, and the real
 registry drops in later with no edit here.
@@ -55,22 +55,34 @@ class TaskContext:
 
     run_id: int
     task_id: int
-    source: str
+    pipeline_name: str
+    pipeline_version: int
+    pipeline_hash: str
+    source_id: int | None
+    source_name: str
+    state_namespace: str
+    search_name: str
+    id_prefix: str
+    collection_key: str
+    search_profile: str
     node: str
+    kind: str
     module: str
+    module_version: str
+    module_digest: str
     config: dict          # frozen node config from run_tasks.config
-    spec: dict            # frozen compiled recipe from runs.spec
+    spec: dict            # frozen normalized Pipeline spec
     cursor: dict          # resume point INSIDE a unit, as of this slice's start
     conn: Any             # psycopg connection, owned by the runner (see docstring)
     should_yield: Callable[[], bool]
     heartbeat: Callable[[int, int, Mapping[str, Any]], None]  # done, failed, stats
     # Extras the pool knows and a runner occasionally needs, kept out of the
     # positional contract so adding one is not a breaking change.
-    params: dict = field(default_factory=dict)     # runs.params
+    effective_config: dict = field(default_factory=dict)
+    inputs: dict = field(default_factory=dict)
     mode: str = "run"                              # run | dry_run
     attempt: int = 0                               # run_tasks.attempts at claim
     worker: str = ""                               # lease_worker id, for logs
-    recipe: str = ""                               # source_units namespace
 
 
 @dataclass(frozen=True)

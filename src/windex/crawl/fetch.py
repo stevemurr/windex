@@ -1,4 +1,4 @@
-"""The crawl's network seam: SSRF guard + a recipe-configured PageFetcher.
+"""The crawl's network seam: SSRF guard plus a policy-configured PageFetcher.
 
 This is the first place in windex that fetches a URL supplied by an API caller,
 and the API is reachable on the LAN. Every other source fetches a URL that windex
@@ -29,7 +29,7 @@ import httpx
 
 from windex.config import Settings
 from windex.crawl import ROBOT_AGENT, USER_AGENT
-from windex.crawl.recipe import Recipe
+from windex.crawl.policy import CrawlPolicy
 
 
 class BlockedTarget(Exception):
@@ -159,17 +159,20 @@ class GuardedFetcher:
         return body, final, ""
 
 
-def build_client(recipe: Recipe) -> httpx.Client:
+def build_client(policy: CrawlPolicy) -> httpx.Client:
     """The crawl's HTTP client. ``follow_redirects=False`` is load-bearing — see
     GuardedFetcher."""
     return httpx.Client(
-        timeout=httpx.Timeout(recipe.limits.request_timeout, read=recipe.limits.request_timeout),
+        timeout=httpx.Timeout(
+            policy.limits.request_timeout, read=policy.limits.request_timeout),
         follow_redirects=False,
         headers={"User-Agent": USER_AGENT},
     )
 
 
-def build_fetcher(client: httpx.Client, settings: Settings, recipe: Recipe) -> GuardedFetcher:
+def build_fetcher(
+    client: httpx.Client, settings: Settings, policy: CrawlPolicy,
+) -> GuardedFetcher:
     """The single seam between the crawl driver and the network.
 
     A JS-rendering backend would be introduced by returning a different object
@@ -181,9 +184,9 @@ def build_fetcher(client: httpx.Client, settings: Settings, recipe: Recipe) -> G
     page = PageFetcher(
         client, settings,
         robots_ttl=settings.crawl_robots_ttl,
-        max_bytes=recipe.limits.max_page_bytes,
+        max_bytes=policy.limits.max_page_bytes,
         allowed_types=("html", "xhtml", "text/plain", "markdown"),
-        limiter=HostRateLimiter(recipe.limits.host_interval),
+        limiter=HostRateLimiter(policy.limits.host_interval),
         user_agent=USER_AGENT,
     )
     page.robots.agent = ROBOT_AGENT

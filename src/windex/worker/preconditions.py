@@ -36,7 +36,7 @@ from pathlib import Path
 log = logging.getLogger("windex.worker.preconditions")
 
 # The vocabulary. Kept closed (plan §A.6: allowlist, not denylist) so a typo in a
-# recipe is an unsatisfiable precondition that visibly parks the task, rather
+# Pipeline is an unsatisfiable precondition that visibly parks the task, rather
 # than a silently-ignored string that lets it run in exactly the situation the
 # author was trying to exclude.
 KNOWN: tuple[str, ...] = (
@@ -47,7 +47,7 @@ KNOWN: tuple[str, ...] = (
 )
 
 # `staging_mount` is what earlier drafts of the plan called it. Accepted as an
-# alias so recipes written against that vocabulary keep working; it maps to the
+# alias so Pipelines written against that vocabulary keep working; it maps to the
 # strictly stronger free-space check.
 ALIASES = {"staging_mount": "storage:staging"}
 
@@ -125,7 +125,7 @@ def evaluate(settings: object, *, names: Iterable[str] = KNOWN,
                 out.add(name)
         except Exception as exc:                   # noqa: BLE001 — see _gateway_ok
             log.warning("precondition %s raised: %s", name, exc)
-    # Publish the aliases alongside their targets so a recipe using either
+    # Publish the aliases alongside their targets so a Pipeline using either
     # spelling matches; the claim compares raw strings in SQL.
     for alias, target in ALIASES.items():
         if target in out:

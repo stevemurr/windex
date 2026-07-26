@@ -1,4 +1,4 @@
-"""Unit tests for the crawl core: scope, recipe validation, SSRF, extraction.
+"""Unit tests for the crawl core: scope policy, SSRF, and extraction.
 
 No network and no database — every test here is about a decision the crawler
 makes locally, which is where the correctness risks actually live.
@@ -7,7 +7,7 @@ makes locally, which is where the correctness risks actually live.
 import pytest
 
 from windex.config import Settings
-from windex.crawl import recipe as R
+from windex.crawl import policy
 from windex.crawl.extract import fallback_extract
 from windex.crawl.fetch import BlockedTarget, check_url
 from windex.crawl.links import extract_links
@@ -21,7 +21,7 @@ def settings():
 
 def rec(settings, **body):
     body.setdefault("seeds", ["https://example.dev/docs/"])
-    return R.parse(body, settings)
+    return policy.parse(body, settings)
 
 
 # --- canonicalization: what counts as ONE document --------------------------
@@ -55,11 +55,13 @@ def test_prefix_defaults_to_seed_directory(settings):
     """A bare seed must not mean 'crawl the whole host' — that is a surprising
     and expensive reading of 'crawl this cluster'."""
     assert rec(settings).scope.path_prefix == "/docs/"
-    assert R.parse({"seeds": ["https://e.dev/a/page"]}, settings).scope.path_prefix == "/a/"
+    assert policy.parse(
+        {"seeds": ["https://e.dev/a/page"]}, settings).scope.path_prefix == "/a/"
 
 
 def test_explicit_empty_prefix_means_whole_host(settings):
-    r = R.parse({"seeds": ["https://e.dev/docs/"], "scope": {"path_prefix": ""}}, settings)
+    r = policy.parse(
+        {"seeds": ["https://e.dev/docs/"], "scope": {"path_prefix": ""}}, settings)
     assert r.scope.path_prefix == ""
     assert in_scope("https://e.dev/elsewhere", r, r.seeds[0])[0]
 
@@ -89,37 +91,43 @@ def test_include_allowlist_rejects_unmatched(settings):
     assert in_scope("https://example.dev/docs/deep/nested", r, seed) == (False, "include")
 
 
-# --- recipe validation is a security boundary -------------------------------
+# --- crawl policy validation is a security boundary -------------------------
 
 def test_limits_clamped_to_ceilings(settings):
     r = rec(settings, limits={"max_pages": 10 ** 9, "max_depth": 999, "host_interval": 0.001})
     assert r.limits.max_pages == settings.crawl_max_pages_ceiling
     assert r.limits.max_depth == settings.crawl_max_depth_ceiling
-    # A recipe may ask to be slower, never faster than the operator's floor.
+    # A policy may ask to be slower, never faster than the operator's floor.
     assert r.limits.host_interval == settings.crawl_host_interval_min
 
 
-def test_recipe_rejects_bad_input(settings):
+def test_policy_rejects_bad_input(settings):
     with pytest.raises(ValueError, match="seed"):
-        R.parse({}, settings)
+        policy.parse({}, settings)
     with pytest.raises(ValueError, match="http"):
-        R.parse({"seeds": ["ftp://e.dev/x"]}, settings)
+        policy.parse({"seeds": ["ftp://e.dev/x"]}, settings)
     with pytest.raises(ValueError, match="invalid regex"):
-        R.parse({"seeds": ["https://e.dev/"], "scope": {"include": ["[bad"]}}, settings)
+        policy.parse(
+            {"seeds": ["https://e.dev/"], "scope": {"include": ["[bad"]}},
+            settings,
+        )
     with pytest.raises(ValueError, match="at most"):
-        R.parse({"seeds": ["https://e.dev/"],
-                 "scope": {"exclude": ["x"] * (R.MAX_PATTERNS + 1)}}, settings)
+        policy.parse({
+            "seeds": ["https://e.dev/"],
+            "scope": {"exclude": ["x"] * (policy.MAX_PATTERNS + 1)},
+        }, settings)
 
 
-def test_recipe_round_trips(settings):
-    """A stored recipe must re-parse to the same thing — this is what makes a
-    past run's frozen recipe re-runnable verbatim."""
+def test_policy_round_trips(settings):
+    """A stored policy re-parses identically for reproducible frozen Runs."""
     original = rec(settings, scope={"exclude": [r"\.png$"]}, limits={"max_depth": 3})
-    assert R.parse(original.to_dict(), settings).to_dict() == original.to_dict()
+    assert policy.parse(
+        original.to_dict(), settings).to_dict() == original.to_dict()
 
 
 def test_seed_alias_accepted(settings):
-    assert R.parse({"seed": "https://e.dev/x/"}, settings).seeds == ("https://e.dev/x/",)
+    assert policy.parse(
+        {"seed": "https://e.dev/x/"}, settings).seeds == ("https://e.dev/x/",)
 
 
 # --- SSRF guard -------------------------------------------------------------
@@ -248,7 +256,10 @@ def test_suggest_prefix_ignores_rootless_urls():
 def test_whole_host_prefix_admits_other_sections(settings):
     """What the 'whole-host link following' checkbox sends: an EXPLICIT empty
     prefix, which means the whole host — the opposite of an omitted one."""
-    r = R.parse({"seeds": ["https://e.dev/research/"], "scope": {"path_prefix": ""}}, settings)
+    r = policy.parse(
+        {"seeds": ["https://e.dev/research/"], "scope": {"path_prefix": ""}},
+        settings,
+    )
     seed = r.seeds[0]
     assert in_scope("https://e.dev/posts/article", r, seed) == (True, "")
     assert in_scope("https://other.dev/posts/article", r, seed) == (False, "host")

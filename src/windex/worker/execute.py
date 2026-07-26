@@ -11,7 +11,7 @@ The loop the plan describes —
     if yield_requested      -> yield
     if elapsed > slice_seconds or units > slice_units -> yield
 
-— is split across two owners. The *runner* (a recipe module) owns everything on
+— is split across two owners. The *runner* (a Pipeline Module) owns everything on
 the left of the arrow: claiming units, processing them, committing. The *pool*
 owns everything on the right: the lease, the flags, the clock, and turning the
 runner's return value into a state transition. That split is what keeps the two
@@ -46,7 +46,7 @@ from typing import Any
 
 import psycopg
 
-from windex.worker import claim as C
+from windex.worker import canonical_claim as C
 from windex.worker.config import PoolConfig
 from windex.worker.protocol import (
     LeaseLost,
@@ -220,11 +220,24 @@ def run_slice(ctl: psycopg.Connection, work: psycopg.Connection,
 
     with SliceControl(ctl, task, cfg, drain=drain) as ctrl:
         ctx = TaskContext(
-            run_id=task.run_id, task_id=task.id, source=task.source, node=task.node,
-            module=task.module, config=task.config, spec=task.spec, cursor=task.cursor,
+            run_id=task.run_id, task_id=task.id,
+            pipeline_name=task.pipeline_name,
+            pipeline_version=task.pipeline_version,
+            pipeline_hash=task.pipeline_hash,
+            source_id=task.source_id,
+            source_name=task.source_name,
+            state_namespace=task.state_namespace,
+            search_name=task.search_name,
+            id_prefix=task.id_prefix,
+            collection_key=task.collection_key,
+            search_profile=task.search_profile,
+            node=task.node, kind=task.kind,
+            module=task.module, module_version=task.module_version,
+            module_digest=task.module_digest, config=task.config,
+            spec=task.spec, cursor=task.cursor,
             conn=work, should_yield=ctrl.should_yield, heartbeat=ctrl.heartbeat,
-            params=task.params, mode=task.mode, attempt=task.attempts,
-            worker=task.worker, recipe=task.recipe,
+            effective_config=task.effective_config, inputs=task.inputs,
+            mode=task.mode, attempt=task.attempts, worker=task.worker,
         )
         try:
             result = runner(ctx)

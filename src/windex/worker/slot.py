@@ -30,9 +30,9 @@ import time
 import psycopg
 
 from windex import db
-from windex.worker import claim as C
+from windex.worker import canonical_claim as C
 from windex.worker import control as ctrlfile
-from windex.worker import dag
+from windex.pipeline import run_store
 from windex.worker.config import PoolConfig
 from windex.worker.execute import run_slice
 from windex.worker.protocol import Resolve
@@ -118,6 +118,22 @@ def _run_one(ctl: psycopg.Connection, work: psycopg.Connection, task: C.ClaimedT
     started = time.monotonic()
     try:
         runner = resolve(task.module)
+        if task.executor == "builtin":
+            from windex.pipeline import registry
+
+            actual = registry.implementation_digest(task.module)
+            if actual != task.module_digest:
+                raise RuntimeError(
+                    "frozen Module digest does not match this worker deployment "
+                    f"({task.module}: expected {task.module_digest}, got {actual})")
+        elif task.executor == "platform":
+            platform_digests = {
+                "platform.index": "builtin:platform.index/1",
+                "platform.reset": "builtin:platform.reset/1",
+            }
+            if platform_digests.get(task.module) != task.module_digest:
+                raise RuntimeError(
+                    f"unsupported platform Module lock for {task.module}")
     except Exception as exc:                    # noqa: BLE001
         # An unknown module will be unknown on the retry too, so this skips the
         # retry budget entirely: three identical failures buy nothing but a
@@ -127,7 +143,7 @@ def _run_one(ctl: psycopg.Connection, work: psycopg.Connection, task: C.ClaimedT
             elapsed=time.monotonic() - started, permanent=True,
             error=f"cannot resolve module {task.module!r}: {exc}",
             reason="unresolved_module"))
-        dag.advance(ctl, task.run_id)
+        run_store.advance(ctl, task.run_id)
         return
 
     outcome = run_slice(ctl, work, task, runner, cfg, drain=drain)
@@ -139,9 +155,9 @@ def _run_one(ctl: psycopg.Connection, work: psycopg.Connection, task: C.ClaimedT
     if outcome.state in C.TERMINAL:
         # Advance inline rather than waiting for the supervisor's sweep: the next
         # node in the DAG becomes claimable immediately, which for a three-node
-        # recipe is the difference between finishing in a slice and finishing in
+        # Pipeline is the difference between finishing in a slice and finishing in
         # a slice plus three supervisor ticks.
-        dag.advance(ctl, task.run_id)
+        run_store.advance(ctl, task.run_id)
 
 
 def slot_entry(dsn: str, resolve: Resolve, cfg: PoolConfig, index: int) -> None:

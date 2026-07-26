@@ -1,7 +1,7 @@
 """Pool knobs, in one dataclass.
 
 These are deliberately NOT on ``windex.config.Settings`` yet — the worker pool is
-being built alongside the recipe engine and adding fields to the global Settings
+being built alongside the Pipeline compiler and adding fields to the global Settings
 mid-flight is how two branches collide in a file neither owns. Every knob here is
 a plain default that the CLI can override, and each one carries the name it
 should take when it is promoted (``WINDEX_WORKER_*``).
@@ -64,7 +64,7 @@ class PoolConfig:
     slice_units: int = 0               # extra unit-count cap per slice; 0 = off
     # How often the background thread renews the lease and refreshes the
     # cancel/pause/yield flags. Must be comfortably under the shortest
-    # lease_seconds any recipe sets (300 by default) or a slow slice reaps itself.
+    # lease_seconds any Pipeline sets (300 by default) or a slow slice reaps itself.
     heartbeat_seconds: float = 10.0
     claim_idle_seconds: float = 1.0    # slot poll interval when nothing is claimable
 

@@ -2,7 +2,6 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from importlib.resources import files
 from typing import TypeVar
 
 import psycopg
@@ -134,62 +133,9 @@ def pooled(dsn: str):
 
 
 def init_db(conn: psycopg.Connection) -> None:
-    schema = files("windex.db").joinpath("schema.sql").read_text()
-    with conn.cursor() as cur:
-        cur.execute(schema)
-    conn.commit()
-    _seed_schedule(conn)
-    _seed_recipes(conn)
+    from windex.db.canonical import init_canonical_db
 
-
-def _seed_recipes(conn) -> None:
-    """Register the shipped recipes. Idempotent; leaves locally-edited ones alone.
-
-    Runs on every init-db so a deploy that adds a source makes it appear, and so a
-    fresh box has all eleven registered before anything is ingested.
-    """
-    try:
-        from windex.config import get_settings
-        from windex.recipe import store as recipe_store
-
-        recipe_store.seed_builtins(conn, get_settings())
-    except Exception as exc:  # noqa: BLE001 — never let this block schema init
-        log.warning("recipe seed skipped: %s", exc)
-
-
-def _seed_schedule(conn: psycopg.Connection) -> None:
-    """Seed default schedule rows when the table is empty (idempotent). One
-    daily ingest per source, staggered 15 min apart from 03:00 so the sequential
-    refresh sources don't all fire at once, plus the daily-freshness (02:15) and
-    store-maintenance (05:45) command jobs — mirroring the cadences the hardcoded
-    SCHEDULE used. The source list is jobs.embed_loop_jobs() (the same
-    single-source-of-truth the up/status/watchdog paths use, == EMBED_SOURCES)."""
-    from windex.api import jobs  # lazy: keeps db independent of the api layer
-
-    # Push sources (memory) have an embed loop but no pull ingest, so seeding an
-    # `ingest-<src>` row would create a schedule entry that dispatches
-    # `windex refresh --source <src>` and exits 1 (no REFRESH_CHAIN).
-    sources = [j.argv[1] for j in jobs.embed_loop_jobs() if j.argv[1] not in jobs.PUSH_SOURCES]
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM schedule")
-        if cur.fetchone()[0]:
-            return
-        rows = []
-        for i, src in enumerate(sources):
-            total = 3 * 60 + i * 15  # 03:00, 03:15, … one per source
-            rows.append((f"ingest-{src}", "ingest", src,
-                         (total // 60) % 24, total % 60, None, True))
-        rows.append(("daily", "command", "daily", 2, 15, None, True))
-        rows.append(("maintain", "command", "maintain", 5, 45, None, True))
-        # search-quality eval after the nightly ingests + maintenance settle
-        rows.append(("eval", "command", "eval", 6, 30, None, True))
-        cur.executemany(
-            """INSERT INTO schedule (name, kind, target, hour, minute, weekday, enabled)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)
-               ON CONFLICT (name) DO NOTHING""",
-            rows,
-        )
-    conn.commit()
+    init_canonical_db(conn)
 
 
 def get_control(conn: psycopg.Connection, key: str, default: str) -> str:

@@ -23,7 +23,7 @@ from windex.modules.common import (
 from windex.crawl.links import extract_links
 from windex.crawl.scope import canonicalize, in_scope
 from windex.hf.sync import blog_slug, kind_of, root_key
-from windex.recipe.ports import PartitionRecord, RawBlob
+from windex.pipeline.ports import PartitionRecord, RawBlob
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 _INPUT_BATCH = 20
@@ -118,7 +118,7 @@ def list_json_manifest(ctx: TaskContext) -> SliceResult:
         raise PermanentTaskError("list.json_manifest requires key_field")
     wanted = {
         value.strip()
-        for value in str(ctx.params.get("slugs") or "").split(",")
+        for value in str(ctx.effective_config.get("slugs") or "").split(",")
         if value.strip()
     }
 
@@ -147,7 +147,7 @@ def list_json_manifest(ctx: TaskContext) -> SliceResult:
                 payload={
                     **entry,
                     **({"id_scope": f"docs:{key}/"}
-                       if ctx.source == "docs" else {}),
+                       if ctx.search_name == "docs" else {}),
                 },
             ))
         return records
@@ -204,7 +204,7 @@ def list_sitemap(ctx: TaskContext) -> SliceResult:
     }
     wanted_roots = {
         value.strip().strip("/")
-        for value in str(ctx.params.get("roots") or "").split(",")
+        for value in str(ctx.effective_config.get("roots") or "").split(",")
         if value.strip()
     }
 
@@ -511,7 +511,7 @@ def crawl_links(ctx: TaskContext) -> SliceResult:
         if prefix is None:
             path = urlsplit(seed).path
             prefix = path if path.endswith("/") else path.rsplit("/", 1)[0] + "/"
-        scope = type("Recipe", (), {
+        scope = type("CrawlPolicy", (), {
             "scope": type("Scope", (), {
                 "same_host": bool(ctx.config.get("same_host", True)),
                 "path_prefix": str(prefix),
