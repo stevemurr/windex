@@ -148,6 +148,8 @@ CREATE TABLE IF NOT EXISTS documents (
     published_at   timestamptz,
     lang           text,
     text_hash      text,
+    metadata_hash  text,
+    indexed_metadata_hash text,
     status         text NOT NULL DEFAULT 'staged',
     duplicate_of   text,
     embedded_model text,
@@ -156,6 +158,9 @@ CREATE TABLE IF NOT EXISTS documents (
     created_at     timestamptz NOT NULL DEFAULT now(),
     updated_at     timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE documents
+    ADD COLUMN IF NOT EXISTS metadata_hash text,
+    ADD COLUMN IF NOT EXISTS indexed_metadata_hash text;
 CREATE INDEX IF NOT EXISTS documents_source_published_idx
     ON documents (source_id, published_at);
 CREATE INDEX IF NOT EXISTS documents_status_idx ON documents (source_id, status);
@@ -167,6 +172,10 @@ CREATE INDEX IF NOT EXISTS documents_embed_backlog_idx
     ON documents (source_id, created_at) WHERE status = 'staged';
 CREATE INDEX IF NOT EXISTS documents_indexed_at_idx
     ON documents (indexed_at DESC) WHERE indexed_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS documents_metadata_backlog_idx
+    ON documents (source_id, updated_at)
+    WHERE status = 'searchable'
+      AND metadata_hash IS DISTINCT FROM indexed_metadata_hash;
 
 -- The one retained specialized Source store: GitHub repository ranking and
 -- hydration needs a wide relational shape.  All ordinary watermarks use
