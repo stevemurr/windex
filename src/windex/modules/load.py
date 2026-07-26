@@ -208,6 +208,9 @@ def _ledger_rows(ctx: TaskContext, docs: list[ExtractedDoc],
 def _upsert_ledger(ctx: TaskContext, rows: list[tuple]) -> None:
     if not rows:
         return
+    # embedded_model/indexed_at are deliberately absent from the conflict
+    # update.  They describe a point that may still exist in Qdrant and are
+    # cleared only after confirmed deletion (here or by platform.index).
     with ctx.conn.cursor() as cur:
         cur.executemany(
             """
@@ -228,15 +231,7 @@ def _upsert_ledger(ctx: TaskContext, rows: list[tuple]) -> None:
                 text_hash = EXCLUDED.text_hash,
                 status = EXCLUDED.status,
                 duplicate_of = EXCLUDED.duplicate_of,
-                text_ref = EXCLUDED.text_ref,
-                embedded_model = CASE
-                    WHEN documents.text_hash IS DISTINCT FROM EXCLUDED.text_hash
-                      OR documents.status = 'deleted'
-                    THEN NULL ELSE documents.embedded_model END,
-                indexed_at = CASE
-                    WHEN documents.text_hash IS DISTINCT FROM EXCLUDED.text_hash
-                      OR documents.status = 'deleted'
-                    THEN NULL ELSE documents.indexed_at END
+                text_ref = EXCLUDED.text_ref
             WHERE documents.text_hash IS DISTINCT FROM EXCLUDED.text_hash
                OR documents.status IS DISTINCT FROM EXCLUDED.status
                OR documents.url IS DISTINCT FROM EXCLUDED.url
@@ -323,7 +318,7 @@ def _tombstone_missing(ctx: TaskContext, *, scope: str,
             cur.execute(
                 """
                 UPDATE documents
-                   SET status = 'deleted', embedded_model = NULL, indexed_at = NULL
+                   SET status = 'deleted'
                  WHERE source = %s AND status <> 'deleted'
                    AND NOT (id = ANY(%s))
                 RETURNING id
@@ -347,7 +342,7 @@ def _tombstone_missing(ctx: TaskContext, *, scope: str,
             cur.execute(
                 """
                 UPDATE documents
-                   SET status = 'deleted', embedded_model = NULL, indexed_at = NULL
+                   SET status = 'deleted'
                  WHERE starts_with(id, %s) AND status <> 'deleted'
                    AND NOT (id = ANY(%s))
                 RETURNING id
@@ -357,10 +352,16 @@ def _tombstone_missing(ctx: TaskContext, *, scope: str,
         return [row[0] for row in cur.fetchall()], vector_ids
 
 
-def _delete_vectors(ctx: TaskContext, doc_ids: set[str]) -> None:
-    """Best-effort Qdrant half of a committed ledger tombstone."""
+def _delete_vectors(ctx: TaskContext, doc_ids: set[str]) -> int:
+    """Delete points and clear their durable deletion markers on confirmation.
+
+    A non-searchable document retains ``embedded_model``/``indexed_at`` until
+    Qdrant confirms deletion.  ``platform.index`` treats those retained fields
+    as a durable retry queue, so a transient Qdrant failure or a crash anywhere
+    around this call cannot turn a tombstone into an untracked ghost point.
+    """
     if not doc_ids:
-        return
+        return 0
     try:
         from qdrant_client import QdrantClient
         from qdrant_client import models as qm
@@ -380,8 +381,26 @@ def _delete_vectors(ctx: TaskContext, doc_ids: set[str]) -> None:
             )
         finally:
             client.close()
-    except Exception as exc:  # absent/unreachable index: ledger remains authoritative
-        log.warning("Pipeline tombstone: qdrant delete skipped (%s)", exc)
+    except Exception as exc:
+        log.warning(
+            "Pipeline tombstone: qdrant delete deferred for retry (%s)", exc)
+        return 0
+
+    # Point deletion is idempotent.  Clearing the marker only after Qdrant
+    # succeeds makes either crash ordering safe: a retained marker retries an
+    # already-completed delete, while a cleared marker proves confirmation.
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE documents
+               SET embedded_model = NULL, indexed_at = NULL,
+                   updated_at = now()
+             WHERE id = ANY(%s) AND status <> 'searchable'
+            """,
+            (sorted(doc_ids),),
+        )
+    ctx.conn.commit()
+    return len(doc_ids)
 
 
 def _advance_refs(ctx: TaskContext, docs: list[ExtractedDoc]) -> None:
