@@ -198,6 +198,36 @@ def test_index_ownership_matches_canonical_generation_schema(canonical_conn):
     ]
 
 
+def test_warc_lane_allows_two_tasks_for_one_source(canonical_conn):
+    run_id = submit_source(
+        canonical_conn, "ccnews", flow="ingest", dedupe=False)
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """UPDATE run_tasks
+                  SET state = 'ready'
+                WHERE run_id = %s AND node IN ('extract_a', 'extract_b')""",
+            (run_id,),
+        )
+    canonical_conn.commit()
+
+    claimed = [
+        canonical_claim.claim_task(
+            canonical_conn,
+            worker=f"pytest/warc/{index}",
+            lanes=["warc"],
+            caps={"warc": 2},
+            satisfied=["storage:downloads", "storage:staging"],
+            default_cap=1,
+        )
+        for index in range(2)
+    ]
+
+    assert {task.node for task in claimed if task is not None} == {
+        "extract_a",
+        "extract_b",
+    }
+
+
 def test_discovery_order_accepts_canonical_text_partition_keys(canonical_conn):
     run_id = submit_source(canonical_conn, "arxiv", dedupe=False)
     task = canonical_claim.claim_task(

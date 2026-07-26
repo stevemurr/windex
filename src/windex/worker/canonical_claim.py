@@ -113,11 +113,13 @@ WHERE id = (
        AND CASE WHEN pg_try_advisory_xact_lock(
                     hashtextextended(%(lock_ns)s || t.lane, 0))
                 THEN
-                  NOT EXISTS (
-                      SELECT 1 FROM run_tasks active
-                       WHERE active.state = 'running'
-                         AND active.source_id IS NOT DISTINCT FROM t.source_id
-                         AND active.lane = t.lane)
+                  (
+                      t.lane = 'warc'
+                      OR NOT EXISTS (
+                          SELECT 1 FROM run_tasks active
+                           WHERE active.state = 'running'
+                             AND active.source_id IS NOT DISTINCT FROM t.source_id
+                             AND active.lane = t.lane))
                   AND (
                       SELECT count(*) FROM run_tasks active
                        WHERE active.state = 'running' AND active.lane = t.lane)
