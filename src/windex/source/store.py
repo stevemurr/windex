@@ -376,6 +376,27 @@ def list_triggers(conn: psycopg.Connection, name: str) -> list[dict[str, Any]]:
         } for row in cur.fetchall()]
 
 
+def _lock_source(
+    conn: psycopg.Connection,
+    name: str,
+    *,
+    include_spec: bool = False,
+) -> dict[str, Any] | None:
+    """Lock a Source while changing configuration bound to its revision."""
+
+    with conn.cursor() as cur:
+        cur.execute(
+            _SOURCE_SELECT + " WHERE s.name = %s FOR UPDATE OF s",
+            (name,),
+        )
+        row = cur.fetchone()
+    return (
+        _source(row, include_spec=include_spec)
+        if row is not None
+        else None
+    )
+
+
 def _trigger_transaction_time(conn: psycopg.Connection) -> datetime:
     """Use Postgres' transaction clock for an atomic re-arm decision."""
 
@@ -416,12 +437,6 @@ def _scheduled_deadline(
 def create_trigger(
     conn: psycopg.Connection, name: str, body: Mapping[str, Any],
 ) -> dict[str, Any]:
-    source = get_source(conn, name, include_spec=True)
-    if source is None:
-        raise KeyError(name)
-    flows = set(source["spec"]["flows"])
-    if body.get("flow_name") not in flows:
-        raise ValueError("trigger Flow does not exist in the active revision")
     enabled = body.get("enabled", True)
     if not isinstance(enabled, bool):
         raise TriggerValidationError(
@@ -431,6 +446,14 @@ def create_trigger(
         body.get("trigger_spec", {}),
         next_fire_at=body.get("next_fire_at"),
     )
+    source = _lock_source(conn, name, include_spec=True)
+    if source is None:
+        conn.rollback()
+        raise KeyError(name)
+    flows = set(source["spec"]["flows"])
+    if body.get("flow_name") not in flows:
+        conn.rollback()
+        raise ValueError("trigger Flow does not exist in the active revision")
     deadline = _scheduled_deadline(
         trigger_type=body["trigger_type"],
         trigger_spec=body.get("trigger_spec") or {},
@@ -468,18 +491,18 @@ def update_trigger(
     unknown = set(changes) - allowed
     if unknown:
         raise ValueError(f"unknown trigger fields: {', '.join(sorted(unknown))}")
-    source = get_source(conn, name, include_spec=True)
+    source = _lock_source(conn, name, include_spec=True)
     if source is None:
+        conn.rollback()
         raise KeyError(name)
     with conn.cursor() as cur:
         cur.execute(
             """SELECT t.id, t.flow_name, t.trigger_type, t.trigger_spec,
                       t.enabled, t.next_fire_at, t.last_fired_at, t.last_run_id
                  FROM source_triggers t
-                 JOIN sources s ON s.id = t.source_id
-                WHERE t.id = %s AND s.name = %s
+                WHERE t.id = %s AND t.source_id = %s
                   FOR UPDATE OF t""",
-            (trigger_id, name),
+            (trigger_id, source["id"]),
         )
         row = cur.fetchone()
     if row is None:
@@ -568,14 +591,13 @@ def update_trigger(
     for key, value in effective.items():
         assignments.append(f"{key} = %s")
         args.append(Jsonb(dict(value)) if key == "trigger_spec" else value)
-    args.extend([trigger_id, name])
+    args.extend([trigger_id, source["id"]])
     with conn.cursor() as cur:
         cur.execute(
-            f"""UPDATE source_triggers t
+            f"""UPDATE source_triggers
                    SET {', '.join(assignments)}, updated_at = now()
-                  FROM sources s
-                 WHERE t.source_id = s.id AND t.id = %s AND s.name = %s
-                 RETURNING t.id""",
+                 WHERE id = %s AND source_id = %s
+                 RETURNING id""",
             args,
         )
         if cur.fetchone() is None:
@@ -716,6 +738,34 @@ def reset(conn: psycopg.Connection, name: str, token: str) -> dict[str, Any]:
     }
 
 
+def _upgrade_trigger_bindings(
+    conn: psycopg.Connection,
+    source_id: int,
+) -> list[dict[str, Any]]:
+    """Return the stable trigger configuration covered by an upgrade token.
+
+    Scheduling timestamps are intentionally excluded: the scheduler may update
+    them while an operator reviews a preview, but those updates do not change
+    whether a trigger can run against the target Pipeline revision.
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT id, flow_name, trigger_type, trigger_spec, enabled
+                 FROM source_triggers
+                WHERE source_id = %s
+                ORDER BY id""",
+            (source_id,),
+        )
+        return [{
+            "id": row[0],
+            "flow_name": row[1],
+            "trigger_type": row[2],
+            "trigger_spec": row[3],
+            "enabled": row[4],
+        } for row in cur.fetchall()]
+
+
 def _upgrade_plan(
     conn: psycopg.Connection,
     name: str,
@@ -731,6 +781,34 @@ def _upgrade_plan(
     if target is None:
         raise KeyError((source["pipeline_name"], target_version))
     pipeline = parse(target["spec"], settings)
+    target_flows = {flow.name for flow in pipeline.flows}
+    trigger_bindings = _upgrade_trigger_bindings(conn, source["id"])
+    trigger_issues = []
+    # Disabled bindings are constraints too: accepting a latent invalid
+    # binding would merely defer the failure until an operator re-enables it.
+    for trigger in trigger_bindings:
+        if trigger["flow_name"] in target_flows:
+            continue
+        state = "enabled" if trigger["enabled"] else "disabled"
+        disabled_note = (
+            ""
+            if trigger["enabled"]
+            else (
+                " Disabled triggers are checked because they can be "
+                "re-enabled."
+            )
+        )
+        trigger_issues.append({
+            "path": f"triggers.{trigger['id']}.flow_name",
+            "code": "trigger_flow_missing",
+            "severity": "error",
+            "message": (
+                f"{state.capitalize()} trigger {trigger['id']} references "
+                f"Flow {trigger['flow_name']!r}, which target revision "
+                f"{target_version} does not define.{disabled_note} Rebind or "
+                "delete the trigger before upgrading."
+            ),
+        })
     active_settings = settings or Settings()
     old_values = dict(source["values"])
     declarations = {item.key: item for item in pipeline.parameters}
@@ -764,7 +842,7 @@ def _upgrade_plan(
         settings=active_settings,
         exclude=name,
     )
-    issues = list(validation["issues"])
+    issues = [*validation["issues"], *trigger_issues]
     candidate: dict[str, Any]
     normalization_error: ValueError | None = None
     try:
@@ -783,6 +861,7 @@ def _upgrade_plan(
             "severity": "error",
             "message": str(normalization_error),
         })
+    valid = valid and not trigger_issues
     clamped = dict(migration_clamped if values is None else {})
     clamped.update({
         key: {"from": requested[key], "to": candidate[key]}
@@ -821,6 +900,11 @@ def _upgrade_plan(
         "state_impact": {
             "stores_preserved": sorted(pipeline.state),
             "requires_confirmation": bool(install_changed),
+            "trigger_bindings_checked": len(trigger_bindings),
+            "trigger_bindings_policy": "all_enabled_and_disabled",
+            "trigger_bindings_hash": values_hash({
+                "triggers": trigger_bindings,
+            }),
         },
         "issues": issues,
         "valid": valid,
@@ -858,27 +942,38 @@ def upgrade(
     *,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
-    source = get_source(conn, name, include_spec=True)
-    if source is None:
-        raise KeyError(name)
-    target = get_revision(conn, source["pipeline_name"], target_version)
-    if target is None:
-        raise KeyError((source["pipeline_name"], target_version))
-    plan = _upgrade_plan(
-        conn,
-        name,
-        target_version,
-        values=values,
-        settings=settings,
-    )
-    if not plan["valid"]:
-        raise SourceConflictError({
-            "message": "Source upgrade candidate is invalid",
-            "issues": plan["issues"],
-        })
-    candidate = plan["candidate"]
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
     try:
+        # Serialize revision changes with all trigger mutations.  The preview
+        # hash detects edits that committed before this lock; operations that
+        # start afterward block and then validate against the new revision.
+        source = _lock_source(conn, name, include_spec=True)
+        if source is None:
+            raise KeyError(name)
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT id FROM source_triggers
+                    WHERE source_id = %s ORDER BY id
+                    FOR UPDATE""",
+                (source["id"],),
+            )
+            cur.fetchall()
+        target = get_revision(conn, source["pipeline_name"], target_version)
+        if target is None:
+            raise KeyError((source["pipeline_name"], target_version))
+        plan = _upgrade_plan(
+            conn,
+            name,
+            target_version,
+            values=values,
+            settings=settings,
+        )
+        if not plan["valid"]:
+            raise SourceConflictError({
+                "message": "Source upgrade candidate is invalid",
+                "issues": plan["issues"],
+            })
+        candidate = plan["candidate"]
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
         with conn.cursor() as cur:
             cur.execute(
                 """UPDATE operation_confirmations
