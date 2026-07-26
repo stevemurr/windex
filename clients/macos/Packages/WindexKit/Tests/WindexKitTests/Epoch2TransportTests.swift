@@ -70,7 +70,7 @@ struct Epoch2TransportTests {
     func publicationPrecondition() async throws {
         let server = try MockWindexServer()
         server.on("POST /admin/v1/pipelines/push/revisions") { request in
-            #expect(request.header("If-Match") == "head-etag")
+            #expect(request.header("If-Match") == "\"old-hash\"")
             #expect(request.body.contains("\"parent_version\":3"))
             #expect(request.body.contains("\"parent_hash\":\"old-hash\""))
             #expect(request.body.contains("\"flows\":{\"receive\""))
@@ -82,7 +82,7 @@ struct Epoch2TransportTests {
         do {
             _ = try await client.publishPipelineRevision(
                 "push", spec: spec, parentVersion: 3,
-                parentHash: "old-hash", ifMatch: "head-etag")
+                parentHash: "old-hash", ifMatch: "\"old-hash\"")
             Issue.record("expected stale write")
         } catch let error as WindexError {
             guard case .preconditionFailed = error else {

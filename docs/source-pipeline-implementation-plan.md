@@ -371,7 +371,9 @@ GET    /admin/v1/pipelines/{name}/revisions/{version}/layout
 PUT    /admin/v1/pipelines/{name}/revisions/{version}/layout
 ```
 
-- Revision creation requires a parent version/hash or `If-Match`.
+- Revision creation requires a parent version/hash or `If-Match`. If
+  `parent_hash` and `If-Match` coexist they must be identical; `parent_version`
+  is an independent guard and all supplied guards must match the current head.
 - Creating a revision is the only semantic graph write; there is no update of a
   published revision.
 - A no-op semantic publish should return the existing hash/version rather than

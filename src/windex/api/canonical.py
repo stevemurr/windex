@@ -639,15 +639,56 @@ def _detail(exc: Exception) -> Any:
 def _raise(exc: Exception) -> None:
     if isinstance(exc, KeyError):
         raise HTTPException(404, "resource not found")
+    if isinstance(exc, pipeline_store.PipelinePreconditionRequiredError):
+        raise HTTPException(428, _detail(exc))
     if isinstance(exc, (
         pipeline_store.StalePipelineError, source_store.StaleSourceError,
     )):
         raise HTTPException(412, _detail(exc))
     if isinstance(exc, (
+        pipeline_store.PipelinePreconditionConflictError,
         source_store.SourceConflictError, run_store.RunConflictError,
     )):
         raise HTTPException(409, _detail(exc))
     raise HTTPException(422, _detail(exc))
+
+
+def _pipeline_revision_guard(
+    body: PipelineRevisionCreate,
+    if_match: str | None,
+) -> tuple[int | None, str | None]:
+    """Resolve one expected head without silently preferring header or body."""
+    header_hash: str | None = None
+    if if_match is not None:
+        header_hash = if_match.strip()
+        if "," in header_hash or header_hash == "*" or header_hash.startswith("W/"):
+            raise ValueError(
+                "If-Match must contain one strong Pipeline head hash")
+        if header_hash.startswith('"') or header_hash.endswith('"'):
+            if not (
+                len(header_hash) >= 2
+                and header_hash.startswith('"')
+                and header_hash.endswith('"')
+            ):
+                raise ValueError("If-Match contains an unterminated entity tag")
+            header_hash = header_hash[1:-1]
+        if not header_hash:
+            raise ValueError("If-Match must not be empty")
+
+    if (
+        body.parent_hash is not None
+        and header_hash is not None
+        and body.parent_hash != header_hash
+    ):
+        raise pipeline_store.PipelinePreconditionConflictError(
+            "parent_hash and If-Match identify different Pipeline heads")
+
+    expected_hash = body.parent_hash or header_hash
+    if body.parent_version is None and expected_hash is None:
+        raise pipeline_store.PipelinePreconditionRequiredError(
+            "publishing an existing Pipeline requires parent_version, "
+            "parent_hash, or If-Match")
+    return body.parent_version, expected_hash
 
 
 def _push_contract(source: dict[str, Any]) -> dict[str, Any] | None:
@@ -745,13 +786,12 @@ def pipeline_revision(name: str, version: int) -> dict[str, Any]:
 def pipeline_revision_publish(
     name: str, body: PipelineRevisionCreate, if_match: str | None = Header(None),
 ) -> dict[str, Any]:
-    expected_hash = body.parent_hash or (
-        if_match.strip('"') if if_match else None)
     try:
+        expected_version, expected_hash = _pipeline_revision_guard(body, if_match)
         with db.pooled(get_settings().pg_dsn) as conn:
             registry.load_custom(conn)
             return pipeline_store.publish_revision(
-                conn, name, body.spec, expected_version=body.parent_version,
+                conn, name, body.spec, expected_version=expected_version,
                 expected_hash=expected_hash, author=body.author, note=body.note)
     except Exception as exc:
         _raise(exc)

@@ -24,6 +24,14 @@ class StalePipelineError(RuntimeError):
     pass
 
 
+class PipelinePreconditionRequiredError(RuntimeError):
+    """A mutable Pipeline write omitted its expected-head guard."""
+
+
+class PipelinePreconditionConflictError(RuntimeError):
+    """Two representations of the expected Pipeline head disagree."""
+
+
 def seed_dir() -> Path:
     return Path(str(files("windex.pipeline").joinpath("seeds")))
 
@@ -225,6 +233,10 @@ def publish_revision(
     author: str = "",
     note: str = "",
 ) -> dict[str, Any]:
+    if expected_version is None and expected_hash is None:
+        raise PipelinePreconditionRequiredError(
+            "publishing an existing Pipeline requires parent_version, "
+            "parent_hash, or If-Match")
     parsed = parse(dict(spec))
     normalized = parsed.to_dict()
     digest = semantic_hash(parsed)
@@ -232,17 +244,25 @@ def publish_revision(
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT p.id, p.head_revision_id, r.version, r.spec_hash
+                """SELECT p.id, p.head_revision_id
                      FROM pipelines p
-                     JOIN pipeline_revisions r ON r.id = p.head_revision_id
                     WHERE p.name = %s AND p.archived_at IS NULL
-                    FOR UPDATE OF p""",
+                    FOR UPDATE""",
                 (name,),
             )
             row = cur.fetchone()
             if row is None:
                 raise KeyError(name)
-            pipeline_id, parent_id, current_version, current_hash = row
+            pipeline_id, parent_id = row
+            cur.execute(
+                """SELECT version, spec_hash FROM pipeline_revisions
+                    WHERE id = %s""",
+                (parent_id,),
+            )
+            head = cur.fetchone()
+            if head is None:
+                raise RuntimeError(f"Pipeline {name!r} has no current head")
+            current_version, current_hash = head
             if expected_version is not None and expected_version != current_version:
                 raise StalePipelineError(
                     f"head is version {current_version}, expected {expected_version}")
