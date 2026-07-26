@@ -1064,12 +1064,16 @@ def _oai(ctx: TaskContext, unit: WorkUnit, client: httpx.Client) -> list[RawBlob
         from windex.arxiv.harvest import parse_records
 
         _, token = parse_records(response.content)
+        # The next request may be either another resumption page in this call
+        # or the first page of a new window in a later worker slice. Cool down
+        # after terminal pages too, otherwise the slice boundary bypasses the
+        # configured arXiv request interval.
+        time.sleep(interval)
         if not token:
             return outputs
         # A date window is the replace/resume boundary. Finish it even when the
         # supervisor requests a yield; the heartbeat thread keeps the lease
         # alive and _run_batches yields cleanly before claiming another window.
-        time.sleep(interval)
 
 
 def _algolia(ctx: TaskContext, unit: WorkUnit,
