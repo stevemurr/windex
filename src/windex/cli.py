@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import threading
 import time
 from pathlib import Path
 
@@ -244,30 +246,36 @@ def source_scheduler(
 
     settings = get_settings()
     last_maintenance: float | None = None
-    while True:
-        try:
-            with db.connect(settings.pg_dsn) as conn:
-                if (
-                    last_maintenance is None
-                    or time.monotonic() - last_maintenance >= 3600
-                ):
-                    maintain_partitions(conn)
-                    prune_expired_artifacts(conn, settings)
-                    last_maintenance = time.monotonic()
-                arm_unplanned(conn)
-                result = tick(conn)
-            if result.fired or result.coalesced or result.failed:
-                console.print({
-                    "fired": result.fired,
-                    "coalesced": result.coalesced,
-                    "skipped": result.skipped,
-                    "failed": result.failed,
-                })
-        except Exception as exc:  # noqa: BLE001
-            console.print(f"[red]Source scheduler tick failed:[/red] {exc}")
-        if once:
-            return
-        time.sleep(interval)
+    stopping = threading.Event()
+    previous_term = signal.signal(
+        signal.SIGTERM, lambda _signum, _frame: stopping.set())
+    try:
+        while not stopping.is_set():
+            try:
+                with db.connect(settings.pg_dsn) as conn:
+                    if (
+                        last_maintenance is None
+                        or time.monotonic() - last_maintenance >= 3600
+                    ):
+                        maintain_partitions(conn)
+                        prune_expired_artifacts(conn, settings)
+                        last_maintenance = time.monotonic()
+                    arm_unplanned(conn)
+                    result = tick(conn)
+                if result.fired or result.coalesced or result.failed:
+                    console.print({
+                        "fired": result.fired,
+                        "coalesced": result.coalesced,
+                        "skipped": result.skipped,
+                        "failed": result.failed,
+                    })
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]Source scheduler tick failed:[/red] {exc}")
+            if once:
+                return
+            stopping.wait(interval)
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
 
 
 @app.command()

@@ -132,10 +132,10 @@ def pooled(dsn: str):
     return pool(dsn).connection()
 
 
-def init_db(conn: psycopg.Connection) -> None:
+def init_db(conn: psycopg.Connection) -> dict:
     from windex.db.canonical import init_canonical_db
 
-    init_canonical_db(conn)
+    return init_canonical_db(conn)
 
 
 def get_control(conn: psycopg.Connection, key: str, default: str) -> str:
