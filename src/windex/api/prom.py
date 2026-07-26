@@ -402,6 +402,73 @@ class WindexCollector:
             families.extend((scheduler_due, scheduler_lag))
 
             cur.execute(
+                """SELECT extract(epoch FROM ts), data
+                     FROM operational_events
+                    WHERE component = 'maintenance'
+                      AND event = 'storage.gc.completed'
+                    ORDER BY seq DESC LIMIT 1"""
+            )
+            gc_row = cur.fetchone()
+            gc_last_run = GaugeMetricFamily(
+                "windex_storage_gc_last_run_timestamp_seconds",
+                "Unix timestamp of the latest Pipeline storage GC pass.",
+            )
+            gc_deleted_files = GaugeMetricFamily(
+                "windex_storage_gc_deleted_files",
+                "Files removed by the latest Pipeline storage GC pass.",
+                labels=["kind"],
+            )
+            gc_deleted_bytes = GaugeMetricFamily(
+                "windex_storage_gc_deleted_bytes",
+                "Bytes removed by the latest Pipeline storage GC pass.",
+                labels=["kind"],
+            )
+            gc_errors = GaugeMetricFamily(
+                "windex_storage_gc_errors",
+                "File or database errors in the latest Pipeline storage GC pass.",
+            )
+            gc_capped = GaugeMetricFamily(
+                "windex_storage_gc_cap_reached",
+                "1 when the latest Pipeline storage GC pass reached a safety cap.",
+                labels=["cap"],
+            )
+            if gc_row:
+                timestamp, data = gc_row
+                summary = data if isinstance(data, dict) else {}
+                gc_last_run.add_metric([], float(timestamp or 0))
+                deleted = summary.get("deleted")
+                if isinstance(deleted, dict):
+                    for kind, values in sorted(deleted.items()):
+                        if not isinstance(values, dict):
+                            continue
+                        gc_deleted_files.add_metric(
+                            [str(kind)], float(values.get("files") or 0))
+                        gc_deleted_bytes.add_metric(
+                            [str(kind)], float(values.get("bytes") or 0))
+                gc_errors.add_metric(
+                    [], float(summary.get("error_count") or 0))
+                gc_capped.add_metric(
+                    ["files"],
+                    1.0 if summary.get("file_cap_reached") else 0.0,
+                )
+                gc_capped.add_metric(
+                    ["bytes"],
+                    1.0 if summary.get("byte_cap_reached") else 0.0,
+                )
+            else:
+                gc_last_run.add_metric([], 0.0)
+                gc_errors.add_metric([], 0.0)
+                gc_capped.add_metric(["files"], 0.0)
+                gc_capped.add_metric(["bytes"], 0.0)
+            families.extend((
+                gc_last_run,
+                gc_deleted_files,
+                gc_deleted_bytes,
+                gc_errors,
+                gc_capped,
+            ))
+
+            cur.execute(
                 """SELECT known_item_ndcg, known_item_mrr,
                           golden_ndcg, golden_mrr, judge_ndcg
                      FROM search_quality

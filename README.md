@@ -410,6 +410,7 @@ Everything is environment-driven (`WINDEX_*`, see `.env.example`). The important
 | Variable | Purpose |
 |---|---|
 | `WINDEX_DATA_ROOT` | Bulk storage: downloads, parquet staging (point at a big disk) |
+| `WINDEX_PIPELINE_GC_*` | Terminal-Run retention, file-age grace, cadence, and per-pass cleanup budgets |
 | `WINDEX_EMBED_BACKEND/ENDPOINT/MODEL/DIM` | Your embedding model (`http-openai`, `http-tei`, or `st`) |
 | `WINDEX_EMBED_CONCURRENCY/BATCH_SIZE/THROTTLE_SECONDS` | Indexing throughput vs. live-query latency |
 | `WINDEX_EMBED_QUERY_TIMEOUT` | Deadline before hybrid search degrades to keyword |
