@@ -149,6 +149,7 @@ enum ConnectionFailure: Equatable, Sendable {
     case unauthorized
     case adminDisabled(String)
     case notWindex(service: String)
+    case incompatibleContract(String)
     case credential(String)
     case unexpected(String)
 
@@ -164,6 +165,8 @@ enum ConnectionFailure: Equatable, Sendable {
             "Admin access is disabled."
         case .notWindex:
             "That service is not windex."
+        case .incompatibleContract:
+            "This backend contract is incompatible."
         case .credential:
             "The credential could not be stored."
         case .unexpected:
@@ -174,7 +177,8 @@ enum ConnectionFailure: Equatable, Sendable {
     var guidance: String {
         switch self {
         case .invalidAddress(let message), .credential(let message),
-             .adminDisabled(let message), .unexpected(let message):
+             .adminDisabled(let message), .incompatibleContract(let message),
+             .unexpected(let message):
             message
         case .unreachable:
             "The backend may be down, or this Mac may be off the network."
@@ -184,6 +188,11 @@ enum ConnectionFailure: Equatable, Sendable {
             "The address answered as “\(service)”. Check the host and port."
         }
     }
+}
+
+struct PipelineNavigationRequest: Hashable, Sendable {
+    let reference: PipelineRevisionReference
+    let flow: String?
 }
 
 @MainActor
@@ -201,6 +210,11 @@ final class AppModel {
         @Sendable (WindexClient, String?) async throws -> PairingOutcome
 
     var selection: SidebarDestination = .overview
+    var pipelineNavigation: PipelineNavigationRequest?
+    var sourceCreationRevision: PipelineRevisionReference?
+    var selectedSourceName: String?
+    var selectedRunID: Int?
+    var consoleFilterRequest: OperationalEventFilter?
     var connectionState: ConnectionState = .unconfigured
     var backendAddress = ""
     private(set) var client: WindexClient?
@@ -217,12 +231,14 @@ final class AppModel {
             do {
                 switch try await client.pair(with: token) {
                 case .paired(let health, let identity):
+                    let scopes = identity["scopes"]?.stringArrayValue ?? []
                     return .paired(
                         PairingEvidence(
                             version: health.version,
-                            uptimeSeconds: Int(health.uptimeS ?? 0),
+                            uptimeSeconds: Int(health.uptimeS),
                             authRequired: health.needsToken,
-                            scopes: identity.scopes ?? []))
+                            scopes: scopes,
+                            contractEpoch: health.contractEpoch))
                 case .tokenRequired:
                     return .tokenRequired
                 case .notWindex(let service):
@@ -248,6 +264,31 @@ final class AppModel {
     var connectedBackend: ConnectedBackend? {
         guard case .ready(let backend) = connectionState else { return nil }
         return backend
+    }
+
+    func openPipeline(_ reference: PipelineRevisionReference, flow: String? = nil) {
+        pipelineNavigation = .init(reference: reference, flow: flow)
+        selection = .pipelines
+    }
+
+    func createSource(using reference: PipelineRevisionReference) {
+        sourceCreationRevision = reference
+        selection = .sources
+    }
+
+    func openSource(_ name: String) {
+        selectedSourceName = name
+        selection = .sources
+    }
+
+    func openRun(_ id: Int) {
+        selectedRunID = id
+        selection = .runs
+    }
+
+    func openConsole(_ filter: OperationalEventFilter) {
+        consoleFilterRequest = filter
+        selection = .logs
     }
 
     var currentProfile: ConnectionProfile? {
@@ -398,6 +439,11 @@ final class AppModel {
         client = nil
         connectionState = .unconfigured
         selection = .overview
+        pipelineNavigation = nil
+        sourceCreationRevision = nil
+        selectedSourceName = nil
+        selectedRunID = nil
+        consoleFilterRequest = nil
     }
 
     func forgetBackend() {
@@ -423,6 +469,11 @@ final class AppModel {
             return .adminDisabled(message)
         case .http(_, let message), .notFound(let message):
             return .unexpected(message)
+        case .conflict(let message), .preconditionFailed(let message),
+             .preconditionRequired(let message):
+            return .unexpected(message)
+        case .unsupportedContractEpoch:
+            return .incompatibleContract(windexError.localizedDescription)
         case .validation(_, let message):
             return .unexpected(message)
         case .decoding:

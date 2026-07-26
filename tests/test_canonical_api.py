@@ -21,6 +21,17 @@ def test_openapi_is_one_pipeline_source_contract_epoch():
     assert "recipe" not in encoded
     assert "marketplace" not in encoded
 
+    schemas = admin_schema["components"]["schemas"]
+    assert schemas["PipelineRunCreate"]["properties"]["dry_run"] == {
+        "default": False,
+        "title": "Dry Run",
+        "type": "boolean",
+    }
+    assert "values" in schemas["SourceUpgradePreviewRequest"]["properties"]
+    assert "values" in schemas["SourceUpgradeRequest"]["required"]
+    assert "candidate" in schemas["UpgradePreviewResponse"]["required"]
+    assert "issues" in schemas["UpgradePreviewResponse"]["required"]
+
 
 def test_registry_response_is_fully_typed():
     response = RegistryResponse.model_validate(registry.describe())

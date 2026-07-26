@@ -14,16 +14,25 @@ import WindexKit
 public struct SchemaForm: View {
     @Environment(\.windexTheme) private var theme
     @Bindable private var model: FormModel
+    private let configuredSecretReferences: [String]
 
-    public init(model: FormModel) {
+    public init(
+        model: FormModel,
+        configuredSecretReferences: [String] = []
+    ) {
         self.model = model
+        self.configuredSecretReferences = configuredSecretReferences
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: .lg) {
             ForEach(model.sections) { section in
                 if !section.isEmpty {
-                    SchemaFormSection(model: model, section: section)
+                    SchemaFormSection(
+                        model: model,
+                        section: section,
+                        configuredSecretReferences: configuredSecretReferences
+                    )
                 }
             }
         }
@@ -35,6 +44,7 @@ struct SchemaFormSection: View {
     @Environment(\.windexTheme) private var theme
     @Bindable var model: FormModel
     let section: FormSection
+    let configuredSecretReferences: [String]
 
     @State private var advancedExpanded = false
 
@@ -46,14 +56,22 @@ struct SchemaFormSection: View {
             }
 
             ForEach(section.fields) { param in
-                SchemaField(model: model, param: param)
+                SchemaField(
+                    model: model,
+                    param: param,
+                    configuredSecretReferences: configuredSecretReferences
+                )
             }
 
             if !section.advanced.isEmpty {
                 DisclosureGroup(isExpanded: $advancedExpanded) {
                     VStack(alignment: .leading, spacing: .md) {
                         ForEach(section.advanced) { param in
-                            SchemaField(model: model, param: param)
+                            SchemaField(
+                                model: model,
+                                param: param,
+                                configuredSecretReferences: configuredSecretReferences
+                            )
                         }
                     }
                     .padding(.top, .sm)
@@ -73,6 +91,7 @@ struct SchemaField: View {
     @Environment(\.windexTheme) private var theme
     @Bindable var model: FormModel
     let param: Param
+    let configuredSecretReferences: [String]
 
     private var isEnabled: Bool { model.isEnabled(param) }
     private var error: String? { model.error(for: param) }
@@ -90,7 +109,11 @@ struct SchemaField: View {
                 }
             }
 
-            FieldEditor(model: model, param: param)
+            FieldEditor(
+                model: model,
+                param: param,
+                configuredSecretReferences: configuredSecretReferences
+            )
                 .disabled(!isEnabled)
 
             footer

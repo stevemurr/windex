@@ -1,6 +1,6 @@
 import Foundation
 
-// `Health` and `WhoAmI` are generated — see Wire.swift, which aliases them and
+// `Health` is generated and `WhoAmI` is intentionally open — see Wire.swift.
 // hangs `isOK`/`isWindex`/`needsToken` off them. What lives here is the pairing
 // FLOW, which is behaviour rather than wire shape.
 
@@ -41,7 +41,13 @@ extension WindexClient {
     public func pair(with candidateToken: String?) async throws -> PairingResult {
         let health = try await health()
         guard health.isWindex else {
-            return .notWindex(service: health.service ?? "unknown")
+            return .notWindex(service: health.service)
+        }
+        guard health.isSupportedEpoch else {
+            throw WindexError.unsupportedContractEpoch(
+                received: health.contractEpoch,
+                supported: 2
+            )
         }
 
         let trimmed = candidateToken?.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -83,37 +83,6 @@
         "title": "Body_source_reset",
         "type": "object"
       },
-      "Body_source_upgrade": {
-        "properties": {
-          "confirmation_token": {
-            "title": "Confirmation Token",
-            "type": "string"
-          },
-          "target_version": {
-            "title": "Target Version",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "target_version",
-          "confirmation_token"
-        ],
-        "title": "Body_source_upgrade",
-        "type": "object"
-      },
-      "Body_source_upgrade_preview": {
-        "properties": {
-          "target_version": {
-            "title": "Target Version",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "target_version"
-        ],
-        "title": "Body_source_upgrade_preview",
-        "type": "object"
-      },
       "Capabilities": {
         "additionalProperties": false,
         "properties": {
@@ -1573,6 +1542,11 @@
       "PipelineRunCreate": {
         "additionalProperties": false,
         "properties": {
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
           "flow": {
             "anyOf": [
               {
@@ -2929,6 +2903,57 @@
         "title": "SourceStatusResponse",
         "type": "object"
       },
+      "SourceUpgradePreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "target_version": {
+            "title": "Target Version",
+            "type": "integer"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values"
+          }
+        },
+        "required": [
+          "target_version"
+        ],
+        "title": "SourceUpgradePreviewRequest",
+        "type": "object"
+      },
+      "SourceUpgradeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation_token": {
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "target_version": {
+            "title": "Target Version",
+            "type": "integer"
+          },
+          "values": {
+            "additionalProperties": true,
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "required": [
+          "target_version",
+          "values",
+          "confirmation_token"
+        ],
+        "title": "SourceUpgradeRequest",
+        "type": "object"
+      },
       "SourcesResponse": {
         "additionalProperties": false,
         "properties": {
@@ -3297,6 +3322,11 @@
       "UpgradePreviewResponse": {
         "additionalProperties": false,
         "properties": {
+          "candidate": {
+            "additionalProperties": true,
+            "title": "Candidate",
+            "type": "object"
+          },
           "candidate_hash": {
             "title": "Candidate Hash",
             "type": "string"
@@ -3307,8 +3337,15 @@
             "type": "object"
           },
           "confirmation_token": {
-            "title": "Confirmation Token",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmation Token"
           },
           "defaulted": {
             "additionalProperties": true,
@@ -3328,6 +3365,13 @@
               "type": "string"
             },
             "title": "Install Stage Changed",
+            "type": "array"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationIssueModel"
+            },
+            "title": "Issues",
             "type": "array"
           },
           "missing": {
@@ -3378,6 +3422,7 @@
           "target_hash",
           "expected_etag",
           "candidate_hash",
+          "candidate",
           "retained",
           "defaulted",
           "removed",
@@ -3385,6 +3430,7 @@
           "missing",
           "install_stage_changed",
           "state_impact",
+          "issues",
           "confirmation_token",
           "valid"
         ],
@@ -7504,7 +7550,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Body_source_upgrade"
+                "$ref": "#/components/schemas/SourceUpgradeRequest"
               }
             }
           },
@@ -7569,7 +7615,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Body_source_upgrade_preview"
+                "$ref": "#/components/schemas/SourceUpgradePreviewRequest"
               }
             }
           },

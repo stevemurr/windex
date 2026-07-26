@@ -11,6 +11,7 @@ struct FieldEditor: View {
     @Environment(\.windexTheme) private var theme
     @Bindable var model: FormModel
     let param: Param
+    let configuredSecretReferences: [String]
 
     var body: some View {
         switch param.editor {
@@ -25,7 +26,16 @@ struct FieldEditor: View {
         case .stringList, .regexList:
             StringListEditor(model: model, param: param)
         case .secret:
-            SecretEditor(model: model, param: param)
+            if param.kind == .secretRef,
+               !configuredSecretReferences.isEmpty {
+                SecretReferenceEditor(
+                    model: model,
+                    param: param,
+                    configuredSecretReferences: configuredSecretReferences
+                )
+            } else {
+                SecretEditor(model: model, param: param)
+            }
         case .textarea, .json:
             TextAreaEditor(model: model, param: param,
                            validatesJSON: param.editor == .json)
@@ -487,6 +497,44 @@ private struct KeyValueEditor: View {
 }
 
 // MARK: - Secret
+
+/// A `secret_ref` is the name of an operator-configured secret, never secret
+/// material. Source creation receives the configured names and exposes them
+/// explicitly instead of asking the operator to type a masked identifier.
+private struct SecretReferenceEditor: View {
+    @Bindable var model: FormModel
+    let param: Param
+    let configuredSecretReferences: [String]
+
+    private var choices: [String] {
+        let configured = Set(configuredSecretReferences)
+        let allowed = param.allow.isEmpty
+            ? configured
+            : configured.intersection(param.allow)
+        var values = allowed.sorted()
+        if let current = model.value(for: param)?.stringValue,
+           !values.contains(current) {
+            values.append(current)
+        }
+        return values
+    }
+
+    var body: some View {
+        Picker(
+            param.title,
+            selection: Binding(
+                get: { model.value(for: param)?.stringValue },
+                set: { model.set(param, $0.map(JSONValue.string)) }
+            )
+        ) {
+            Text("Choose a configured secret").tag(String?.none)
+            ForEach(choices, id: \.self) { name in
+                Text(name).tag(Optional(name))
+            }
+        }
+        .labelsHidden()
+    }
+}
 
 /// Write-only. The server never echoes a secret's value, so the control must
 /// show that one is *set* without pretending to know it — an empty required

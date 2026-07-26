@@ -38,7 +38,7 @@ struct SSETests {
     @Test("a stream on the admin surface carries the token and the prefix")
     func adminStreamIsAuthenticated() async throws {
         let server = try MockWindexServer()
-        server.on("GET /admin/v1/crawl/runs/run-1/events") { _ in
+        server.on("GET /admin/v1/events/stream") { _ in
             .sse(["event: done\ndata: {}\n\n"])
         }
         try await server.start()
@@ -46,15 +46,17 @@ struct SSETests {
 
         let client = WindexClient(baseURL: server.baseURL, token: "s3cret")
         var count = 0
-        for try await _ in try await client.events("/v1/crawl/runs/run-1/events",
-                                                   surface: .admin) {
+        for try await _ in try await client.events("/v1/events/stream",
+                                                   surface: .admin,
+                                                   lastEventID: "41") {
             count += 1
         }
 
         #expect(count == 1)
         let sent = try #require(server.lastRequest)
-        #expect(sent.path == "/admin/v1/crawl/runs/run-1/events")
+        #expect(sent.path == "/admin/v1/events/stream")
         #expect(sent.header("Authorization") == "Bearer s3cret")
+        #expect(sent.header("Last-Event-ID") == "41")
         #expect(sent.header("Accept") == "text/event-stream")
     }
 
@@ -64,7 +66,7 @@ struct SSETests {
     @Test("an unauthorized stream throws rather than ending quietly")
     func unauthorizedStreamThrows() async throws {
         let server = try MockWindexServer()
-        server.on("GET /admin/v1/events") { _ in
+        server.on("GET /admin/v1/events/stream") { _ in
             .detail("missing or invalid admin token", status: 401)
         }
         try await server.start()
@@ -73,7 +75,7 @@ struct SSETests {
         let client = WindexClient(baseURL: server.baseURL, token: "bad")
         var caught: WindexError?
         do {
-            for try await _ in try await client.events("/v1/events", surface: .admin) {}
+            for try await _ in try await client.events("/v1/events/stream", surface: .admin) {}
         } catch let error as WindexError {
             caught = error
         }

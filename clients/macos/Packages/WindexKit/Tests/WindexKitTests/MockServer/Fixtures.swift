@@ -55,6 +55,10 @@ enum Fixtures {
     static func health(authRequired: Bool, service: String = "windex") -> String {
         """
         {"status":"ok","service":"\(service)","version":"0.1.0",
+         "contract_epoch":2,"supported_contract_epochs":[2],"schema_generation":1,
+         "capabilities":{"pipelines":true,"sources":true,"generic_runs":true,
+          "source_ingest":true,"operational_events":true,"module_admin":false,
+          "secure_module_upload":false,"module_runtimes":["python"]},
          "auth_required":\(authRequired),"started_at":1753372800.0,"uptime_s":128.4}
         """
     }

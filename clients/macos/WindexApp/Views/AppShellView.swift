@@ -5,6 +5,7 @@ import WindexUI
 struct AppShellView: View {
     @Bindable var model: AppModel
     @Environment(\.windexTheme) private var theme
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -39,6 +40,10 @@ struct AppShellView: View {
         .task(id: backend.profile) {
             await session.start()
         }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await session.foreground() }
+        }
     }
 
     private func sidebar(backend: ConnectedBackend) -> some View {
@@ -68,15 +73,15 @@ struct AppShellView: View {
         case .sources:
             SourcesView(appModel: model)
         case .pipelines:
-            PipelinesView()
+            PipelinesView(appModel: model)
         case .settings:
             SettingsView(appModel: model, client: client, backend: backend)
         case .logs:
-            LogsView()
+            LogsView(appModel: model)
         case .search:
             SearchView(appModel: model, client: client, backend: backend)
         case .runs:
-            RunsView()
+            RunsView(appModel: model)
         }
     }
 }

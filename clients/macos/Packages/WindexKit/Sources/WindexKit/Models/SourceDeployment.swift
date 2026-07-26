@@ -27,6 +27,8 @@ public enum SourceActivityState: String, Codable, Hashable, Sendable {
     case queued
     case running
     case blocked
+    case succeeded
+    case cancelled
     case paused
     case failed
     case archived
@@ -142,6 +144,28 @@ public struct SourceConfiguration: Codable, Hashable, Sendable {
     }
 }
 
+public struct SourceIngress: Codable, Hashable, Sendable {
+    public let path: String
+    public let authenticationRequired: Bool
+    public let maxDocuments: Int
+    public let maxTextBytes: Int
+    public let modes: [String]
+
+    public init(
+        path: String,
+        authenticationRequired: Bool,
+        maxDocuments: Int,
+        maxTextBytes: Int,
+        modes: [String]
+    ) {
+        self.path = path
+        self.authenticationRequired = authenticationRequired
+        self.maxDocuments = maxDocuments
+        self.maxTextBytes = maxTextBytes
+        self.modes = modes
+    }
+}
+
 /// A configured searchable-corpus deployment of one immutable Pipeline revision.
 public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
     public var id: String { name }
@@ -150,6 +174,7 @@ public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
     public let title: String
     public let description: String
     public let origin: String
+    public let originValues: [String: JSONValue]
     public let pipeline: PipelineRevisionReference
     public let search: SourceSearchIdentity
     public let stateNamespace: String
@@ -157,6 +182,7 @@ public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
     public let paused: Bool
     public let archived: Bool
     public let generation: Int
+    public let ingress: SourceIngress?
     public let configuration: SourceConfiguration
     public let status: SourceStatus
 
@@ -165,6 +191,7 @@ public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
         title: String,
         description: String = "",
         origin: String,
+        originValues: [String: JSONValue] = [:],
         pipeline: PipelineRevisionReference,
         search: SourceSearchIdentity,
         stateNamespace: String,
@@ -172,6 +199,7 @@ public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
         paused: Bool = false,
         archived: Bool = false,
         generation: Int = 1,
+        ingress: SourceIngress? = nil,
         configuration: SourceConfiguration = .init(),
         status: SourceStatus = .init()
     ) {
@@ -179,6 +207,7 @@ public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
         self.title = title
         self.description = description
         self.origin = origin
+        self.originValues = originValues
         self.pipeline = pipeline
         self.search = search
         self.stateNamespace = stateNamespace
@@ -186,6 +215,7 @@ public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
         self.paused = paused
         self.archived = archived
         self.generation = generation
+        self.ingress = ingress
         self.configuration = configuration
         self.status = status
     }

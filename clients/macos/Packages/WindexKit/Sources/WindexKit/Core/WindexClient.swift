@@ -9,6 +9,8 @@ import Foundation
 public enum WindexSurface: Sendable {
     /// `/v1/**` — open on a trusted LAN, no token.
     case agent
+    /// An agent route which participates in write-token authentication.
+    case agentAuthenticated
     /// `/admin/v1/**` — bearer-gated at the mount.
     ///
     /// Note the prefix. `openapi-admin.json` describes a *mounted* sub-app, so
@@ -18,12 +20,12 @@ public enum WindexSurface: Sendable {
 
     var pathPrefix: String {
         switch self {
-        case .agent: return ""
+        case .agent, .agentAuthenticated: return ""
         case .admin: return "/admin"
         }
     }
 
-    var requiresToken: Bool { self == .admin }
+    var requiresToken: Bool { self == .admin || self == .agentAuthenticated }
 }
 
 /// Async HTTP client for a windex backend.
@@ -84,6 +86,14 @@ public actor WindexClient {
 
     public var hasToken: Bool { token?.isEmpty == false }
 
+    static func escapePath(_ component: String) -> String {
+        component.addingPercentEncoding(
+            withAllowedCharacters: .alphanumerics.union(
+                CharacterSet(charactersIn: "-._~")
+            )
+        ) ?? component
+    }
+
     // MARK: - Request building
 
     func url(for path: String, surface: WindexSurface,
@@ -107,7 +117,8 @@ public actor WindexClient {
     }
 
     private func request(_ method: String, _ path: String, surface: WindexSurface,
-                         query: [URLQueryItem], body: Data?) throws -> URLRequest {
+                         query: [URLQueryItem], body: Data?,
+                         headers: [String: String] = [:]) throws -> URLRequest {
         var request = URLRequest(url: try url(for: path, surface: surface, query: query))
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -117,6 +128,9 @@ public actor WindexClient {
         }
         if surface.requiresToken, let token, !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
         }
         return request
     }
@@ -130,10 +144,11 @@ public actor WindexClient {
         surface: WindexSurface = .agent,
         query: [URLQueryItem] = [],
         body: (any Encodable & Sendable)? = nil,
+        headers: [String: String] = [:],
         as type: Response.Type = Response.self
     ) async throws -> Response {
         let data = try await sendRaw(method, path, surface: surface,
-                                     query: query, body: body)
+                                     query: query, body: body, headers: headers)
         do {
             return try decoder.decode(Response.self, from: data)
         } catch {
@@ -148,7 +163,8 @@ public actor WindexClient {
         _ path: String,
         surface: WindexSurface = .agent,
         query: [URLQueryItem] = [],
-        body: (any Encodable & Sendable)? = nil
+        body: (any Encodable & Sendable)? = nil,
+        headers: [String: String] = [:]
     ) async throws -> Data {
         var encoded: Data?
         if let body {
@@ -159,7 +175,7 @@ public actor WindexClient {
             }
         }
         let request = try request(method, path, surface: surface,
-                                  query: query, body: encoded)
+                                  query: query, body: encoded, headers: headers)
 
         let data: Data
         let response: URLResponse
@@ -176,6 +192,50 @@ public actor WindexClient {
             throw Self.error(status: http.statusCode, body: data)
         }
         return data
+    }
+
+    public struct Response<Value: Sendable>: Sendable {
+        public let value: Value
+        public let etag: String?
+        public let contentType: String?
+    }
+
+    /// Perform and decode a request while retaining response validators.
+    public func sendResponse<Value: Decodable & Sendable>(
+        _ method: String = "GET",
+        _ path: String,
+        surface: WindexSurface = .admin,
+        query: [URLQueryItem] = [],
+        body: (any Encodable & Sendable)? = nil,
+        headers: [String: String] = [:],
+        as type: Value.Type = Value.self
+    ) async throws -> Response<Value> {
+        var encoded: Data?
+        if let body {
+            do { encoded = try encoder.encode(body) }
+            catch { throw WindexError.decoding(underlying: error) }
+        }
+        let request = try request(method, path, surface: surface, query: query,
+                                  body: encoded, headers: headers)
+        let data: Data
+        let response: URLResponse
+        do { (data, response) = try await session.data(for: request) }
+        catch { throw WindexError.transport(underlying: error) }
+        guard let http = response as? HTTPURLResponse else {
+            throw WindexError.http(status: 0, message: "not an HTTP response")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw Self.error(status: http.statusCode, body: data)
+        }
+        do {
+            return Response(
+                value: try decoder.decode(Value.self, from: data),
+                etag: http.value(forHTTPHeaderField: "ETag"),
+                contentType: http.value(forHTTPHeaderField: "Content-Type")
+            )
+        } catch {
+            throw WindexError.decoding(underlying: error)
+        }
     }
 
     /// The result of a conditional GET.
@@ -254,6 +314,12 @@ public actor WindexClient {
             return .unauthorized(message: message)
         case 404:
             return .notFound(message: message)
+        case 409:
+            return .conflict(message: message)
+        case 412:
+            return .preconditionFailed(message: message)
+        case 428:
+            return .preconditionRequired(message: message)
         case 503:
             // The admin gate returns 503 with fix-it instructions when bound
             // off-loopback without a token — distinct from a transient outage,
@@ -269,7 +335,8 @@ public actor WindexClient {
     /// Open a Server-Sent Events stream. The caller consumes events until it
     /// stops iterating or the server closes.
     public func events(_ path: String, surface: WindexSurface = .agent,
-                       query: [URLQueryItem] = []) throws -> AsyncThrowingStream<SSEEvent, any Error> {
+                       query: [URLQueryItem] = [],
+                       lastEventID: String? = nil) throws -> AsyncThrowingStream<SSEEvent, any Error> {
         var request = URLRequest(url: try url(for: path, surface: surface, query: query))
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         // A cached SSE response would replay a finished stream instead of opening
@@ -278,6 +345,9 @@ public actor WindexClient {
         request.timeoutInterval = configuration.streamTimeout
         if surface.requiresToken, let token, !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        if let lastEventID, !lastEventID.isEmpty {
+            request.setValue(lastEventID, forHTTPHeaderField: "Last-Event-ID")
         }
         return SSEClient.stream(request: request, session: session)
     }

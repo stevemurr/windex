@@ -10,6 +10,8 @@ public struct RecoveredPipelineDraft: Codable, Hashable, Identifiable, Sendable 
     public let baseHash: String?
     public let selectedFlow: String
     public let positions: [String: PipelineNodePosition]
+    public let groups: [PipelineLayoutGroup]?
+    public let annotations: [PipelineLayoutAnnotation]?
     public let updatedAt: Date
 
     public init(
@@ -18,6 +20,8 @@ public struct RecoveredPipelineDraft: Codable, Hashable, Identifiable, Sendable 
         baseHash: String? = nil,
         selectedFlow: String,
         positions: [String: PipelineNodePosition] = [:],
+        groups: [PipelineLayoutGroup]? = nil,
+        annotations: [PipelineLayoutAnnotation]? = nil,
         updatedAt: Date = Date()
     ) {
         self.draft = draft
@@ -25,6 +29,8 @@ public struct RecoveredPipelineDraft: Codable, Hashable, Identifiable, Sendable 
         self.baseHash = baseHash
         self.selectedFlow = selectedFlow
         self.positions = positions
+        self.groups = groups
+        self.annotations = annotations
         self.updatedAt = updatedAt
     }
 }
