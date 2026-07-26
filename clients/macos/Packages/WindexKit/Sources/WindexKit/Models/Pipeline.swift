@@ -328,6 +328,7 @@ public struct PipelineRevision: Codable, Hashable, Identifiable, Sendable {
     public let registryVersion: Int
     public let author: String
     public let note: String
+    public let sourceCapability: PipelineSourceCapability
 
     public init(
         reference: PipelineRevisionReference,
@@ -335,7 +336,8 @@ public struct PipelineRevision: Codable, Hashable, Identifiable, Sendable {
         spec: PipelineSpec,
         registryVersion: Int,
         author: String = "",
-        note: String = ""
+        note: String = "",
+        sourceCapability: PipelineSourceCapability = .init(capable: false)
     ) {
         self.reference = reference
         self.parentVersion = parentVersion
@@ -343,6 +345,7 @@ public struct PipelineRevision: Codable, Hashable, Identifiable, Sendable {
         self.registryVersion = registryVersion
         self.author = author
         self.note = note
+        self.sourceCapability = sourceCapability
     }
 }
 
@@ -356,24 +359,158 @@ public struct PipelineNodePosition: Codable, Hashable, Sendable {
     }
 }
 
+/// One presentation-only group in a Flow layout.
+///
+/// Layout group objects are deliberately open in the epoch-2 contract. Keeping
+/// the complete object preserves fields added by another client or a newer
+/// backend while these accessors expose the fields used by the macOS composer.
+public struct PipelineLayoutGroup: Codable, Hashable, Identifiable, Sendable {
+    public var fields: [String: JSONValue]
+
+    public init(fields: [String: JSONValue]) {
+        self.fields = fields
+    }
+
+    public init(
+        id: String,
+        title: String,
+        nodes: [String],
+        x: Double,
+        y: Double,
+        width: Double = 320,
+        height: Double = 180
+    ) {
+        fields = [
+            "id": .string(id),
+            "title": .string(title),
+            "nodes": .array(nodes.map(JSONValue.string)),
+            "x": .double(x),
+            "y": .double(y),
+            "width": .double(width),
+            "height": .double(height),
+        ]
+    }
+
+    public var id: String {
+        fields["id"]?.stringValue
+            ?? fields["title"]?.stringValue
+            ?? "group-\(fields.hashValue)"
+    }
+    public var title: String {
+        get { fields["title"]?.stringValue ?? id }
+        set { fields["title"] = .string(newValue) }
+    }
+    public var nodes: [String] {
+        get { fields["nodes"]?.arrayValue?.compactMap(\.stringValue) ?? [] }
+        set { fields["nodes"] = .array(newValue.map(JSONValue.string)) }
+    }
+    public var x: Double {
+        get { fields["x"]?.doubleValue ?? 0 }
+        set { fields["x"] = .double(newValue) }
+    }
+    public var y: Double {
+        get { fields["y"]?.doubleValue ?? 0 }
+        set { fields["y"] = .double(newValue) }
+    }
+    public var width: Double {
+        get { fields["width"]?.doubleValue ?? 320 }
+        set { fields["width"] = .double(newValue) }
+    }
+    public var height: Double {
+        get { fields["height"]?.doubleValue ?? 180 }
+        set { fields["height"] = .double(newValue) }
+    }
+
+    public init(from decoder: Decoder) throws {
+        fields = try [String: JSONValue](from: decoder)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try fields.encode(to: encoder)
+    }
+}
+
+/// One presentation-only annotation in a Flow layout. Unknown keys round-trip.
+public struct PipelineLayoutAnnotation: Codable, Hashable, Identifiable, Sendable {
+    public var fields: [String: JSONValue]
+
+    public init(fields: [String: JSONValue]) {
+        self.fields = fields
+    }
+
+    public init(
+        id: String,
+        text: String,
+        x: Double,
+        y: Double,
+        width: Double = 240,
+        height: Double = 88
+    ) {
+        fields = [
+            "id": .string(id),
+            "text": .string(text),
+            "x": .double(x),
+            "y": .double(y),
+            "width": .double(width),
+            "height": .double(height),
+        ]
+    }
+
+    public var id: String {
+        fields["id"]?.stringValue
+            ?? fields["text"]?.stringValue
+            ?? "annotation-\(fields.hashValue)"
+    }
+    public var text: String {
+        get { fields["text"]?.stringValue ?? "" }
+        set { fields["text"] = .string(newValue) }
+    }
+    public var x: Double {
+        get { fields["x"]?.doubleValue ?? 0 }
+        set { fields["x"] = .double(newValue) }
+    }
+    public var y: Double {
+        get { fields["y"]?.doubleValue ?? 0 }
+        set { fields["y"] = .double(newValue) }
+    }
+    public var width: Double {
+        get { fields["width"]?.doubleValue ?? 240 }
+        set { fields["width"] = .double(newValue) }
+    }
+    public var height: Double {
+        get { fields["height"]?.doubleValue ?? 88 }
+        set { fields["height"] = .double(newValue) }
+    }
+
+    public init(from decoder: Decoder) throws {
+        fields = try [String: JSONValue](from: decoder)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try fields.encode(to: encoder)
+    }
+}
+
 /// Presentation state has its own ETag and is excluded from semantic revision hashes.
 public struct PipelineFlowLayout: Codable, Hashable, Sendable {
     public let pipeline: String
     public let version: Int
     public let flow: String
     public var positions: [String: PipelineNodePosition]
-    public var groups: [String: [String]]
-    public var annotations: [String: String]
+    public var groups: [PipelineLayoutGroup]
+    public var annotations: [PipelineLayoutAnnotation]
     public var etag: String?
+    public var updatedAt: String?
 
     public init(
         pipeline: String,
         version: Int,
         flow: String,
         positions: [String: PipelineNodePosition] = [:],
-        groups: [String: [String]] = [:],
-        annotations: [String: String] = [:],
-        etag: String? = nil
+        groups: [PipelineLayoutGroup] = [],
+        annotations: [PipelineLayoutAnnotation] = [],
+        etag: String? = nil,
+        updatedAt: String? = nil
     ) {
         self.pipeline = pipeline
         self.version = version
@@ -382,6 +519,16 @@ public struct PipelineFlowLayout: Codable, Hashable, Sendable {
         self.groups = groups
         self.annotations = annotations
         self.etag = etag
+        self.updatedAt = updatedAt
+    }
+
+    /// The exact open layout object accepted by the epoch-2 PUT endpoint.
+    public func wirePayload() throws -> [String: JSONValue] {
+        [
+            "nodes": try roundTrip(positions, as: JSONValue.self),
+            "groups": try roundTrip(groups, as: JSONValue.self),
+            "annotations": try roundTrip(annotations, as: JSONValue.self),
+        ]
     }
 }
 

@@ -105,6 +105,94 @@ struct PipelineDraftTests {
         #expect(decoded == values)
     }
 
+    @Test("Pipeline parameter definitions preserve constraints")
+    func parameterDefinition() throws {
+        let definition = PipelineParameterDefinition(
+            key: "batch_size",
+            kind: .int,
+            title: "Batch size",
+            description: "Documents per batch",
+            required: true,
+            stage: .install,
+            defaultValue: .int(64),
+            choices: ["32", "64"],
+            minimum: 1,
+            maximum: 128,
+            allowedSecrets: ["embedding-token"]
+        )
+
+        let parameter = try definition.parameter()
+
+        #expect(parameter.key == "batch_size")
+        #expect(parameter.kind == .int)
+        #expect(parameter.title == "Batch size")
+        #expect(parameter.required)
+        #expect(parameter.stage == .install)
+        #expect(parameter.defaultValue == .int(64))
+        #expect(parameter.lo == 1)
+        #expect(parameter.hi == 128)
+        #expect(parameter.allow == ["embedding-token"])
+    }
+
+    @Test("renaming a Pipeline parameter rewrites Node bindings")
+    func renameParameterBinding() throws {
+        let original = try PipelineParameterDefinition(
+            key: "limit",
+            kind: .int
+        ).parameter()
+        var draft = PipelineDraft(
+            name: "docs",
+            title: "Docs",
+            parameters: [original],
+            flows: [
+                PipelineFlow(
+                    name: "main",
+                    nodes: [
+                        PipelineNode(
+                            id: "fetch",
+                            kind: "origin",
+                            module: "test.origin",
+                            config: ["limit": .parameter("limit")]
+                        ),
+                    ]
+                ),
+            ]
+        )
+
+        try draft.updateParameter(
+            named: "limit",
+            definition: .init(key: "page_size", kind: .int)
+        )
+
+        #expect(draft.parameters.map(\.key) == ["page_size"])
+        #expect(draft.flows[0].nodes[0].config["limit"] == .parameter("page_size"))
+    }
+
+    @Test("Node binding choices respect kinds and secret allowlists")
+    func nodeBindingChoices() throws {
+        let field = try PipelineParameterDefinition(
+            key: "token",
+            kind: .string,
+            allowedSecrets: ["github", "gitlab"]
+        ).parameter()
+        let parameters = try [
+            PipelineParameterDefinition(key: "query", kind: .string).parameter(),
+            PipelineParameterDefinition(key: "limit", kind: .int).parameter(),
+        ]
+
+        let options = NodeBindingOptions(
+            field: field,
+            parameters: parameters,
+            configuredSecrets: ["other", "gitlab", "github"]
+        )
+
+        #expect(options.parameterKeys == ["query"])
+        #expect(options.secretNames == ["github", "gitlab"])
+        #expect(options.supports(.literal))
+        #expect(options.supports(.pipelineParameter))
+        #expect(options.supports(.secretReference))
+    }
+
     @Test("renaming a Flow updates refresh references")
     func renameFlow() throws {
         var draft = PipelineDraft(

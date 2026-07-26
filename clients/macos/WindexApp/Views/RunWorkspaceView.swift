@@ -4,6 +4,7 @@ import WindexKit
 import WindexUI
 
 struct RunsView: View {
+    @Bindable var appModel: AppModel
     @Environment(BackendSession.self) private var session
     @State private var selectedRunID: Int?
     @Environment(\.windexTheme) private var theme
@@ -21,6 +22,17 @@ struct RunsView: View {
                 selectedRunID = runs.first?.id
             } else if !runs.contains(where: { $0.id == selectedRunID }) {
                 selectedRunID = runs.first?.id
+            }
+        }
+        .onChange(of: appModel.selectedRunID) { _, id in
+            guard let id else { return }
+            selectedRunID = id
+            appModel.selectedRunID = nil
+        }
+        .task {
+            if let id = appModel.selectedRunID {
+                selectedRunID = id
+                appModel.selectedRunID = nil
             }
         }
     }
@@ -75,7 +87,7 @@ struct RunsView: View {
     private var detail: some View {
         if let selectedRunID,
            let run = session.runs.runs.first(where: { $0.id == selectedRunID }) {
-            CanonicalRunDetail(run: run)
+            CanonicalRunDetail(run: run, appModel: appModel)
         } else {
             Text("Choose a Run.")
                 .windexStyle(Typography.body)
@@ -110,6 +122,7 @@ private struct CanonicalRunRow: View {
 
 private struct CanonicalRunDetail: View {
     let run: SourceRunSummary
+    @Bindable var appModel: AppModel
     @Environment(BackendSession.self) private var session
     @State private var isMutating = false
     @State private var actionError: String?
@@ -146,6 +159,19 @@ private struct CanonicalRunDetail: View {
                 }
 
                 HStack(spacing: .sm) {
+                    Button("Open Pipeline revision") {
+                        appModel.openPipeline(run.pipeline, flow: run.flow)
+                    }
+                    if let sourceName = run.sourceName {
+                        Button("Open Source") {
+                            appModel.openSource(sourceName)
+                        }
+                    }
+                    Button("Open in Console") {
+                        appModel.openConsole(
+                            OperationalEventFilter(runID: run.id)
+                        )
+                    }
                     Button("Re-run") {
                         Task { await perform { try await session.rerunFrozen(runID: run.id) } }
                     }
@@ -336,7 +362,18 @@ private struct CanonicalRunDetail: View {
                     .foregroundStyle(theme.palette.graphite)
             }
             ForEach(events) { event in
-                HStack(alignment: .firstTextBaseline, spacing: .sm) {
+                Button {
+                    appModel.openConsole(
+                        OperationalEventFilter(
+                            sourceName: event.sourceName,
+                            pipelineName: event.pipelineName,
+                            runID: event.runID,
+                            node: event.node,
+                            module: event.module
+                        )
+                    )
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: .sm) {
                     Text(event.timestamp, format: .dateTime.hour().minute().second())
                         .windexStyle(Typography.dataSM)
                         .foregroundStyle(theme.palette.graphite)
@@ -347,7 +384,9 @@ private struct CanonicalRunDetail: View {
                     Text(event.message)
                         .windexStyle(Typography.body)
                     Spacer()
+                    }
                 }
+                .buttonStyle(.plain)
             }
         }
     }

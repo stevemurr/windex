@@ -19,8 +19,9 @@ swift test --package-path clients/macos/Packages/WindexKit
 ```
 
 Pairing reads `/admin/v1/health` first and refuses any `contract_epoch` other
-than `2` before authenticating or enabling mutations. `/admin` is a mount
-prefix; the write token is sent only to the authenticated agent surface.
+than `2` before authenticating, constructing a session, or enabling mutations.
+`/admin` is a mount prefix, not part of the paths represented in the OpenAPI
+document.
 
 ## Implemented frontend surfaces
 
@@ -29,11 +30,32 @@ prefix; the write token is sent only to the authenticated agent surface.
   task preview transport, independent layout ETags, archive, and explicit
   revision generic Runs.
 - Visual Pipeline graph composer with typed connections, registry palette,
-  schema-backed node configuration, layout persistence, undo/redo, auto-layout,
-  and local draft recovery.
+  Pipeline parameter-definition editing, literal/Pipeline-parameter/secret Node
+  bindings, semantic validation, undo/redo, auto-layout, and local draft
+  recovery. Published revisions are semantically read-only until the operator
+  explicitly starts a new revision.
+- Revision- and Flow-specific layout editing, including Node positions, groups,
+  and annotations. All open layout object fields round-trip without changing
+  array shapes. Layouts remain editable on immutable revisions and use their
+  independent ETags.
+- Generic Pipeline Runs select an explicit immutable revision and Flow, render
+  declared Pipeline parameters with `SchemaForm`, collect one JSON value per
+  typed boundary input, and preserve Source Run latest as a different action.
+- Source-capable Pipeline revisions expose `Use as Source`, carrying that exact
+  immutable revision into Source creation.
 - Source validation and creation, schema-backed settings, upgrade preview and
-  confirmation, pause/resume, reset preview and confirmation, archive,
-  schedules, Run latest, push contract instructions, and in-app push ingestion.
+  confirmation, enable/disable, pause/resume, reset preview with typed
+  confirmation, archive, schedule/event triggers, Run latest, push contract
+  instructions, and in-app push ingestion. Pipeline values are rendered from
+  the selected revision schema; secret-reference controls use configured
+  secret names.
+- Upgrade can target any eligible Source-capable revision and renders retained,
+  defaulted, removed, clamped, missing, installation-stage, and state-impact
+  details. An invalid candidate can be edited and checked locally. The current
+  epoch-2 upgrade request and validation routes do not carry an edited target
+  candidate, so the client can re-check its parameter schema but visibly blocks
+  server validation and confirmation after such an edit instead of submitting
+  a non-atomic or misleading request.
 - Shared Run list and detail with task/unit progress, Run Events, typed boundary
   outputs, artifact download, cancel, frozen historic Re-run, and Source
   Run latest as distinct actions.
@@ -45,7 +67,12 @@ prefix; the write token is sent only to the authenticated agent surface.
 - Cursor-based control and log SSE reconnect using `Last-Event-ID`. If either
   stream degrades, REST reconciliation runs at a bounded 2–15 second cadence
   and stops when both streams are live.
-- Console history/facets and independently bounded live log stream.
+- Console facets for time, level, component, Source, Pipeline, Run, Node,
+  Module, and text; persisted saved presets; server-filtered cursor history;
+  contextual deep links; and an independently bounded, deduplicated live
+  stream with follow/pause behavior.
+- Source, Run, and Overview links preserve exact pinned Pipeline revision
+  context. Activity and failure links open a prefiltered Console.
 
 Every connect, foreground, reconnect, and successful mutation reconciles the
 Registry, Pipelines, Sources, Runs, Overview, and logs. Run list requests are
@@ -56,8 +83,8 @@ bounded to the server maximum of 200.
 - Pipeline publication supplies the parent version and semantic hash.
 - Generic Pipeline Runs always pin an explicit immutable revision unless a
   caller deliberately supplies the head ETag.
-- Canvas layout writes use the layout’s independent ETag and the backend
-  `layout.nodes` wire key.
+- Canvas layout writes use the layout’s independent ETag and preserve the
+  backend `layout.nodes`, `layout.groups`, and `layout.annotations` shapes.
 - Source settings writes and deletes use the settings projection ETag.
 - HTTP 409, 412, and 428 remain distinct typed errors.
 - Historic Re-run uses the frozen historic revision/configuration. Run latest
@@ -87,8 +114,9 @@ rg -n 'Recipe|Marketplace|/v1/(jobs|crawl|stats|schedule|loops|recipes|marketpla
 ```
 
 For a live epoch-2 acceptance pass: pair, load every store, publish a Pipeline
-revision, save a layout, create a Source, edit its settings, add/toggle a
-schedule, preview/confirm an upgrade and reset only against disposable data,
+revision, save layouts across multiple Flows, create a Source, edit its
+settings, enable/disable it, pause/resume it, add/toggle a trigger,
+preview/confirm an upgrade and reset only against disposable data,
 queue/cancel/re-run a Run, reconnect both SSE streams, and confirm Overview and
 Console update without manual refresh.
 
@@ -97,6 +125,17 @@ Console update without manual refresh.
 Custom Module authoring is not part of this cutover. The current backend
 supports Python only and requires separate module-admin authentication plus
 HTTPS. Marketplace remains out of scope.
+
+## Current external acceptance blockers
+
+- The available LAN server is still pre-epoch-2. Strict contract enforcement
+  intentionally prevents pairing, so the end-to-end mutation/SSE acceptance
+  pass must wait for an epoch-2 deployment.
+- Server validation and atomic submission of an operator-edited upgrade
+  candidate require the authoritative validation/upgrade request schemas to
+  accept the target revision plus candidate values. The client supports
+  preview, editing, and schema-local checking, but only confirms the unchanged
+  server-generated candidate.
 
 ## Release-only external gates
 

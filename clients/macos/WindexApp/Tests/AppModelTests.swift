@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WindexKit
 @testable import Windex
 
 @Suite("App model")
@@ -97,6 +98,88 @@ struct AppModelTests {
         #expect(tokens.values[profile.credentialAccount] == nil)
         #expect(model.session == nil)
         #expect(model.connectionState == .failed(profile, .unauthorized))
+    }
+
+    @Test("workspace routes preserve exact revision and Console context")
+    func workspaceRoutes() {
+        let model = AppModel(
+            tokenStore: MemoryTokenStore(),
+            addressStore: MemoryAddressStore()
+        )
+        let reference = PipelineRevisionReference(
+            pipeline: "crawl",
+            version: 7,
+            specHash: "sha-7"
+        )
+
+        model.openPipeline(reference, flow: "discover")
+        #expect(model.selection == .pipelines)
+        #expect(model.pipelineNavigation == .init(
+            reference: reference,
+            flow: "discover"
+        ))
+
+        model.createSource(using: reference)
+        #expect(model.selection == .sources)
+        #expect(model.sourceCreationRevision == reference)
+
+        model.openRun(42)
+        #expect(model.selection == .runs)
+        #expect(model.selectedRunID == 42)
+
+        let filter = OperationalEventFilter(
+            sourceName: "docs",
+            pipelineName: "crawl",
+            runID: 42,
+            node: "extract"
+        )
+        model.openConsole(filter)
+        #expect(model.selection == .logs)
+        #expect(model.consoleFilterRequest == filter)
+    }
+
+    @Test("composer preserves independent unsaved Flow layouts")
+    func composerFlowLayouts() {
+        let model = PipelineComposerModel()
+        model.newPipeline(registry: nil)
+        model.move("first", to: CGPoint(x: 210, y: 130))
+
+        model.addFlow()
+        #expect(model.selectedFlow == "flow_2")
+        #expect(model.positions.isEmpty)
+        model.move("second", to: CGPoint(x: 480, y: 270))
+        model.stashLayout(for: "flow_2")
+
+        model.selectedFlow = "main"
+        model.apply(nil)
+        #expect(model.positions["first"] == CGPoint(x: 210, y: 130))
+        #expect(model.positions["second"] == nil)
+
+        model.stashLayout(for: "main")
+        model.selectedFlow = "flow_2"
+        model.apply(nil)
+        #expect(model.positions["second"] == CGPoint(x: 480, y: 270))
+        #expect(model.positions["first"] == nil)
+    }
+
+    @Test("Console history tracks the server forward cursor")
+    func consoleHistoryCursor() {
+        let store = SharedLogStore()
+
+        store.loadingHistory(reset: true)
+        store.loadedHistory(nextCursor: 500, count: 500)
+        #expect(store.historyCursor == 500)
+        #expect(store.historyHasMore)
+
+        store.loadingHistory(reset: false)
+        store.loadedHistory(nextCursor: 610, count: 110)
+        #expect(store.historyCursor == 610)
+        #expect(store.historyHasMore)
+
+        store.loadingHistory(reset: false)
+        store.loadedHistory(nextCursor: 610, count: 0)
+        #expect(store.historyCursor == 610)
+        #expect(!store.historyHasMore)
     }
 
     private static let evidence = PairingEvidence(

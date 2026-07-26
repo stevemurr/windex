@@ -316,7 +316,10 @@ struct SettingsView: View {
                         .frame(maxWidth: Layout.proseMeasure, alignment: .leading)
                     Hairline()
 
-                    SchemaForm(model: form)
+                    SchemaForm(
+                        model: form,
+                        configuredSecretReferences: session.sources.configuredSecrets
+                    )
 
                     HStack(spacing: .sm) {
                         Button("Save changes") {

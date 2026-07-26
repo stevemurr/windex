@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Epoch-2 canonical adapters")
 struct Epoch2AdapterTests {
-    @Test("layout nodes round-trip into canvas positions")
+    @Test("canonical layout arrays survive an exact GET/edit/PUT round trip")
     func layoutNodes() throws {
         let wire = try JSONDecoder().decode(
             PipelineLayoutWire.self,
@@ -14,8 +14,25 @@ struct Epoch2AdapterTests {
                   "flow": "main",
                   "layout": {
                     "nodes": {"fetch": {"x": 12, "y": 34}},
-                    "groups": [],
-                    "annotations": []
+                    "groups": [{
+                      "id": "ingress",
+                      "title": "Ingress",
+                      "nodes": ["fetch"],
+                      "x": 4,
+                      "y": 8,
+                      "width": 300,
+                      "height": 160,
+                      "color": "cyan"
+                    }],
+                    "annotations": [{
+                      "id": "note-1",
+                      "text": "Starts here",
+                      "x": 18,
+                      "y": 22,
+                      "width": 210,
+                      "height": 72,
+                      "pinned": true
+                    }]
                   },
                   "etag": "layout-2",
                   "updated_at": "2026-07-25T12:00:00Z"
@@ -23,9 +40,73 @@ struct Epoch2AdapterTests {
                 """#.utf8
             )
         )
-        let layout = try wire.flowLayout(pipeline: "docs", version: 3)
+        var layout = try wire.flowLayout(pipeline: "docs", version: 3)
         #expect(layout.positions["fetch"] == .init(x: 12, y: 34))
+        #expect(layout.groups.count == 1)
+        #expect(layout.groups[0].nodes == ["fetch"])
+        #expect(layout.groups[0].fields["color"] == .string("cyan"))
+        #expect(layout.annotations.count == 1)
+        #expect(layout.annotations[0].fields["pinned"] == .bool(true))
         #expect(layout.etag == "layout-2")
+        #expect(layout.updatedAt == "2026-07-25T12:00:00Z")
+
+        layout.positions["fetch"] = .init(x: 90, y: 120)
+        let payload = try layout.wirePayload()
+        #expect(payload["nodes"]?.objectValue?["fetch"]?.objectValue?["x"] == .double(90))
+        #expect(payload["groups"]?.arrayValue?.count == 1)
+        #expect(payload["groups"]?.arrayValue?.first?.objectValue?["nodes"]?.arrayValue?
+            .compactMap(\.stringValue) == ["fetch"])
+        #expect(payload["groups"]?.arrayValue?.first?.objectValue?["color"] == .string("cyan"))
+        #expect(payload["annotations"]?.arrayValue?.count == 1)
+        #expect(payload["annotations"]?.arrayValue?.first?.objectValue?["pinned"] == .bool(true))
+    }
+
+    @Test(
+        "Source status projects queued, running, blocked, failed, paused, and idle",
+        arguments: [
+            ("queued", SourceActivityState.queued, false, false),
+            ("running", SourceActivityState.running, false, false),
+            ("blocked", SourceActivityState.blocked, false, false),
+            ("failed", SourceActivityState.failed, false, true),
+            ("running", SourceActivityState.paused, true, false),
+            ("idle", SourceActivityState.idle, false, false),
+        ]
+    )
+    func sourceStates(
+        currentState: String,
+        expected: SourceActivityState,
+        paused: Bool,
+        recentFailure: Bool
+    ) throws {
+        let hasCurrent = currentState != "idle"
+        let wire = try JSONDecoder().decode(
+            SourceStatusWire.self,
+            from: Data(
+                """
+                {
+                  "source": "docs",
+                  "enabled": true,
+                  "paused": \(paused),
+                  "latest_run": \(hasCurrent ? #"{"id":7}"# : "null"),
+                  "current_run": \(hasCurrent ? #"{"id":7}"# : "null"),
+                  "documents": {},
+                  "last_success": null,
+                  "last_failure": \(recentFailure ? #""2026-07-25T12:00:00Z""# : "null"),
+                  "recent_error": \(recentFailure ? #""boom""# : "null")
+                }
+                """.utf8
+            )
+        )
+        let runs = hasCurrent ? [
+            SourceRunSummary(
+                id: 7,
+                sourceName: "docs",
+                pipeline: .init(pipeline: "push", version: 2, specHash: "hash"),
+                state: SourceActivityState(rawValue: currentState) ?? .idle,
+                flow: "main"
+            ),
+        ] : []
+        #expect(try wire.status(runs: runs).activity == expected)
     }
 
     @Test("Overview maps only canonical epoch-2 keys")

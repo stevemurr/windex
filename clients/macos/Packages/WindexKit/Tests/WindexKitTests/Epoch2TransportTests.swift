@@ -51,6 +51,8 @@ struct Epoch2TransportTests {
             #expect(request.header("If-Match") == "layout-v2")
             #expect(request.body.contains("\"nodes\""))
             #expect(!request.body.contains("\"positions\""))
+            #expect(request.body.contains("\"groups\":[]"))
+            #expect(request.body.contains("\"annotations\":[]"))
             return .detail("stale layout", status: 412)
         }
         server.on("PATCH /admin/v1/sources/docs/settings") { request in

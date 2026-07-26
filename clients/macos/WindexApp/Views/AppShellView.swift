@@ -73,15 +73,15 @@ struct AppShellView: View {
         case .sources:
             SourcesView(appModel: model)
         case .pipelines:
-            PipelinesView()
+            PipelinesView(appModel: model)
         case .settings:
             SettingsView(appModel: model, client: client, backend: backend)
         case .logs:
-            LogsView()
+            LogsView(appModel: model)
         case .search:
             SearchView(appModel: model, client: client, backend: backend)
         case .runs:
-            RunsView()
+            RunsView(appModel: model)
         }
     }
 }

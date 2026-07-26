@@ -79,6 +79,7 @@ final class SourceStore {
     private(set) var sources: [SourceDeployment] = []
     private(set) var settingsETags: [String: String] = [:]
     private(set) var triggers: [String: [SourceTriggerWire]] = [:]
+    private(set) var configuredSecrets: [String] = []
     private(set) var state: StoreLoadState = .idle
     func loading() { state = .loading }
     func fail(_ error: Error) { state = .failed(error.localizedDescription) }
@@ -95,6 +96,9 @@ final class SourceStore {
         triggers[source] = values.sorted {
             ($0.nextFireAt ?? "\u{10ffff}") < ($1.nextFireAt ?? "\u{10ffff}")
         }
+    }
+    func setConfiguredSecrets(_ values: [String]) {
+        configuredSecrets = values.sorted()
     }
     func apply(_ source: SourceDeployment) {
         if let index = sources.firstIndex(where: { $0.name == source.name }) {
@@ -161,10 +165,16 @@ final class SharedOverviewStore {
 @MainActor
 @Observable
 final class SharedLogStore {
+    private static let presetsKey = "windex.console-filter-presets.v2"
     private var buffer = OperationalEventBuffer()
     var filter = OperationalEventFilter()
     var followsNewest = true
     var selectedSequence: Int64?
+    var presets: [OperationalEventFilterPreset] = []
+    private(set) var facets = OperationalEventFacets()
+    private(set) var historyState: StoreLoadState = .idle
+    private(set) var historyCursor = 0
+    private(set) var historyHasMore = true
     private(set) var connection: LiveConnectionState = .idle
     var events: [OperationalEvent] { buffer.values.filter(filter.includes) }
     var allEvents: [OperationalEvent] { buffer.values }
@@ -173,9 +183,58 @@ final class SharedLogStore {
         guard let selectedSequence else { return nil }
         return buffer.values.first { $0.sequence == selectedSequence }
     }
+    init() {
+        if let data = UserDefaults.standard.data(forKey: Self.presetsKey),
+           let values = try? JSONDecoder().decode(
+            [OperationalEventFilterPreset].self,
+            from: data
+           ) {
+            presets = values
+        }
+    }
     func append(_ values: [OperationalEvent]) { buffer.append(values) }
     func clearLocalView() { buffer.clear(); selectedSequence = nil }
     func setConnection(_ value: LiveConnectionState) { connection = value }
+    func setFacets(_ value: OperationalEventFacets) { facets = value }
+    func loadingHistory(reset: Bool) {
+        if reset {
+            historyCursor = 0
+            historyHasMore = true
+        }
+        historyState = .loading
+    }
+    func loadedHistory(nextCursor: Int, count: Int) {
+        historyHasMore = count > 0 && nextCursor > historyCursor
+        historyCursor = max(historyCursor, nextCursor)
+        historyState = .loaded
+    }
+    func failedHistory(_ error: Error) {
+        historyState = .failed(error.localizedDescription)
+    }
+    func savePreset(named rawName: String) {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        if let index = presets.firstIndex(where: {
+            $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame
+        }) {
+            presets[index].filter = filter
+        } else {
+            presets.append(.init(name: name, filter: filter))
+        }
+        persistPresets()
+    }
+    func deletePreset(_ id: UUID) {
+        presets.removeAll { $0.id == id }
+        persistPresets()
+    }
+    func applyPreset(_ id: UUID) {
+        guard let preset = presets.first(where: { $0.id == id }) else { return }
+        filter = preset.filter
+    }
+    private func persistPresets() {
+        guard let data = try? JSONEncoder().encode(presets) else { return }
+        UserDefaults.standard.set(data, forKey: Self.presetsKey)
+    }
 }
 
 @MainActor
@@ -272,12 +331,17 @@ final class BackendSession {
                     try $0.revision(title: summary.title, description: summary.description)
                 }
                 pipelines.replaceRevisions(revisions, for: summary.name)
-                if let head = revisions.first {
-                    for flow in head.spec.flows {
+                for revision in revisions {
+                    for flow in revision.spec.flows {
                         if let wire = try? await client.pipelineLayout(
-                            summary.name, version: head.reference.version, flow: flow.name),
+                            summary.name,
+                            version: revision.reference.version,
+                            flow: flow.name
+                        ),
                            let layout = try? wire.flowLayout(
-                            pipeline: summary.name, version: head.reference.version) {
+                            pipeline: summary.name,
+                            version: revision.reference.version
+                           ) {
                             pipelines.apply(layout)
                         }
                     }
@@ -303,6 +367,11 @@ final class BackendSession {
         sources.loading()
         do {
             let response = try await client.sources()
+            if let secretResponse = try? await client.secrets() {
+                sources.setConfiguredSecrets(
+                    secretResponse.secrets.filter(\.configured).map(\.name)
+                )
+            }
             var values: [SourceDeployment] = []
             for wire in response.sources {
                 let detailedWire = (try? await client.source(wire.name)) ?? wire
@@ -345,10 +414,33 @@ final class BackendSession {
 
     private func loadLogs() async {
         do {
-            let response = try await client.logEvents(.init(limit: 500))
+            async let eventResponse = client.logEvents(
+                .init(after: logs.newestCursor.flatMap(Int.init), limit: 500)
+            )
+            async let facetResponse = client.logFacets()
+            let (response, facets) = try await (eventResponse, facetResponse)
             logs.append(try response.events.map { try $0.operationalEvent() })
+            logs.setFacets(facets.facets())
         } catch {
             logs.setConnection(.degraded(error.localizedDescription))
+        }
+    }
+
+    func loadLogHistory(continuing: Bool = false) async {
+        logs.loadingHistory(reset: !continuing)
+        let after = continuing ? logs.historyCursor : 0
+        do {
+            let response = try await client.logEvents(
+                .init(filter: logs.filter, after: after, limit: 500)
+            )
+            let events = try response.events.map { try $0.operationalEvent() }
+            logs.append(events)
+            logs.loadedHistory(
+                nextCursor: response.nextCursor,
+                count: events.count
+            )
+        } catch {
+            logs.failedHistory(error)
         }
     }
 
@@ -504,7 +596,13 @@ final class BackendSession {
     }
 
     func saveLayout(_ layout: PipelineFlowLayout) async throws {
-        _ = try await client.putPipelineLayout(layout)
+        try await saveLayouts([layout])
+    }
+
+    func saveLayouts(_ layouts: [PipelineFlowLayout]) async throws {
+        for layout in layouts {
+            _ = try await client.putPipelineLayout(layout)
+        }
         await refreshAll()
     }
 
@@ -543,6 +641,15 @@ final class BackendSession {
             )
         }
         _ = try await client.createSource(request)
+        await refreshAll()
+    }
+
+    func validateSource(_ request: SourceCreateRequest) async throws -> SourceValidationWire {
+        try await client.validateSource(request)
+    }
+
+    func setSourceEnabled(_ name: String, enabled: Bool) async throws {
+        _ = try await client.patchSource(name, enabled: enabled)
         await refreshAll()
     }
 
@@ -679,6 +786,7 @@ private extension SourceDeployment {
     func withConfiguration(_ configuration: SourceConfiguration) -> SourceDeployment {
         SourceDeployment(
             name: name, title: title, description: description, origin: origin,
+            originValues: originValues,
             pipeline: pipeline, search: search, stateNamespace: stateNamespace,
             enabled: enabled, paused: paused, archived: archived, generation: generation,
             ingress: ingress,

@@ -42,6 +42,32 @@ public struct LogQuery: Sendable, Hashable {
     }
 }
 
+extension LogQuery {
+    public init(
+        filter: OperationalEventFilter,
+        after: Int? = nil,
+        before: Int? = nil,
+        limit: Int = 500
+    ) {
+        let formatter = ISO8601DateFormatter()
+        self.init(
+            after: after,
+            before: before,
+            limit: min(max(limit, 1), 1_000),
+            level: filter.levels.count == 1 ? filter.levels.first?.rawValue : nil,
+            component: filter.components.count == 1 ? filter.components.first : nil,
+            source: filter.sourceName,
+            pipeline: filter.pipelineName,
+            runID: filter.runID,
+            node: filter.node,
+            module: filter.module,
+            text: filter.text,
+            startedAt: filter.startedAt.map(formatter.string(from:)),
+            endedAt: filter.endedAt.map(formatter.string(from:))
+        )
+    }
+}
+
 extension WindexClient {
     public func controlEvents(after: Int? = nil, ticks: Int? = nil,
                               lastEventID: String? = nil) throws

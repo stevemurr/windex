@@ -67,7 +67,11 @@ public struct OperationalEventFilter: Codable, Hashable, Sendable {
     public var sourceName: String?
     public var pipelineName: String?
     public var runID: Int?
+    public var node: String?
+    public var module: String?
     public var nodeOrModule: String?
+    public var startedAt: Date?
+    public var endedAt: Date?
     public var text: String
 
     public init(
@@ -76,7 +80,11 @@ public struct OperationalEventFilter: Codable, Hashable, Sendable {
         sourceName: String? = nil,
         pipelineName: String? = nil,
         runID: Int? = nil,
+        node: String? = nil,
+        module: String? = nil,
         nodeOrModule: String? = nil,
+        startedAt: Date? = nil,
+        endedAt: Date? = nil,
         text: String = ""
     ) {
         self.levels = levels
@@ -84,7 +92,11 @@ public struct OperationalEventFilter: Codable, Hashable, Sendable {
         self.sourceName = sourceName
         self.pipelineName = pipelineName
         self.runID = runID
+        self.node = node
+        self.module = module
         self.nodeOrModule = nodeOrModule
+        self.startedAt = startedAt
+        self.endedAt = endedAt
         self.text = text
     }
 
@@ -94,10 +106,14 @@ public struct OperationalEventFilter: Codable, Hashable, Sendable {
         if let sourceName, value.sourceName != sourceName { return false }
         if let pipelineName, value.pipelineName != pipelineName { return false }
         if let runID, value.runID != runID { return false }
+        if let node, value.node != node { return false }
+        if let module, value.module != module { return false }
         if let nodeOrModule,
            value.node != nodeOrModule && value.module != nodeOrModule {
             return false
         }
+        if let startedAt, value.timestamp < startedAt { return false }
+        if let endedAt, value.timestamp > endedAt { return false }
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return true }
         return value.message.localizedCaseInsensitiveContains(query)
@@ -107,6 +123,51 @@ public struct OperationalEventFilter: Codable, Hashable, Sendable {
             || value.pipelineName?.localizedCaseInsensitiveContains(query) == true
             || value.node?.localizedCaseInsensitiveContains(query) == true
             || value.module?.localizedCaseInsensitiveContains(query) == true
+    }
+
+    public var isEmpty: Bool {
+        levels.isEmpty && components.isEmpty && sourceName == nil
+            && pipelineName == nil && runID == nil && node == nil
+            && module == nil && nodeOrModule == nil
+            && startedAt == nil && endedAt == nil
+            && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+public struct OperationalEventFacets: Codable, Hashable, Sendable {
+    public var levels: [String]
+    public var components: [String]
+    public var sources: [String]
+    public var pipelines: [String]
+    public var nodes: [String]
+    public var modules: [String]
+
+    public init(
+        levels: [String] = [],
+        components: [String] = [],
+        sources: [String] = [],
+        pipelines: [String] = [],
+        nodes: [String] = [],
+        modules: [String] = []
+    ) {
+        self.levels = levels
+        self.components = components
+        self.sources = sources
+        self.pipelines = pipelines
+        self.nodes = nodes
+        self.modules = modules
+    }
+}
+
+public struct OperationalEventFilterPreset: Codable, Hashable, Identifiable, Sendable {
+    public let id: UUID
+    public var name: String
+    public var filter: OperationalEventFilter
+
+    public init(id: UUID = UUID(), name: String, filter: OperationalEventFilter) {
+        self.id = id
+        self.name = name
+        self.filter = filter
     }
 }
 

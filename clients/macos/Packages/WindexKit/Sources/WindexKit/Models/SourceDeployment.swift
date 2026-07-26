@@ -174,6 +174,7 @@ public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
     public let title: String
     public let description: String
     public let origin: String
+    public let originValues: [String: JSONValue]
     public let pipeline: PipelineRevisionReference
     public let search: SourceSearchIdentity
     public let stateNamespace: String
@@ -190,6 +191,7 @@ public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
         title: String,
         description: String = "",
         origin: String,
+        originValues: [String: JSONValue] = [:],
         pipeline: PipelineRevisionReference,
         search: SourceSearchIdentity,
         stateNamespace: String,
@@ -205,6 +207,7 @@ public struct SourceDeployment: Codable, Hashable, Identifiable, Sendable {
         self.title = title
         self.description = description
         self.origin = origin
+        self.originValues = originValues
         self.pipeline = pipeline
         self.search = search
         self.stateNamespace = stateNamespace

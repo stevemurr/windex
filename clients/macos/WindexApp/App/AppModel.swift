@@ -190,6 +190,11 @@ enum ConnectionFailure: Equatable, Sendable {
     }
 }
 
+struct PipelineNavigationRequest: Hashable, Sendable {
+    let reference: PipelineRevisionReference
+    let flow: String?
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -205,6 +210,11 @@ final class AppModel {
         @Sendable (WindexClient, String?) async throws -> PairingOutcome
 
     var selection: SidebarDestination = .overview
+    var pipelineNavigation: PipelineNavigationRequest?
+    var sourceCreationRevision: PipelineRevisionReference?
+    var selectedSourceName: String?
+    var selectedRunID: Int?
+    var consoleFilterRequest: OperationalEventFilter?
     var connectionState: ConnectionState = .unconfigured
     var backendAddress = ""
     private(set) var client: WindexClient?
@@ -254,6 +264,31 @@ final class AppModel {
     var connectedBackend: ConnectedBackend? {
         guard case .ready(let backend) = connectionState else { return nil }
         return backend
+    }
+
+    func openPipeline(_ reference: PipelineRevisionReference, flow: String? = nil) {
+        pipelineNavigation = .init(reference: reference, flow: flow)
+        selection = .pipelines
+    }
+
+    func createSource(using reference: PipelineRevisionReference) {
+        sourceCreationRevision = reference
+        selection = .sources
+    }
+
+    func openSource(_ name: String) {
+        selectedSourceName = name
+        selection = .sources
+    }
+
+    func openRun(_ id: Int) {
+        selectedRunID = id
+        selection = .runs
+    }
+
+    func openConsole(_ filter: OperationalEventFilter) {
+        consoleFilterRequest = filter
+        selection = .logs
     }
 
     var currentProfile: ConnectionProfile? {
@@ -404,6 +439,11 @@ final class AppModel {
         client = nil
         connectionState = .unconfigured
         selection = .overview
+        pipelineNavigation = nil
+        sourceCreationRevision = nil
+        selectedSourceName = nil
+        selectedRunID = nil
+        consoleFilterRequest = nil
     }
 
     func forgetBackend() {

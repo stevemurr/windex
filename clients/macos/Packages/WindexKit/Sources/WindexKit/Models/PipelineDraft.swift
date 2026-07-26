@@ -68,6 +68,62 @@ public struct PipelineDraft: Codable, Hashable, Sendable {
             refreshFlows: refreshFlows)
     }
 
+    public mutating func addParameter(_ definition: PipelineParameterDefinition) throws {
+        let parameter = try definition.parameter()
+        guard !parameters.contains(where: { $0.key == parameter.key }) else {
+            throw PipelineDraftError.invalidConnection(
+                "A Pipeline parameter named “\(parameter.key)” already exists."
+            )
+        }
+        parameters.append(parameter)
+    }
+
+    public mutating func updateParameter(
+        named previousKey: String,
+        definition: PipelineParameterDefinition
+    ) throws {
+        guard let index = parameters.firstIndex(where: { $0.key == previousKey }) else {
+            throw PipelineDraftError.invalidConnection(
+                "The Pipeline parameter “\(previousKey)” does not exist."
+            )
+        }
+        let parameter = try definition.parameter()
+        guard previousKey == parameter.key
+                || !parameters.contains(where: { $0.key == parameter.key }) else {
+            throw PipelineDraftError.invalidConnection(
+                "A Pipeline parameter named “\(parameter.key)” already exists."
+            )
+        }
+        parameters[index] = parameter
+        if previousKey != parameter.key {
+            flows = flows.map { flow in
+                PipelineFlow(
+                    name: flow.name,
+                    inputs: flow.inputs,
+                    outputs: flow.outputs,
+                    nodes: flow.nodes.map { node in
+                        PipelineNode(
+                            id: node.id,
+                            kind: node.kind,
+                            module: node.module,
+                            config: node.config.mapValues { value in
+                                if case .parameter(let key) = value, key == previousKey {
+                                    return .parameter(parameter.key)
+                                }
+                                return value
+                            }
+                        )
+                    },
+                    edges: flow.edges
+                )
+            }
+        }
+    }
+
+    public mutating func removeParameter(named key: String) {
+        parameters.removeAll { $0.key == key }
+    }
+
     public mutating func addFlow(named rawName: String) throws {
         let name = Self.normalizedIdentifier(rawName)
         guard !flows.contains(where: { $0.name == name }) else {

@@ -178,9 +178,17 @@ struct OverviewView: View {
             ForEach(sources) { row in
                 Hairline()
                 HStack {
-                    Text(row.source.displayTitle)
+                    Button(row.source.displayTitle) {
+                        appModel.openSource(row.source.name)
+                    }
+                    .buttonStyle(.plain)
                         .frame(width: 170, alignment: .leading)
-                    Text("\(row.source.pipeline.pipeline) @ \(row.source.pipeline.version)")
+                    Button(
+                        "\(row.source.pipeline.pipeline) @ \(row.source.pipeline.version)"
+                    ) {
+                        appModel.openPipeline(row.source.pipeline)
+                    }
+                    .buttonStyle(.plain)
                         .frame(width: 170, alignment: .leading)
                     Text(row.documents.formatted())
                         .frame(width: 90, alignment: .trailing)
@@ -207,13 +215,28 @@ struct OverviewView: View {
                 .foregroundStyle(theme.palette.graphite)
             ForEach((snapshot.activeRuns + snapshot.recentRuns.prefix(8))) { run in
                 HStack(spacing: .sm) {
-                    Text("#\(run.id)")
+                    Button("#\(run.id)") {
+                        appModel.openRun(run.id)
+                    }
+                    .buttonStyle(.plain)
                         .windexStyle(Typography.data)
                         .frame(width: 54, alignment: .leading)
                     Text(run.sourceName ?? "generic")
                         .windexStyle(Typography.label)
                         .frame(width: 130, alignment: .leading)
-                    Text("\(run.pipelineName) @ \(run.pipelineVersion) · \(run.flowName)")
+                    Button(
+                        "\(run.pipelineName) @ \(run.pipelineVersion) · \(run.flowName)"
+                    ) {
+                        appModel.openPipeline(
+                            .init(
+                                pipeline: run.pipelineName,
+                                version: run.pipelineVersion,
+                                specHash: ""
+                            ),
+                            flow: run.flowName
+                        )
+                    }
+                    .buttonStyle(.plain)
                         .windexStyle(Typography.dataSM)
                         .frame(width: 260, alignment: .leading)
                     Text(run.state)
@@ -278,7 +301,19 @@ struct OverviewView: View {
             StyledText("Recent failures", Typography.eyebrow)
                 .foregroundStyle(theme.palette.graphite)
             ForEach(failures.prefix(8)) { event in
-                HStack(alignment: .firstTextBaseline, spacing: .sm) {
+                Button {
+                    appModel.openConsole(
+                        OperationalEventFilter(
+                            levels: [event.level],
+                            sourceName: event.sourceName,
+                            pipelineName: event.pipelineName,
+                            runID: event.runID,
+                            node: event.node,
+                            module: event.module
+                        )
+                    )
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: .sm) {
                     Text(event.timestamp, format: .dateTime.hour().minute().second())
                         .windexStyle(Typography.dataSM)
                         .foregroundStyle(theme.palette.graphite)
@@ -286,7 +321,10 @@ struct OverviewView: View {
                     StatusBadge(.fault, word: event.level.rawValue)
                     Text(event.message)
                         .windexStyle(Typography.body)
+                    Spacer()
+                    }
                 }
+                .buttonStyle(.plain)
             }
         }
     }

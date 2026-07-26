@@ -9,6 +9,7 @@ struct SourcesView: View {
     @Environment(BackendSession.self) private var session
     @State private var selectedName: String?
     @State private var isCreating = false
+    @State private var creationRevision: PipelineRevisionReference?
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -26,8 +27,30 @@ struct SourcesView: View {
                 selectedName = sources.first?.name
             }
         }
+        .onChange(of: appModel.selectedSourceName) { _, name in
+            guard let name else { return }
+            selectedName = name
+            appModel.selectedSourceName = nil
+        }
+        .onChange(of: appModel.sourceCreationRevision) { _, reference in
+            guard let reference else { return }
+            creationRevision = reference
+            isCreating = true
+            appModel.sourceCreationRevision = nil
+        }
+        .task {
+            if let name = appModel.selectedSourceName {
+                selectedName = name
+                appModel.selectedSourceName = nil
+            }
+            if let reference = appModel.sourceCreationRevision {
+                creationRevision = reference
+                isCreating = true
+                appModel.sourceCreationRevision = nil
+            }
+        }
         .sheet(isPresented: $isCreating) {
-            NewSourceSheet { name in
+            NewSourceSheet(initialRevision: creationRevision) { name in
                 selectedName = name
             }
             .frame(minWidth: 680, minHeight: 720)
@@ -40,6 +63,7 @@ struct SourcesView: View {
                 StyledText("Sources", Typography.masthead)
                 Spacer()
                 Button {
+                    creationRevision = nil
                     isCreating = true
                 } label: {
                     Label("New source", systemImage: "plus")
@@ -74,7 +98,10 @@ struct SourcesView: View {
             .windexStyle(Typography.body)
             .foregroundStyle(theme.palette.graphite)
             .fixedSize(horizontal: false, vertical: true)
-            Button("New Source") { isCreating = true }
+            Button("New Source") {
+                creationRevision = nil
+                isCreating = true
+            }
                 .disabled(session.pipelines.pipelines.isEmpty)
             if session.pipelines.pipelines.isEmpty {
                 Button("Build a Pipeline first") {
@@ -90,9 +117,17 @@ struct SourcesView: View {
     private var detail: some View {
         if let selectedName,
            let source = session.sources.sources.first(where: { $0.name == selectedName }) {
-            SourceDeploymentDetail(source: source) {
-                appModel.selection = .pipelines
-            }
+            SourceDeploymentDetail(
+                source: source,
+                openPipeline: {
+                    appModel.openPipeline(source.pipeline)
+                },
+                openConsole: {
+                    appModel.openConsole(
+                        OperationalEventFilter(sourceName: source.name)
+                    )
+                }
+            )
         } else {
             VStack(alignment: .leading, spacing: .sm) {
                 StyledText("Source workspace", Typography.masthead)
@@ -110,6 +145,7 @@ struct SourcesView: View {
 }
 
 private struct NewSourceSheet: View {
+    let initialRevision: PipelineRevisionReference?
     let onCreated: (String) -> Void
     @Environment(BackendSession.self) private var session
     @Environment(\.dismiss) private var dismiss
@@ -121,7 +157,7 @@ private struct NewSourceSheet: View {
     @State private var pipelineName = ""
     @State private var pipelineVersion = 0
     @State private var originJSON = #"{"ingress":"push"}"#
-    @State private var valuesJSON = "{}"
+    @State private var valuesForm: FormModel?
     @State private var searchName = ""
     @State private var idPrefix = ""
     @State private var collectionKey = ""
@@ -131,6 +167,25 @@ private struct NewSourceSheet: View {
     @State private var enabled = true
     @State private var isCreating = false
     @State private var errorMessage: String?
+    @State private var validationIssues: [Components.Schemas.ValidationIssueModel] = []
+
+    private var eligiblePipelines: [PipelineSummary] {
+        session.pipelines.pipelines.filter { pipeline in
+            session.pipelines.revisions[pipeline.name]?.contains {
+                $0.sourceCapability.capable
+            } == true
+        }
+    }
+
+    private var eligibleRevisions: [PipelineRevision] {
+        (session.pipelines.revisions[pipelineName] ?? [])
+            .filter(\.sourceCapability.capable)
+    }
+
+    private var selectedRevision: PipelineRevision? {
+        session.pipelines.revisions[pipelineName]?
+            .first { $0.reference.version == pipelineVersion }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -159,19 +214,22 @@ private struct NewSourceSheet: View {
 
                     HStack {
                         Picker("Pipeline", selection: $pipelineName) {
-                            ForEach(session.pipelines.pipelines) {
+                            ForEach(eligiblePipelines) {
                                 Text($0.displayTitle).tag($0.name)
                             }
                         }
                         Picker("Revision", selection: $pipelineVersion) {
-                            ForEach(session.pipelines.revisions[pipelineName] ?? [], id: \.reference) {
+                            ForEach(eligibleRevisions, id: \.reference) {
                                 Text("v\($0.reference.version)").tag($0.reference.version)
                             }
                         }
                     }
                     .onChange(of: pipelineName) {
-                        pipelineVersion = session.pipelines.revisions[pipelineName]?
-                            .first?.reference.version ?? 0
+                        pipelineVersion = eligibleRevisions.first?.reference.version ?? 0
+                        seedValuesForm()
+                    }
+                    .onChange(of: pipelineVersion) {
+                        seedValuesForm()
                     }
 
                     jsonEditor(
@@ -179,11 +237,33 @@ private struct NewSourceSheet: View {
                         help: #"Use {"ingress":"push"} for push ingestion, or the origin object expected by the Pipeline."#,
                         text: $originJSON
                     )
-                    jsonEditor(
-                        "Initial Pipeline values",
-                        help: "Values are validated against the selected revision before creation.",
-                        text: $valuesJSON
-                    )
+                    VStack(alignment: .leading, spacing: .sm) {
+                        Text("Pipeline values")
+                            .windexStyle(Typography.label)
+                        Text(
+                            "This form is generated from the selected immutable revision. Secret fields store references only."
+                        )
+                        .windexStyle(Typography.dataSM)
+                        .foregroundStyle(theme.palette.graphite)
+                        if let valuesForm, !valuesForm.params.isEmpty {
+                            SchemaForm(
+                                model: valuesForm,
+                                configuredSecretReferences: session.sources.configuredSecrets
+                            )
+                        } else {
+                            Text("This revision declares no Source parameters.")
+                                .windexStyle(Typography.body)
+                                .foregroundStyle(theme.palette.graphite)
+                        }
+                        if !session.sources.configuredSecrets.isEmpty {
+                            Text(
+                                "Configured secrets: "
+                                    + session.sources.configuredSecrets.joined(separator: ", ")
+                            )
+                            .windexStyle(Typography.dataSM)
+                            .foregroundStyle(theme.palette.graphite)
+                        }
+                    }
 
                     DisclosureGroup("Search identity and control") {
                         VStack(alignment: .leading, spacing: .sm) {
@@ -205,6 +285,20 @@ private struct NewSourceSheet: View {
                             .foregroundStyle(theme.palette.rust)
                             .textSelection(.enabled)
                     }
+                    ForEach(validationIssues, id: \.code) { issue in
+                        HStack(alignment: .top, spacing: .xs) {
+                            StatusBadge(
+                                issue.severity == .error ? .fault : .attention,
+                                word: issue.severity.rawValue
+                            )
+                            VStack(alignment: .leading, spacing: .xxs) {
+                                Text(issue.path)
+                                    .windexStyle(Typography.dataSM)
+                                Text(issue.message)
+                                    .windexStyle(Typography.body)
+                            }
+                        }
+                    }
                 }
                 .padding(.xl)
             }
@@ -219,18 +313,29 @@ private struct NewSourceSheet: View {
                 .disabled(
                     isCreating || name.trimmingCharacters(in: .whitespaces).isEmpty
                         || pipelineName.isEmpty || pipelineVersion == 0
+                        || valuesForm?.errors.isEmpty == false
                 )
             }
             .padding(.lg)
         }
         .background(theme.palette.ink)
         .onAppear {
-            if pipelineName.isEmpty,
-               let first = session.pipelines.pipelines.first {
+            if let initialRevision,
+               session.pipelines.revisions[initialRevision.pipeline]?
+                .contains(where: {
+                    $0.reference.version == initialRevision.version
+                        && $0.sourceCapability.capable
+                }) == true {
+                pipelineName = initialRevision.pipeline
+                pipelineVersion = initialRevision.version
+            } else if pipelineName.isEmpty,
+                      let first = eligiblePipelines.first {
                 pipelineName = first.name
                 pipelineVersion = session.pipelines.revisions[first.name]?
-                    .first?.reference.version ?? first.headVersion
+                    .first(where: \.sourceCapability.capable)?
+                    .reference.version ?? 0
             }
+            seedValuesForm()
         }
     }
 
@@ -265,7 +370,7 @@ private struct NewSourceSheet: View {
                 origin: try decodeObject(originJSON),
                 pipelineName: pipelineName,
                 pipelineVersion: pipelineVersion,
-                values: try decodeObject(valuesJSON),
+                values: valuesForm?.values ?? [:],
                 searchName: searchName.isEmpty ? canonical : searchName,
                 idPrefix: idPrefix.isEmpty ? "\(canonical):" : idPrefix,
                 collectionKey: collectionKey.isEmpty ? canonical : collectionKey,
@@ -274,11 +379,33 @@ private struct NewSourceSheet: View {
                 stateNamespace: stateNamespace.isEmpty ? canonical : stateNamespace,
                 enabled: enabled
             )
+            let report = try await session.validateSource(request)
+            validationIssues = report.issues
+            guard report.valid else {
+                errorMessage = "Resolve the deployment validation failures before creation."
+                return
+            }
             try await session.createSource(request)
             onCreated(canonical)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func seedValuesForm() {
+        guard let selectedRevision else {
+            valuesForm = nil
+            return
+        }
+        valuesForm = FormModel(params: selectedRevision.spec.parameters)
+        validationIssues = selectedRevision.sourceCapability.issues.map { issue in
+            Components.Schemas.ValidationIssueModel(
+                code: issue.code,
+                message: issue.message,
+                path: issue.path,
+                severity: issue.severity == .error ? .error : .warning
+            )
         }
     }
 
@@ -341,13 +468,11 @@ private struct SourceDeploymentRow: View {
 
 private enum SourceLifecycleConfirmation: Identifiable {
     case reset(Components.Schemas.ResetPreviewResponse)
-    case upgrade(SourceUpgradePreviewWire)
     case archive
 
     var id: String {
         switch self {
         case .reset: "reset"
-        case .upgrade: "upgrade"
         case .archive: "archive"
         }
     }
@@ -368,6 +493,7 @@ private struct SourceDeploymentDetail: View {
 
     let source: SourceDeployment
     let openPipeline: () -> Void
+    let openConsole: () -> Void
     @State private var section: Section = .overview
     @State private var form: FormModel?
     @State private var isMutating = false
@@ -375,6 +501,7 @@ private struct SourceDeploymentDetail: View {
     @State private var settingsConflict: SettingsConflict?
     @State private var confirmation: SourceLifecycleConfirmation?
     @State private var isAddingTrigger = false
+    @State private var isUpgrading = false
     @State private var ingestID = ""
     @State private var ingestURL = ""
     @State private var ingestTitle = ""
@@ -433,6 +560,10 @@ private struct SourceDeploymentDetail: View {
             TriggerSheet(source: source)
                 .frame(minWidth: 480, minHeight: 360)
         }
+        .sheet(isPresented: $isUpgrading) {
+            SourceUpgradeSheet(source: source)
+                .frame(minWidth: 680, minHeight: 720)
+        }
     }
 
     private var header: some View {
@@ -471,21 +602,27 @@ private struct SourceDeploymentDetail: View {
                         }
                     }
                 }
-                if let latest = session.pipelines.revisions[source.pipeline.pipeline]?.first,
-                   latest.reference.version > source.pipeline.version {
-                    Button("Upgrade to v\(latest.reference.version)") {
-                        Task {
-                            do {
-                                confirmation = .upgrade(
-                                    try await session.previewSourceUpgrade(
-                                        source.name,
-                                        version: latest.reference.version
-                                    )
-                                )
-                            } catch {
-                                actionError = error.localizedDescription
-                            }
+                Button(source.enabled ? "Disable" : "Enable") {
+                    Task {
+                        await perform {
+                            try await session.setSourceEnabled(
+                                source.name,
+                                enabled: !source.enabled
+                            )
                         }
+                    }
+                }
+                .help(
+                    source.enabled
+                        ? "Disable automatic and manual Source execution without pausing active work."
+                        : "Enable Source execution. Pause state remains independent."
+                )
+                if session.pipelines.revisions[source.pipeline.pipeline]?.contains(where: {
+                    $0.reference.version != source.pipeline.version
+                        && $0.sourceCapability.capable
+                }) == true {
+                    Button("Upgrade Source…") {
+                        isUpgrading = true
                     }
                 }
                 Menu {
@@ -529,6 +666,8 @@ private struct SourceDeploymentDetail: View {
             fieldGroup("Deployment") {
                 dataRow("Pipeline", "\(source.pipeline.pipeline) @ \(source.pipeline.version)")
                 dataRow("Origin", source.origin)
+                dataRow("Enabled", source.enabled ? "yes" : "no")
+                dataRow("Paused", source.paused ? "yes" : "no")
                 dataRow("Generation", String(source.generation))
                 dataRow("State namespace", source.stateNamespace)
                 dataRow(
@@ -600,7 +739,10 @@ private struct SourceDeploymentDetail: View {
             )
         }
         if let activeForm = form, !activeForm.params.isEmpty {
-            SchemaForm(model: activeForm)
+            SchemaForm(
+                model: activeForm,
+                configuredSecretReferences: session.sources.configuredSecrets
+            )
             Button(isMutating ? "Saving…" : "Save settings") {
                 Task { await saveSettings(activeForm.changes) }
             }
@@ -714,8 +856,12 @@ private struct SourceDeploymentDetail: View {
             .suffix(12)
         if !sourceEvents.isEmpty {
             Hairline()
-            StyledText("Recent Events", Typography.eyebrow)
-                .foregroundStyle(theme.palette.graphite)
+            HStack {
+                StyledText("Recent Events", Typography.eyebrow)
+                    .foregroundStyle(theme.palette.graphite)
+                Spacer()
+                Button("Open in Console", action: openConsole)
+            }
             ForEach(sourceEvents) { event in
                 Text("\(event.event) · \(event.message)")
                     .windexStyle(Typography.dataSM)
@@ -881,6 +1027,7 @@ private struct LifecycleConfirmationSheet: View {
     @Environment(BackendSession.self) private var session
     @Environment(\.dismiss) private var dismiss
     @Environment(\.windexTheme) private var theme
+    @State private var typedConfirmation = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: .lg) {
@@ -892,28 +1039,21 @@ private struct LifecycleConfirmationSheet: View {
                         + "\(preview.documents) documents and \(preview.stateUnits) state units. "
                         + "\(preview.outstandingTasks) outstanding tasks are affected."
                 )
-                confirmationButtons("Queue reset", role: .destructive) {
+                TextField(
+                    "Type \(source.name) to confirm",
+                    text: $typedConfirmation
+                )
+                .textFieldStyle(.roundedBorder)
+                confirmationButtons(
+                    "Queue reset",
+                    role: .destructive,
+                    enabled: typedConfirmation == source.name
+                ) {
                     try await session.resetSource(
                         source.name,
                         confirmationToken: preview.confirmationToken
                     )
                 }
-            case .upgrade(let preview):
-                StyledText("Upgrade \(source.displayTitle)?", Typography.setLG)
-                Text(
-                    "Move from Pipeline v\(preview.fromVersion) to v\(preview.targetVersion). "
-                        + (preview.valid
-                            ? "The backend validated the migrated settings."
-                            : "The candidate is not valid; resolve its missing settings first.")
-                )
-                confirmationButtons("Confirm upgrade", role: nil) {
-                    try await session.upgradeSource(
-                        source.name,
-                        version: preview.targetVersion,
-                        confirmationToken: preview.confirmationToken
-                    )
-                }
-                .disabled(!preview.valid)
             case .archive:
                 StyledText("Archive \(source.displayTitle)?", Typography.setLG)
                 Text("The Source leaves active lists and can no longer be run or scheduled.")
@@ -935,6 +1075,7 @@ private struct LifecycleConfirmationSheet: View {
     private func confirmationButtons(
         _ label: String,
         role: ButtonRole?,
+        enabled: Bool = true,
         action: @escaping () async throws -> Void
     ) -> some View {
         HStack {
@@ -954,7 +1095,263 @@ private struct LifecycleConfirmationSheet: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(isMutating)
+            .disabled(isMutating || !enabled)
+        }
+    }
+}
+
+private struct SourceUpgradeSheet: View {
+    let source: SourceDeployment
+    @Environment(BackendSession.self) private var session
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.windexTheme) private var theme
+
+    @State private var targetVersion = 0
+    @State private var preview: SourceUpgradePreviewWire?
+    @State private var candidateForm: FormModel?
+    @State private var candidateBaseline: [String: JSONValue] = [:]
+    @State private var candidateWasChecked = false
+    @State private var isWorking = false
+    @State private var errorMessage: String?
+
+    private var eligibleRevisions: [PipelineRevision] {
+        (session.pipelines.revisions[source.pipeline.pipeline] ?? [])
+            .filter {
+                $0.reference.version != source.pipeline.version
+                    && $0.sourceCapability.capable
+            }
+    }
+
+    private var targetRevision: PipelineRevision? {
+        eligibleRevisions.first { $0.reference.version == targetVersion }
+    }
+
+    private var candidateChanged: Bool {
+        candidateForm?.values != candidateBaseline
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: .xs) {
+                    StyledText("Upgrade Source", Typography.setLG)
+                    Text("\(source.pipeline.pipeline) @ \(source.pipeline.version)")
+                        .windexStyle(Typography.data)
+                        .foregroundStyle(theme.palette.graphite)
+                }
+                Spacer()
+                Button("Close") { dismiss() }
+            }
+            .padding(.lg)
+            Hairline()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: .lg) {
+                    HStack {
+                        Picker("Target revision", selection: $targetVersion) {
+                            ForEach(eligibleRevisions, id: \.reference) { revision in
+                                Text(
+                                    "v\(revision.reference.version)"
+                                        + (revision.note.isEmpty ? "" : " · \(revision.note)")
+                                )
+                                .tag(revision.reference.version)
+                            }
+                        }
+                        Button(isWorking ? "Previewing…" : "Preview") {
+                            Task { await loadPreview() }
+                        }
+                        .disabled(isWorking || targetVersion == 0)
+                    }
+
+                    if let preview {
+                        HStack {
+                            StatusBadge(
+                                preview.valid ? .healthy : .attention,
+                                word: preview.valid ? "valid" : "needs values"
+                            )
+                            Text(
+                                "v\(preview.fromVersion) → v\(preview.targetVersion) · "
+                                    + String(preview.targetHash.prefix(12))
+                            )
+                            .windexStyle(Typography.dataSM)
+                        }
+
+                        previewDictionary("Retained", object(preview.retained))
+                        previewDictionary("Defaulted", object(preview.defaulted))
+                        previewDictionary("Clamped", object(preview.clamped))
+                        previewList("Removed", preview.removed)
+                        previewList("Missing", preview.missing)
+                        previewList(
+                            "Install-stage changes",
+                            preview.installStageChanged
+                        )
+                        previewDictionary("State impact", object(preview.stateImpact))
+
+                        Hairline()
+                        StyledText("Candidate configuration", Typography.eyebrow)
+                            .foregroundStyle(theme.palette.graphite)
+                        if let candidateForm, !candidateForm.params.isEmpty {
+                            SchemaForm(
+                                model: candidateForm,
+                                configuredSecretReferences: session.sources.configuredSecrets
+                            )
+                            HStack {
+                                Button("Check candidate schema") {
+                                    candidateWasChecked = true
+                                }
+                                .disabled(
+                                    isWorking || !candidateChanged
+                                )
+                                if candidateChanged {
+                                    StatusBadge(.attention, word: "edited")
+                                }
+                            }
+                        } else {
+                            Text("The target revision declares no parameters.")
+                                .windexStyle(Typography.body)
+                        }
+
+                        if candidateWasChecked, let candidateForm {
+                            StatusBadge(
+                                candidateForm.errors.isEmpty ? .healthy : .fault,
+                                word: candidateForm.errors.isEmpty
+                                    ? "schema valid"
+                                    : "schema invalid"
+                            )
+                            ForEach(candidateForm.errors, id: \.param.key) { issue in
+                                Text("\(issue.param.key): \(issue.message)")
+                                    .windexStyle(Typography.dataSM)
+                                    .foregroundStyle(theme.palette.rust)
+                            }
+                        }
+
+                        if candidateChanged {
+                            Text(
+                                "The epoch-2 upgrade operation does not accept candidate values. "
+                                    + "The edited candidate can be checked against its parameter "
+                                    + "schema here, but cannot be server-validated or submitted "
+                                    + "atomically until the backend contract carries it."
+                            )
+                            .windexStyle(Typography.body)
+                            .foregroundStyle(theme.palette.amber)
+                        }
+                    }
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .windexStyle(Typography.body)
+                            .foregroundStyle(theme.palette.rust)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.xl)
+            }
+
+            Hairline()
+            HStack {
+                Spacer()
+                Button(isWorking ? "Upgrading…" : "Confirm upgrade") {
+                    Task { await confirm() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    isWorking || preview?.valid != true || candidateChanged
+                )
+            }
+            .padding(.lg)
+        }
+        .background(theme.palette.ink)
+        .onAppear {
+            targetVersion = eligibleRevisions.first?.reference.version ?? 0
+        }
+        .onChange(of: targetVersion) {
+            preview = nil
+            candidateForm = nil
+            candidateBaseline = [:]
+            candidateWasChecked = false
+            errorMessage = nil
+        }
+    }
+
+    private func loadPreview() async {
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            let value = try await session.previewSourceUpgrade(
+                source.name,
+                version: targetVersion
+            )
+            let retained = object(value.retained)
+            let defaulted = object(value.defaulted)
+            let candidate = retained.merging(defaulted) { _, new in new }
+            preview = value
+            candidateBaseline = candidate
+            candidateForm = FormModel(
+                params: targetRevision?.spec.parameters ?? [],
+                values: candidate
+            )
+            candidateWasChecked = false
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func confirm() async {
+        guard let preview, preview.valid, !candidateChanged else { return }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            try await session.upgradeSource(
+                source.name,
+                version: preview.targetVersion,
+                confirmationToken: preview.confirmationToken
+            )
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func object<T: Encodable>(_ value: T) -> [String: JSONValue] {
+        guard let data = try? JSONEncoder().encode(value),
+              let result = try? JSONDecoder().decode(
+                [String: JSONValue].self,
+                from: data
+              ) else { return [:] }
+        return result
+    }
+
+    @ViewBuilder
+    private func previewDictionary(
+        _ title: String,
+        _ values: [String: JSONValue]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: .xs) {
+            StyledText(title, Typography.eyebrow)
+                .foregroundStyle(theme.palette.graphite)
+            if values.isEmpty {
+                Text("None")
+                    .windexStyle(Typography.dataSM)
+                    .foregroundStyle(theme.palette.graphite)
+            } else {
+                ForEach(values.keys.sorted(), id: \.self) { key in
+                    Text("\(key): \(values[key]?.displayString ?? "null")")
+                        .windexStyle(Typography.dataSM)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func previewList(_ title: String, _ values: [String]) -> some View {
+        VStack(alignment: .leading, spacing: .xs) {
+            StyledText(title, Typography.eyebrow)
+                .foregroundStyle(theme.palette.graphite)
+            Text(values.isEmpty ? "None" : values.joined(separator: ", "))
+                .windexStyle(Typography.dataSM)
+                .foregroundStyle(values.isEmpty ? theme.palette.graphite : theme.palette.paper)
         }
     }
 }

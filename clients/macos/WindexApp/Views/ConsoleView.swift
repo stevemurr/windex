@@ -4,8 +4,10 @@ import WindexKit
 import WindexUI
 
 struct LogsView: View {
+    @Bindable var appModel: AppModel
     @Environment(BackendSession.self) private var session
     @Environment(\.windexTheme) private var theme
+    @State private var presetName = ""
 
     var body: some View {
         @Bindable var store = session.logs
@@ -21,70 +23,253 @@ struct LogsView: View {
             }
         }
         .background(theme.palette.ink)
+        .task(id: appModel.consoleFilterRequest) {
+            guard let filter = appModel.consoleFilterRequest else { return }
+            store.filter = filter
+            appModel.consoleFilterRequest = nil
+            await session.loadLogHistory()
+        }
+        .task(id: store.filter) {
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            await session.loadLogHistory()
+        }
+        .onChange(of: store.newestCursor) { _, newest in
+            guard store.followsNewest, let newest else { return }
+            store.selectedSequence = newest
+        }
     }
 
     private func controls(store: SharedLogStore) -> some View {
         @Bindable var store = store
 
-        return HStack(spacing: .sm) {
-            StyledText("Console", Typography.masthead)
-            connectionStatus(store.connection)
+        return VStack(spacing: .sm) {
+            HStack(spacing: .sm) {
+                StyledText("Console", Typography.masthead)
+                connectionStatus(store.connection)
 
-            TextField(
-                "Filter messages, Sources, Pipelines, Nodes, or Modules",
-                text: Binding(
-                    get: { store.filter.text },
-                    set: { store.filter.text = $0 }))
-            .textFieldStyle(.roundedBorder)
-            .frame(minWidth: 220, maxWidth: 480)
+                TextField(
+                    "Filter event text",
+                    text: Binding(
+                        get: { store.filter.text },
+                        set: { store.filter.text = $0 }))
+                .textFieldStyle(.roundedBorder)
+                .frame(minWidth: 220, maxWidth: 480)
 
-            Picker(
-                "Level",
-                selection: Binding(
-                    get: { store.filter.levels.first },
-                    set: { level in
-                        store.filter.levels = level.map { [$0] } ?? []
-                    })
-            ) {
-                Text("All levels").tag(OperationalEventLevel?.none)
-                ForEach(OperationalEventLevel.allCases, id: \.self) {
-                    Text($0.rawValue).tag(Optional($0))
+                Spacer(minLength: 0)
+
+                Toggle(
+                    store.followsNewest ? "Follow" : "Paused",
+                    isOn: $store.followsNewest)
+                    .toggleStyle(.button)
+
+                Button("Newest") {
+                    store.selectedSequence = store.allEvents.last?.sequence
+                    store.followsNewest = true
+                }
+                .disabled(store.allEvents.isEmpty)
+
+                Menu {
+                    Button("Copy visible Events") {
+                        copy(store.events)
+                    }
+                    Button("Export visible Events…") {
+                        export(store.events)
+                    }
+                    Divider()
+                    Button("Clear local view") {
+                        store.clearLocalView()
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .accessibilityLabel("Console actions")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+
+            ScrollView(.horizontal) {
+                HStack(spacing: .sm) {
+                    Picker(
+                        "Level",
+                        selection: Binding(
+                            get: { store.filter.levels.first },
+                            set: { level in
+                                store.filter.levels = level.map { [$0] } ?? []
+                            })
+                    ) {
+                        Text("All levels").tag(OperationalEventLevel?.none)
+                        ForEach(facetLevels(store), id: \.self) {
+                            Text($0.rawValue).tag(Optional($0))
+                        }
+                    }
+                    .frame(width: 120)
+
+                    facetPicker(
+                        "Component",
+                        values: store.facets.components,
+                        selection: Binding(
+                            get: { store.filter.components.first },
+                            set: { store.filter.components = $0.map { [$0] } ?? [] }
+                        )
+                    )
+                    facetPicker(
+                        "Source",
+                        values: store.facets.sources,
+                        selection: Binding(
+                            get: { store.filter.sourceName },
+                            set: { store.filter.sourceName = $0 }
+                        )
+                    )
+                    facetPicker(
+                        "Pipeline",
+                        values: store.facets.pipelines,
+                        selection: Binding(
+                            get: { store.filter.pipelineName },
+                            set: { store.filter.pipelineName = $0 }
+                        )
+                    )
+                    TextField(
+                        "Run",
+                        text: Binding(
+                            get: { store.filter.runID.map(String.init) ?? "" },
+                            set: { store.filter.runID = Int($0) }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 76)
+                    facetPicker(
+                        "Node",
+                        values: store.facets.nodes,
+                        selection: Binding(
+                            get: { store.filter.node },
+                            set: { store.filter.node = $0 }
+                        )
+                    )
+                    facetPicker(
+                        "Module",
+                        values: store.facets.modules,
+                        selection: Binding(
+                            get: { store.filter.module },
+                            set: { store.filter.module = $0 }
+                        )
+                    )
+
+                    Toggle(
+                        "Since",
+                        isOn: Binding(
+                            get: { store.filter.startedAt != nil },
+                            set: { enabled in
+                                store.filter.startedAt = enabled
+                                    ? Date().addingTimeInterval(-3_600)
+                                    : nil
+                            }
+                        )
+                    )
+                    if let startedAt = store.filter.startedAt {
+                        DatePicker(
+                            "Start",
+                            selection: Binding(
+                                get: { startedAt },
+                                set: { store.filter.startedAt = $0 }
+                            )
+                        )
+                        .labelsHidden()
+                    }
+                    Toggle(
+                        "Until",
+                        isOn: Binding(
+                            get: { store.filter.endedAt != nil },
+                            set: { enabled in
+                                store.filter.endedAt = enabled ? Date() : nil
+                            }
+                        )
+                    )
+                    if let endedAt = store.filter.endedAt {
+                        DatePicker(
+                            "End",
+                            selection: Binding(
+                                get: { endedAt },
+                                set: { store.filter.endedAt = $0 }
+                            )
+                        )
+                        .labelsHidden()
+                    }
                 }
             }
-            .frame(width: 120)
 
-            Spacer(minLength: 0)
-
-            Toggle(
-                store.followsNewest ? "Follow" : "Paused",
-                isOn: $store.followsNewest)
-                .toggleStyle(.button)
-
-            Button("Newest") {
-                store.selectedSequence = store.allEvents.last?.sequence
+            HStack(spacing: .sm) {
+                Menu("Presets") {
+                    if store.presets.isEmpty {
+                        Text("No saved presets")
+                    }
+                    ForEach(store.presets) { preset in
+                        Button(preset.name) {
+                            store.applyPreset(preset.id)
+                        }
+                    }
+                    if !store.presets.isEmpty {
+                        Divider()
+                        Menu("Delete preset") {
+                            ForEach(store.presets) { preset in
+                                Button(preset.name, role: .destructive) {
+                                    store.deletePreset(preset.id)
+                                }
+                            }
+                        }
+                    }
+                }
+                TextField("Preset name", text: $presetName)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 160)
+                Button("Save preset") {
+                    store.savePreset(named: presetName)
+                    presetName = ""
+                }
+                .disabled(presetName.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Load filtered history") {
+                    Task { await session.loadLogHistory() }
+                }
+                Button("Next history page") {
+                    Task { await session.loadLogHistory(continuing: true) }
+                }
+                .disabled(!store.historyHasMore)
+                if case .loading = store.historyState {
+                    ProgressView().controlSize(.small)
+                } else if case .failed(let message) = store.historyState {
+                    Text(message)
+                        .windexStyle(Typography.dataSM)
+                        .foregroundStyle(theme.palette.rust)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Button("Clear filters") {
+                    store.filter = OperationalEventFilter()
+                }
+                .disabled(store.filter.isEmpty)
             }
-            .disabled(store.allEvents.isEmpty)
-
-            Menu {
-                Button("Copy visible Events") {
-                    copy(store.events)
-                }
-                Button("Export visible Events…") {
-                    export(store.events)
-                }
-                Divider()
-                Button("Clear local view") {
-                    store.clearLocalView()
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .accessibilityLabel("Console actions")
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
         }
         .padding(.md)
         .background(theme.palette.plate)
+    }
+
+    private func facetPicker(
+        _ title: String,
+        values: [String],
+        selection: Binding<String?>
+    ) -> some View {
+        Picker(title, selection: selection) {
+            Text("All \(title.lowercased())s").tag(String?.none)
+            ForEach(values, id: \.self) { Text($0).tag(Optional($0)) }
+        }
+        .frame(width: 140)
+    }
+
+    private func facetLevels(_ store: SharedLogStore) -> [OperationalEventLevel] {
+        let levels = store.facets.levels.compactMap { raw -> OperationalEventLevel? in
+            raw == "warn" ? .warning : .init(rawValue: raw)
+        }
+        return levels.isEmpty ? OperationalEventLevel.allCases : levels
     }
 
     private func connectionStatus(_ value: LiveConnectionState) -> some View {

@@ -47,7 +47,10 @@ extension PipelineRevisionWire {
             spec: decorated,
             registryVersion: registryVersion,
             author: author,
-            note: note
+            note: note,
+            sourceCapability: try capability.additionalProperties.decode(
+                PipelineSourceCapability.self
+            )
         )
     }
 }
@@ -64,11 +67,11 @@ extension PipelineLayoutWire {
             positions = [:]
         }
         let groups = payload["groups"].flatMap {
-            try? roundTrip($0, as: [String: [String]].self)
-        } ?? [:]
+            try? roundTrip($0, as: [PipelineLayoutGroup].self)
+        } ?? []
         let annotations = payload["annotations"].flatMap {
-            try? roundTrip($0, as: [String: String].self)
-        } ?? [:]
+            try? roundTrip($0, as: [PipelineLayoutAnnotation].self)
+        } ?? []
         return PipelineFlowLayout(
             pipeline: pipeline,
             version: version,
@@ -76,7 +79,8 @@ extension PipelineLayoutWire {
             positions: positions,
             groups: groups,
             annotations: annotations,
-            etag: etag
+            etag: etag,
+            updatedAt: updatedAt
         )
     }
 }
@@ -106,6 +110,7 @@ extension SourceWire {
             title: title,
             description: description,
             origin: originText,
+            originValues: originValues,
             pipeline: .init(pipeline: pipelineName, version: pipelineVersion,
                             specHash: pipelineHash),
             search: .init(searchName: searchName, idPrefix: idPrefix,
@@ -241,11 +246,22 @@ extension SourceStatusWire {
         let current = currentID.flatMap { id in runs.first { $0.id == id } }
         let latest = latestID.flatMap { id in runs.first { $0.id == id } }
         let activity: SourceActivityState
-        if paused { activity = .paused }
-        else if current?.state == .running { activity = .running }
-        else if current?.state == .queued { activity = .queued }
-        else if recentError != nil { activity = .failed }
-        else { activity = .idle }
+        if paused {
+            activity = .paused
+        } else {
+            switch current?.state {
+            case .running:
+                activity = .running
+            case .queued:
+                activity = .queued
+            case .blocked:
+                activity = .blocked
+            case .failed:
+                activity = .failed
+            default:
+                activity = latest?.state == .failed || recentError != nil ? .failed : .idle
+            }
+        }
         return SourceStatus(
             activity: activity,
             counts: .init(
@@ -259,6 +275,19 @@ extension SourceStatusWire {
             latestRun: latest,
             nextTrigger: nextTrigger,
             recentError: recentError
+        )
+    }
+}
+
+extension LogFacetsWire {
+    public func facets() -> OperationalEventFacets {
+        OperationalEventFacets(
+            levels: levels,
+            components: components,
+            sources: sources,
+            pipelines: pipelines,
+            nodes: nodes,
+            modules: modules
         )
     }
 }

@@ -6,17 +6,25 @@ import WindexUI
 @MainActor
 @Observable
 final class PipelineComposerModel {
+    private struct Presentation {
+        let positions: [String: CGPoint]
+        let groups: [PipelineLayoutGroup]
+        let annotations: [PipelineLayoutAnnotation]
+    }
     private struct Snapshot {
         let draft: PipelineDraft
         let selectedFlow: String
         let selectedNodeID: String?
         let positions: [String: CGPoint]
+        let groups: [PipelineLayoutGroup]
+        let annotations: [PipelineLayoutAnnotation]
     }
 
     enum RightPane: String, CaseIterable, Identifiable {
         case modules
         case inspector
         case flow
+        case parameters
 
         var id: Self { self }
         var title: String { rawValue.capitalized }
@@ -30,10 +38,17 @@ final class PipelineComposerModel {
     var moduleFilter = ""
     var rightPane: RightPane = .modules
     var positions: [String: CGPoint] = [:]
+    var groups: [PipelineLayoutGroup] = []
+    var annotations: [PipelineLayoutAnnotation] = []
     var errorMessage: String?
     private(set) var baseVersion: Int?
     private(set) var baseHash: String?
+    private(set) var sourceCapability = PipelineSourceCapability(capable: false)
+    private(set) var semanticEditable = false
+    private(set) var layoutDirty = false
     private(set) var recoveryRevision = 0
+    private var presentations: [String: Presentation] = [:]
+    private var dirtyFlows: Set<String> = []
 
     private(set) var issues: [PipelineValidationIssue] = []
     private(set) var nodeForm: FormModel?
@@ -52,9 +67,16 @@ final class PipelineComposerModel {
         selectedNodeID = nil
         pendingConnectionSource = nil
         positions = [:]
+        groups = []
+        annotations = []
         errorMessage = nil
         baseVersion = nil
         baseHash = nil
+        sourceCapability = .init(capable: false)
+        semanticEditable = true
+        layoutDirty = false
+        presentations = [:]
+        dirtyFlows = []
         nodeForm = nil
         undoStack = []
         redoStack = []
@@ -72,11 +94,18 @@ final class PipelineComposerModel {
         draft = PipelineDraft(revision: revision)
         baseVersion = revision.reference.version
         baseHash = revision.reference.specHash
+        sourceCapability = revision.sourceCapability
+        semanticEditable = false
+        layoutDirty = false
+        presentations = [:]
+        dirtyFlows = []
         selectedCatalogueName = revision.reference.pipeline
         selectedFlow = revision.spec.flows.first?.name ?? "main"
         selectedNodeID = nil
         pendingConnectionSource = nil
         positions = [:]
+        groups = []
+        annotations = []
         nodeForm = nil
         undoStack = []
         redoStack = []
@@ -84,9 +113,67 @@ final class PipelineComposerModel {
     }
 
     func apply(_ layout: PipelineFlowLayout?) {
+        if let cached = presentations[selectedFlow] {
+            positions = cached.positions
+            groups = cached.groups
+            annotations = cached.annotations
+            layoutDirty = dirtyFlows.contains(selectedFlow)
+            return
+        }
         positions = layout?.positions.mapValues {
             CGPoint(x: $0.x, y: $0.y)
         } ?? [:]
+        groups = layout?.groups ?? []
+        annotations = layout?.annotations ?? []
+        layoutDirty = false
+        presentations[selectedFlow] = Presentation(
+            positions: positions,
+            groups: groups,
+            annotations: annotations
+        )
+    }
+
+    func accept(_ layout: PipelineFlowLayout?) {
+        presentations.removeValue(forKey: selectedFlow)
+        dirtyFlows.remove(selectedFlow)
+        apply(layout)
+    }
+
+    func stashLayout(for flow: String) {
+        presentations[flow] = Presentation(
+            positions: positions,
+            groups: groups,
+            annotations: annotations
+        )
+        if layoutDirty { dirtyFlows.insert(flow) }
+    }
+
+    func presentation(
+        for flow: String,
+        fallback: PipelineFlowLayout?
+    ) -> (
+        positions: [String: PipelineNodePosition],
+        groups: [PipelineLayoutGroup],
+        annotations: [PipelineLayoutAnnotation]
+    ) {
+        let value = presentations[flow]
+        return (
+            value?.positions.mapValues {
+                PipelineNodePosition(x: $0.x, y: $0.y)
+            } ?? fallback?.positions ?? [:],
+            value?.groups ?? fallback?.groups ?? [],
+            value?.annotations ?? fallback?.annotations ?? []
+        )
+    }
+
+    func beginNewRevision() {
+        guard baseVersion != nil else { return }
+        semanticEditable = true
+        selectedNodeID = nil
+        nodeForm = nil
+        undoStack = []
+        redoStack = []
+        recoveryRevision += 1
     }
 
     func restore(
@@ -102,6 +189,18 @@ final class PipelineComposerModel {
         positions = recovered.positions.mapValues {
             CGPoint(x: $0.x, y: $0.y)
         }
+        groups = recovered.groups ?? []
+        annotations = recovered.annotations ?? []
+        semanticEditable = true
+        layoutDirty = false
+        presentations = [
+            recovered.selectedFlow: Presentation(
+                positions: positions,
+                groups: groups,
+                annotations: annotations
+            ),
+        ]
+        dirtyFlows = [recovered.selectedFlow]
         selectedNodeID = nil
         pendingConnectionSource = nil
         nodeForm = nil
@@ -119,7 +218,9 @@ final class PipelineComposerModel {
             selectedFlow: selectedFlow,
             positions: positions.mapValues {
                 PipelineNodePosition(x: $0.x, y: $0.y)
-            })
+            },
+            groups: groups,
+            annotations: annotations)
     }
 
     func add(_ module: PipelineModuleDescriptor, registry: PipelineRegistry) {
@@ -150,7 +251,12 @@ final class PipelineComposerModel {
         }
         nodeForm = FormModel(
             params: module.fields,
-            values: node.config.mapValues(\.wireValue))
+            values: Dictionary(uniqueKeysWithValues: module.fields.compactMap { field in
+                if case .literal(let value)? = node.config[field.key] {
+                    return (field.key, value)
+                }
+                return field.initialValue.map { (field.key, $0) }
+            }))
     }
 
     func applyNodeForm(registry: PipelineRegistry) {
@@ -160,11 +266,19 @@ final class PipelineComposerModel {
         else { return }
 
         checkpoint()
+        var config = node.config
+        for (key, value) in nodeForm.values {
+            if config[key]?.bindingMode == .pipelineParameter
+                || config[key]?.bindingMode == .secretReference {
+                continue
+            }
+            config[key] = .literal(value)
+        }
         let updated = PipelineNode(
             id: node.id,
             kind: node.kind,
             module: node.module,
-            config: nodeForm.values.mapValues(NodeConfigValue.init(wireValue:)))
+            config: config)
         do {
             try draft.updateNode(updated, inFlow: selectedFlow)
             self.draft = draft
@@ -176,6 +290,77 @@ final class PipelineComposerModel {
             undoStack.removeLast()
             errorMessage = error.localizedDescription
         }
+    }
+
+    func setNodeBinding(
+        field key: String,
+        value: NodeConfigValue,
+        registry: PipelineRegistry
+    ) {
+        guard let selectedNodeID, var draft,
+              let node = currentFlow?.nodes.first(where: { $0.id == selectedNodeID })
+        else { return }
+        checkpoint()
+        var config = node.config
+        config[key] = value
+        do {
+            try draft.updateNode(
+                PipelineNode(
+                    id: node.id,
+                    kind: node.kind,
+                    module: node.module,
+                    config: config
+                ),
+                inFlow: selectedFlow
+            )
+            self.draft = draft
+            select(selectedNodeID, registry: registry)
+            validate(registry)
+        } catch {
+            undoStack.removeLast()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func addParameter(
+        _ definition: PipelineParameterDefinition,
+        registry: PipelineRegistry?
+    ) {
+        guard var draft else { return }
+        checkpoint()
+        do {
+            try draft.addParameter(definition)
+            self.draft = draft
+            validate(registry)
+        } catch {
+            undoStack.removeLast()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func updateParameter(
+        previousKey: String,
+        definition: PipelineParameterDefinition,
+        registry: PipelineRegistry?
+    ) {
+        guard var draft else { return }
+        checkpoint()
+        do {
+            try draft.updateParameter(named: previousKey, definition: definition)
+            self.draft = draft
+            validate(registry)
+        } catch {
+            undoStack.removeLast()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func removeParameter(_ key: String, registry: PipelineRegistry?) {
+        guard var draft else { return }
+        checkpoint()
+        draft.removeParameter(named: key)
+        self.draft = draft
+        validate(registry)
     }
 
     func removeSelectedNode(registry: PipelineRegistry) {
@@ -238,6 +423,7 @@ final class PipelineComposerModel {
 
     func addFlow() {
         guard var draft else { return }
+        stashLayout(for: selectedFlow)
         checkpoint()
         do {
             var suffix = draft.flows.count + 1
@@ -251,6 +437,15 @@ final class PipelineComposerModel {
             selectedFlow = name
             selectedNodeID = nil
             nodeForm = nil
+            positions = [:]
+            groups = []
+            annotations = []
+            layoutDirty = false
+            presentations[name] = Presentation(
+                positions: positions,
+                groups: groups,
+                annotations: annotations
+            )
         } catch {
             undoStack.removeLast()
             errorMessage = error.localizedDescription
@@ -259,6 +454,7 @@ final class PipelineComposerModel {
 
     func duplicateFlow() {
         guard var draft else { return }
+        stashLayout(for: selectedFlow)
         checkpoint()
         do {
             var suffix = 2
@@ -271,7 +467,13 @@ final class PipelineComposerModel {
             self.draft = draft
             selectedFlow = name
             selectedNodeID = nil
-            positions = [:]
+            layoutDirty = true
+            dirtyFlows.insert(name)
+            presentations[name] = Presentation(
+                positions: positions,
+                groups: groups,
+                annotations: annotations
+            )
         } catch {
             undoStack.removeLast()
             errorMessage = error.localizedDescription
@@ -280,13 +482,16 @@ final class PipelineComposerModel {
 
     func removeFlow(registry: PipelineRegistry?) {
         guard var draft, draft.flows.count > 1 else { return }
+        let removedFlow = selectedFlow
         checkpoint()
         do {
-            try draft.removeFlow(named: selectedFlow)
+            try draft.removeFlow(named: removedFlow)
+            presentations.removeValue(forKey: removedFlow)
+            dirtyFlows.remove(removedFlow)
             selectedFlow = draft.flows[0].name
             self.draft = draft
             selectedNodeID = nil
-            positions = [:]
+            apply(nil)
             validate(registry)
         } catch {
             undoStack.removeLast()
@@ -415,6 +620,7 @@ final class PipelineComposerModel {
         positions[nodeID] = CGPoint(
             x: max(120, position.x),
             y: max(70, position.y))
+        markLayoutDirty()
         recoveryRevision += 1
     }
 
@@ -425,6 +631,65 @@ final class PipelineComposerModel {
             uniqueKeysWithValues: flow.nodes.enumerated().map {
                 ($0.element.id, Self.defaultPosition(index: $0.offset))
             })
+        markLayoutDirty()
+    }
+
+    func groupSelectedNode() {
+        guard let selectedNodeID,
+              let index = currentFlow?.nodes.firstIndex(where: { $0.id == selectedNodeID })
+        else { return }
+        let center = position(for: selectedNodeID, index: index)
+        groups.append(
+            PipelineLayoutGroup(
+                id: "group-\(groups.count + 1)",
+                title: "Group \(groups.count + 1)",
+                nodes: [selectedNodeID],
+                x: center.x - 130,
+                y: center.y - 70
+            )
+        )
+        markLayoutDirty()
+        recoveryRevision += 1
+    }
+
+    func updateGroup(_ group: PipelineLayoutGroup) {
+        guard let index = groups.firstIndex(where: { $0.id == group.id }) else { return }
+        groups[index] = group
+        markLayoutDirty()
+        recoveryRevision += 1
+    }
+
+    func removeGroup(_ id: String) {
+        groups.removeAll { $0.id == id }
+        markLayoutDirty()
+        recoveryRevision += 1
+    }
+
+    func addAnnotation() {
+        annotations.append(
+            PipelineLayoutAnnotation(
+                id: "annotation-\(annotations.count + 1)",
+                text: "Annotation",
+                x: 160 + Double(annotations.count * 28),
+                y: 80 + Double(annotations.count * 28)
+            )
+        )
+        markLayoutDirty()
+        recoveryRevision += 1
+    }
+
+    func updateAnnotation(_ annotation: PipelineLayoutAnnotation) {
+        guard let index = annotations.firstIndex(where: { $0.id == annotation.id })
+        else { return }
+        annotations[index] = annotation
+        markLayoutDirty()
+        recoveryRevision += 1
+    }
+
+    func removeAnnotation(_ id: String) {
+        annotations.removeAll { $0.id == id }
+        markLayoutDirty()
+        recoveryRevision += 1
     }
 
     func undo(registry: PipelineRegistry?) {
@@ -467,7 +732,9 @@ final class PipelineComposerModel {
             draft: draft,
             selectedFlow: selectedFlow,
             selectedNodeID: selectedNodeID,
-            positions: positions)
+            positions: positions,
+            groups: groups,
+            annotations: annotations)
     }
 
     private func checkpoint() {
@@ -480,10 +747,23 @@ final class PipelineComposerModel {
         recoveryRevision += 1
     }
 
+    private func markLayoutDirty() {
+        layoutDirty = true
+        dirtyFlows.insert(selectedFlow)
+        presentations[selectedFlow] = Presentation(
+            positions: positions,
+            groups: groups,
+            annotations: annotations
+        )
+    }
+
     private func restore(_ snapshot: Snapshot, registry: PipelineRegistry?) {
         draft = snapshot.draft
         selectedFlow = snapshot.selectedFlow
         positions = snapshot.positions
+        groups = snapshot.groups
+        annotations = snapshot.annotations
+        markLayoutDirty()
         select(snapshot.selectedNodeID, registry: registry)
         pendingConnectionSource = nil
         errorMessage = nil
@@ -493,6 +773,7 @@ final class PipelineComposerModel {
 }
 
 struct PipelinesView: View {
+    @Bindable var appModel: AppModel
     @Environment(BackendSession.self) private var session
     @State private var model = PipelineComposerModel()
     @State private var isSaving = false
@@ -512,6 +793,12 @@ struct PipelinesView: View {
         .background(theme.palette.ink)
         .onChange(of: session.registry.registry) { _, registry in
             model.validate(registry)
+        }
+        .task(id: appModel.pipelineNavigation) {
+            await openNavigationRequest()
+        }
+        .onChange(of: session.pipelines.revisions) {
+            Task { await openNavigationRequest() }
         }
         .task {
             guard model.draft == nil,
@@ -533,16 +820,42 @@ struct PipelinesView: View {
             }
         }
         .sheet(isPresented: $isPresentingRun) {
-            if let draft = model.draft, let version = model.baseVersion {
+            if let draft = model.draft,
+               let version = model.baseVersion,
+               let revision = session.pipelines.revisions[draft.name]?
+                .first(where: { $0.reference.version == version }) {
                 PipelineRunSheet(
-                    pipeline: draft.name,
-                    version: version,
-                    flows: draft.flows.map(\.name),
+                    revision: revision,
                     selectedFlow: model.selectedFlow
                 )
                 .frame(minWidth: 560, minHeight: 520)
             }
         }
+    }
+
+    private func openNavigationRequest() async {
+        guard let request = appModel.pipelineNavigation,
+              let revision = session.pipelines.revisions[request.reference.pipeline]?
+                .first(where: { $0.reference.version == request.reference.version })
+        else { return }
+        model.open(revision, registry: session.registry.registry)
+        if let flow = request.flow,
+           revision.spec.flows.contains(where: { $0.name == flow }) {
+            model.selectedFlow = flow
+        }
+        await session.loadLayout(
+            pipeline: revision.reference.pipeline,
+            version: revision.reference.version,
+            flow: model.selectedFlow
+        )
+        model.apply(
+            session.pipelines.layout(
+                pipeline: revision.reference.pipeline,
+                version: revision.reference.version,
+                flow: model.selectedFlow
+            )
+        )
+        appModel.pipelineNavigation = nil
     }
 
     private var catalogue: some View {
@@ -646,24 +959,38 @@ struct PipelinesView: View {
                 .textFieldStyle(.plain)
                 .windexStyle(Typography.label)
                 .frame(minWidth: 140, maxWidth: 240)
+                .disabled(!model.semanticEditable)
 
-                Picker("Flow", selection: $model.selectedFlow) {
+                Picker(
+                    "Flow",
+                    selection: Binding(
+                        get: { model.selectedFlow },
+                        set: { flow in
+                            let previous = model.selectedFlow
+                            guard flow != previous else { return }
+                            model.stashLayout(for: previous)
+                            model.selectedFlow = flow
+                            model.select(nil, registry: session.registry.registry)
+                            guard let draft = model.draft,
+                                  let version = model.baseVersion
+                            else {
+                                model.apply(nil)
+                                return
+                            }
+                            model.apply(session.pipelines.layout(
+                                pipeline: draft.name,
+                                version: version,
+                                flow: flow
+                            ))
+                        }
+                    )
+                ) {
                     ForEach(draft.flows) { flow in
                         Text(flow.name).tag(flow.name)
                     }
                 }
                 .labelsHidden()
                 .frame(maxWidth: 160)
-                .onChange(of: model.selectedFlow) {
-                    model.select(nil, registry: session.registry.registry)
-                    guard let draft = model.draft,
-                          let version = model.baseVersion else { return }
-                    model.apply(session.pipelines.layout(
-                        pipeline: draft.name,
-                        version: version,
-                        flow: model.selectedFlow
-                    ))
-                }
 
                 if let version = model.baseVersion {
                     Menu("v\(version)") {
@@ -709,6 +1036,7 @@ struct PipelinesView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                .disabled(!model.semanticEditable)
             }
 
             Button {
@@ -757,19 +1085,47 @@ struct PipelinesView: View {
                 StatusBadge(.fault, word: "\(model.errorCount) errors")
             }
 
-            if model.baseVersion != nil {
+            if model.baseVersion != nil, !model.semanticEditable {
                 Button("Run") {
                     isPresentingRun = true
                 }
                 .help("Run this explicit immutable Pipeline revision.")
             }
 
-            Button(isSaving ? "Saving…" : "Save revision") {
-                Task { await saveRevision() }
+            if model.semanticEditable {
+                Button(isSaving ? "Publishing…" : "Publish revision") {
+                    Task { await saveRevision() }
+                }
+                .disabled(isSaving || model.errorCount > 0 || model.draft == nil)
+            } else if let draft = model.draft, let version = model.baseVersion {
+                Button("New revision") {
+                    model.beginNewRevision()
+                }
+                Button(isSaving ? "Saving…" : "Save layout") {
+                    Task { await saveCurrentLayout() }
+                }
+                .disabled(isSaving || !model.layoutDirty)
+                if model.sourceCapability.capable {
+                    Button("Use as Source") {
+                        appModel.createSource(
+                            using: .init(
+                                pipeline: draft.name,
+                                version: version,
+                                specHash: model.baseHash ?? ""
+                            )
+                        )
+                    }
+                } else {
+                    Button("Use as Source") {}
+                        .disabled(true)
+                        .help(
+                            model.sourceCapability.issues.first?.message
+                                ?? "This revision does not satisfy the Search Source capability."
+                        )
+                }
             }
-            .disabled(isSaving || model.errorCount > 0 || model.draft == nil)
 
-            if model.baseVersion != nil {
+            if model.baseVersion != nil, !model.semanticEditable {
                 Menu {
                     Button("Archive Pipeline", role: .destructive) {
                         Task { await archiveCurrentPipeline() }
@@ -818,30 +1174,96 @@ struct PipelinesView: View {
         isSaving = true
         defer { isSaving = false }
         do {
-            let savedPositions = model.positions
+            let savedFlow = model.selectedFlow
             let parent = model.baseVersion.flatMap { version in
                 session.pipelines.revisions[draft.name]?.first {
                     $0.reference.version == version
                 }
             }
+            model.stashLayout(for: savedFlow)
+            let presentations = Dictionary(
+                uniqueKeysWithValues: draft.flows.map { flow in
+                    let parentLayout = parent.flatMap {
+                        session.pipelines.layout(
+                            pipeline: draft.name,
+                            version: $0.reference.version,
+                            flow: flow.name
+                        )
+                    }
+                    return (
+                        flow.name,
+                        model.presentation(for: flow.name, fallback: parentLayout)
+                    )
+                }
+            )
             try await session.publish(draft: draft, parent: parent)
             guard let published = session.pipelines.revisions[draft.name]?.first else { return }
+            var layouts: [PipelineFlowLayout] = []
+            for flow in published.spec.flows {
+                guard var layout = session.pipelines.layout(
+                    pipeline: draft.name,
+                    version: published.reference.version,
+                    flow: flow.name
+                ), let presentation = presentations[flow.name]
+                else { continue }
+                let nodeIDs = Set(flow.nodes.map(\.id))
+                layout.positions.merge(
+                    presentation.positions.filter { nodeIDs.contains($0.key) }
+                ) { _, saved in saved }
+                layout.positions = layout.positions.filter { nodeIDs.contains($0.key) }
+                layout.groups = presentation.groups.compactMap { original in
+                    var group = original
+                    if group.fields["nodes"] != nil {
+                        group.nodes = group.nodes.filter(nodeIDs.contains)
+                        guard !group.nodes.isEmpty else { return nil }
+                    }
+                    return group
+                }
+                layout.annotations = presentation.annotations
+                layouts.append(layout)
+            }
+            try await session.saveLayouts(layouts)
             model.open(published, registry: session.registry.registry)
-            if var layout = session.pipelines.layout(
+            if published.spec.flows.contains(where: { $0.name == savedFlow }) {
+                model.selectedFlow = savedFlow
+            }
+            model.accept(session.pipelines.layout(
                 pipeline: draft.name,
                 version: published.reference.version,
                 flow: model.selectedFlow
-            ) {
-                layout.positions = savedPositions.mapValues {
-                    PipelineNodePosition(x: $0.x, y: $0.y)
-                }
-                try await session.saveLayout(layout)
-                model.apply(session.pipelines.layout(
-                    pipeline: draft.name,
-                    version: published.reference.version,
-                    flow: model.selectedFlow
-                ))
+            ))
+        } catch {
+            model.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func saveCurrentLayout() async {
+        guard let draft = model.draft, let version = model.baseVersion,
+              var layout = session.pipelines.layout(
+                pipeline: draft.name,
+                version: version,
+                flow: model.selectedFlow
+              )
+        else {
+            model.errorMessage = "The layout ETag is unavailable. Reload this revision."
+            return
+        }
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            layout.positions = model.positions.mapValues {
+                PipelineNodePosition(x: $0.x, y: $0.y)
             }
+            layout.groups = model.groups
+            layout.annotations = model.annotations
+            try await session.saveLayout(layout)
+            model.accept(
+                session.pipelines.layout(
+                    pipeline: draft.name,
+                    version: version,
+                    flow: model.selectedFlow
+                )
+            )
         } catch {
             model.errorMessage = error.localizedDescription
         }
@@ -865,6 +1287,8 @@ struct PipelinesView: View {
                 PipelineNodeInspector(model: model, registry: session.registry.registry)
             case .flow:
                 PipelineFlowInspector(model: model, registry: session.registry.registry)
+            case .parameters:
+                PipelineParameterInspector(model: model, registry: session.registry.registry)
             }
         }
         .background(theme.palette.plate)
@@ -872,26 +1296,45 @@ struct PipelinesView: View {
 }
 
 private struct PipelineRunSheet: View {
-    let pipeline: String
-    let version: Int
-    let flows: [String]
+    let revision: PipelineRevision
     @State var selectedFlow: String
 
     @Environment(BackendSession.self) private var session
     @Environment(\.dismiss) private var dismiss
     @Environment(\.windexTheme) private var theme
-    @State private var inputs = "{}"
-    @State private var parameters = "{}"
+    @State private var inputValues: [String: String]
+    @State private var parameterForm: FormModel
     @State private var priority = 50.0
     @State private var isRunning = false
     @State private var errorMessage: String?
+
+    init(revision: PipelineRevision, selectedFlow: String) {
+        self.revision = revision
+        _selectedFlow = State(initialValue: selectedFlow)
+        _inputValues = State(
+            initialValue: Dictionary(
+                uniqueKeysWithValues: (
+                    revision.spec.flows.first { $0.name == selectedFlow }?.inputs ?? []
+                ).map { ($0.name, "") }
+            )
+        )
+        _parameterForm = State(
+            initialValue: FormModel(params: revision.spec.parameters)
+        )
+    }
+
+    private var currentFlow: PipelineFlow? {
+        revision.spec.flows.first { $0.name == selectedFlow }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: .xs) {
                     StyledText("Run Pipeline", Typography.setLG)
-                    Text("\(pipeline) @ \(version)")
+                    Text(
+                        "\(revision.reference.pipeline) @ \(revision.reference.version)"
+                    )
                         .windexStyle(Typography.data)
                         .foregroundStyle(theme.palette.graphite)
                 }
@@ -910,19 +1353,48 @@ private struct PipelineRunSheet: View {
                     .foregroundStyle(theme.palette.graphite)
 
                     Picker("Flow", selection: $selectedFlow) {
-                        ForEach(flows, id: \.self) { Text($0).tag($0) }
+                        ForEach(revision.spec.flows, id: \.name) {
+                            Text($0.name).tag($0.name)
+                        }
+                    }
+                    .onChange(of: selectedFlow) {
+                        inputValues = Dictionary(
+                            uniqueKeysWithValues: (currentFlow?.inputs ?? []).map {
+                                ($0.name, "")
+                            }
+                        )
                     }
 
-                    jsonEditor(
-                        "Explicit inputs",
-                        help: "A JSON object keyed by declared Flow input.",
-                        text: $inputs
-                    )
-                    jsonEditor(
-                        "Pipeline parameters",
-                        help: "A JSON object of parameter overrides for this Run.",
-                        text: $parameters
-                    )
+                    StyledText("Explicit inputs", Typography.eyebrow)
+                        .foregroundStyle(theme.palette.graphite)
+                    if currentFlow?.inputs.isEmpty != false {
+                        Text("This Flow declares no boundary inputs.")
+                            .windexStyle(Typography.body)
+                            .foregroundStyle(theme.palette.graphite)
+                    }
+                    ForEach(currentFlow?.inputs ?? []) { input in
+                        jsonEditor(
+                            input.displayTitle,
+                            help: "\(input.name) · nominal type \(input.type)",
+                            text: Binding(
+                                get: { inputValues[input.name] ?? "" },
+                                set: { inputValues[input.name] = $0 }
+                            )
+                        )
+                    }
+
+                    StyledText("Pipeline parameters", Typography.eyebrow)
+                        .foregroundStyle(theme.palette.graphite)
+                    if revision.spec.parameters.isEmpty {
+                        Text("This revision declares no Pipeline parameters.")
+                            .windexStyle(Typography.body)
+                            .foregroundStyle(theme.palette.graphite)
+                    } else {
+                        SchemaForm(
+                            model: parameterForm,
+                            configuredSecretReferences: session.sources.configuredSecrets
+                        )
+                    }
 
                     HStack {
                         Text("Priority \(Int(priority))")
@@ -947,7 +1419,13 @@ private struct PipelineRunSheet: View {
                     Task { await queue() }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(isRunning || selectedFlow.isEmpty)
+                .disabled(
+                    isRunning || selectedFlow.isEmpty
+                        || !parameterForm.errors.isEmpty
+                        || inputValues.values.contains {
+                            $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        }
+                )
             }
             .padding(.lg)
         }
@@ -976,14 +1454,22 @@ private struct PipelineRunSheet: View {
         isRunning = true
         defer { isRunning = false }
         do {
-            _ = try decodeObject(inputs)
-            _ = try decodeObject(parameters)
+            let inputs = try inputValues.reduce(
+                into: [String: JSONValue]()
+            ) { values, entry in
+                let raw = entry.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !raw.isEmpty else { return }
+                values[entry.key] = try JSONDecoder().decode(
+                    JSONValue.self,
+                    from: Data(raw.utf8)
+                )
+            }
             _ = try await session.client.runPipeline(
-                pipeline,
-                version: version,
+                revision.reference.pipeline,
+                version: revision.reference.version,
                 flow: selectedFlow,
-                inputs: try decodeObject(inputs),
-                parameters: try decodeObject(parameters),
+                inputs: inputs,
+                parameters: parameterForm.values,
                 priority: Int(priority)
             )
             await session.refreshAll()
@@ -993,28 +1479,6 @@ private struct PipelineRunSheet: View {
         }
     }
 
-    private func decodeObject(_ value: String) throws -> [String: JSONValue] {
-        guard let data = value.data(using: .utf8) else {
-            throw PipelineRunFormError.invalidJSON
-        }
-        do {
-            return try JSONDecoder().decode([String: JSONValue].self, from: data)
-        } catch {
-            throw PipelineRunFormError.json(error.localizedDescription)
-        }
-    }
-}
-
-private enum PipelineRunFormError: LocalizedError {
-    case invalidJSON
-    case json(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidJSON: "Enter a JSON object."
-        case .json(let message): "The JSON object is invalid: \(message)"
-        }
-    }
 }
 
 private struct PipelineDraftRow: View {
@@ -1064,6 +1528,50 @@ private struct PipelineCanvas: View {
                     drawEdges(context: &context)
                 }
 
+                ForEach(model.groups) { group in
+                    ZStack(alignment: .topLeading) {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(theme.palette.cyan.opacity(0.04))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(
+                                        theme.palette.cyan.opacity(0.45),
+                                        style: StrokeStyle(
+                                            lineWidth: 1,
+                                            dash: [7, 5]
+                                        )
+                                    )
+                            }
+                        Text(group.title)
+                            .windexStyle(Typography.eyebrow)
+                            .foregroundStyle(theme.palette.cyan)
+                            .padding(.xs)
+                    }
+                    .frame(width: group.width, height: group.height)
+                    .position(
+                        x: group.x + group.width / 2,
+                        y: group.y + group.height / 2
+                    )
+                }
+
+                ForEach(model.annotations) { annotation in
+                    Text(annotation.text)
+                        .windexStyle(Typography.body)
+                        .foregroundStyle(theme.palette.graphite)
+                        .padding(.sm)
+                        .frame(
+                            width: annotation.width,
+                            height: annotation.height,
+                            alignment: .topLeading
+                        )
+                        .background(theme.palette.plate.opacity(0.92))
+                        .overlay(Rectangle().stroke(theme.palette.rule))
+                        .position(
+                            x: annotation.x + annotation.width / 2,
+                            y: annotation.y + annotation.height / 2
+                        )
+                }
+
                 if let flow = model.currentFlow {
                     ForEach(Array(flow.nodes.enumerated()), id: \.element.id) { index, node in
                         let position = model.position(for: node.id, index: index)
@@ -1074,6 +1582,7 @@ private struct PipelineCanvas: View {
                             position: position,
                             selected: model.selectedNodeID == node.id,
                             connecting: model.pendingConnectionSource == node.id,
+                            semanticEditable: model.semanticEditable,
                             select: {
                                 model.select(node.id, registry: registry)
                                 model.rightPane = .inspector
@@ -1139,6 +1648,7 @@ private struct PipelineCanvasNode: View {
     let position: CGPoint
     let selected: Bool
     let connecting: Bool
+    let semanticEditable: Bool
     let select: () -> Void
     let beginConnection: () -> Void
     let finishConnection: () -> Void
@@ -1193,7 +1703,7 @@ private struct PipelineCanvasNode: View {
                     }
                     .onEnded { _ in dragOrigin = nil })
 
-            if kind?.inputType != nil {
+            if semanticEditable, kind?.inputType != nil {
                 Button(action: finishConnection) {
                     Circle()
                         .fill(theme.palette.ink)
@@ -1205,7 +1715,7 @@ private struct PipelineCanvasNode: View {
                 .offset(x: -100)
             }
 
-            if kind?.outputType != nil {
+            if semanticEditable, kind?.outputType != nil {
                 Button(action: beginConnection) {
                     Circle()
                         .fill(connecting ? theme.palette.cyan : theme.palette.ink)
@@ -1257,7 +1767,7 @@ private struct ModulePalette: View {
                                     .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
-                                .disabled(model.draft == nil)
+                                .disabled(model.draft == nil || !model.semanticEditable)
                             }
                         }
                     }
@@ -1301,6 +1811,7 @@ private struct ModulePalette: View {
 private struct PipelineNodeInspector: View {
     @Bindable var model: PipelineComposerModel
     let registry: PipelineRegistry?
+    @Environment(BackendSession.self) private var session
     @State private var nodeName = ""
     @Environment(\.windexTheme) private var theme
 
@@ -1312,6 +1823,7 @@ private struct PipelineNodeInspector: View {
                         StyledText(node.id, Typography.masthead)
                         TextField("Node name", text: $nodeName)
                             .textFieldStyle(.roundedBorder)
+                            .disabled(!model.semanticEditable)
                             .onSubmit {
                                 guard let registry else { return }
                                 model.renameSelectedNode(
@@ -1351,20 +1863,36 @@ private struct PipelineNodeInspector: View {
                                                 "Disconnect \(edge.from.id) from \(edge.to.id)")
                                     }
                                     .buttonStyle(.plain)
+                                    .disabled(!model.semanticEditable)
                                 }
                             }
+                        }
+                    }
+
+                    if let module = registry?.module(node.module),
+                       !module.fields.isEmpty {
+                        Hairline()
+                        StyledText("Field bindings", Typography.eyebrow)
+                            .foregroundStyle(theme.palette.graphite)
+                        ForEach(module.fields) { field in
+                            bindingControl(field, node: node)
                         }
                     }
 
                     if let form = model.nodeForm, !form.params.isEmpty {
                         Hairline()
                         SchemaForm(model: form)
+                            .disabled(!model.semanticEditable)
                         HStack {
                             Button("Apply configuration") {
                                 guard let registry else { return }
                                 model.applyNodeForm(registry: registry)
                             }
-                            .disabled(!form.isDirty || !form.errors.isEmpty)
+                            .disabled(
+                                !model.semanticEditable
+                                    || !form.isDirty
+                                    || !form.errors.isEmpty
+                            )
                             Spacer()
                         }
                     } else {
@@ -1375,17 +1903,23 @@ private struct PipelineNodeInspector: View {
 
                     Hairline()
                     HStack {
+                        Button("Group Node") {
+                            model.groupSelectedNode()
+                            model.rightPane = .flow
+                        }
                         Button("Duplicate Node") {
                             guard let registry else { return }
                             model.duplicateSelectedNode(registry: registry)
                         }
                         .keyboardShortcut("d", modifiers: .command)
+                        .disabled(!model.semanticEditable)
 
                         Button("Remove Node", role: .destructive) {
                             guard let registry else { return }
                             model.removeSelectedNode(registry: registry)
                         }
                         .keyboardShortcut(.delete, modifiers: [])
+                        .disabled(!model.semanticEditable)
                     }
                 } else {
                     StyledText("Inspector", Typography.masthead)
@@ -1426,6 +1960,100 @@ private struct PipelineNodeInspector: View {
         guard let selectedNodeID = model.selectedNodeID else { return nil }
         return model.currentFlow?.nodes.first { $0.id == selectedNodeID }
     }
+
+    @ViewBuilder
+    private func bindingControl(_ field: Param, node: PipelineNode) -> some View {
+        let options = NodeBindingOptions(
+            field: field,
+            parameters: model.draft?.parameters ?? [],
+            configuredSecrets: session.sources.configuredSecrets
+        )
+        let value = node.config[field.key] ?? .literal(field.initialValue ?? .string(""))
+        VStack(alignment: .leading, spacing: .xs) {
+            Text(field.title)
+                .windexStyle(Typography.label)
+            Picker(
+                "Binding",
+                selection: Binding(
+                    get: { value.bindingMode },
+                    set: { mode in
+                        guard let registry else { return }
+                        let replacement: NodeConfigValue
+                        switch mode {
+                        case .literal:
+                            replacement = .literal(field.initialValue ?? .string(""))
+                        case .pipelineParameter:
+                            guard let key = options.parameterKeys.first else { return }
+                            replacement = .parameter(key)
+                        case .secretReference:
+                            guard let name = options.secretNames.first else { return }
+                            replacement = .secret(name)
+                        }
+                        model.setNodeBinding(
+                            field: field.key,
+                            value: replacement,
+                            registry: registry
+                        )
+                    }
+                )
+            ) {
+                Text("Literal").tag(NodeBindingMode.literal)
+                if options.supports(.pipelineParameter) {
+                    Text("Pipeline parameter").tag(NodeBindingMode.pipelineParameter)
+                }
+                if options.supports(.secretReference) {
+                    Text("Secret reference").tag(NodeBindingMode.secretReference)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(!model.semanticEditable)
+
+            switch value {
+            case .parameter(let selected):
+                Picker(
+                    "Parameter",
+                    selection: Binding(
+                        get: { selected },
+                        set: { key in
+                            guard let registry else { return }
+                            model.setNodeBinding(
+                                field: field.key,
+                                value: .parameter(key),
+                                registry: registry
+                            )
+                        }
+                    )
+                ) {
+                    ForEach(options.parameterKeys, id: \.self) { Text($0).tag($0) }
+                }
+                .disabled(!model.semanticEditable)
+            case .secret(let selected):
+                Picker(
+                    "Secret",
+                    selection: Binding(
+                        get: { selected },
+                        set: { name in
+                            guard let registry else { return }
+                            model.setNodeBinding(
+                                field: field.key,
+                                value: .secret(name),
+                                registry: registry
+                            )
+                        }
+                    )
+                ) {
+                    ForEach(options.secretNames, id: \.self) { Text($0).tag($0) }
+                }
+                .disabled(!model.semanticEditable)
+            case .literal:
+                Text("Edit the literal value in the form below.")
+                    .windexStyle(Typography.dataSM)
+                    .foregroundStyle(theme.palette.graphite)
+            }
+        }
+        .padding(.sm)
+        .background(theme.palette.ink)
+    }
 }
 
 private struct PipelineFlowInspector: View {
@@ -1455,6 +2083,7 @@ private struct PipelineFlowInspector: View {
                             set: { _ in
                                 model.toggleRefresh(registry: registry)
                             }))
+                    .disabled(!model.semanticEditable)
 
                     Hairline()
                     boundaries(
@@ -1466,6 +2095,9 @@ private struct PipelineFlowInspector: View {
                         "Outputs",
                         values: flow.outputs,
                         owner: .output)
+
+                    Hairline()
+                    layoutObjects(flow: flow)
 
                     Hairline()
                     StyledText("Search Source rails", Typography.eyebrow)
@@ -1484,6 +2116,21 @@ private struct PipelineFlowInspector: View {
                     )
                     .windexStyle(Typography.body)
                     .foregroundStyle(theme.palette.graphite)
+                    if !model.semanticEditable {
+                        checklist(
+                            "Published Source capability",
+                            satisfied: model.sourceCapability.capable
+                        )
+                        ForEach(model.sourceCapability.issues) { issue in
+                            Text("\(issue.path): \(issue.message)")
+                                .windexStyle(Typography.dataSM)
+                                .foregroundStyle(
+                                    issue.severity == .error
+                                        ? theme.palette.rust
+                                        : theme.palette.amber
+                                )
+                        }
+                    }
                 } else {
                     Text("Choose a Flow.")
                         .windexStyle(Typography.body)
@@ -1520,6 +2167,7 @@ private struct PipelineFlowInspector: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .disabled(registry?.portTypes.isEmpty != false)
+                .disabled(!model.semanticEditable)
             }
 
             if values.isEmpty {
@@ -1548,7 +2196,105 @@ private struct PipelineFlowInspector: View {
                             .accessibilityLabel("Remove \(boundary.displayTitle)")
                     }
                     .buttonStyle(.plain)
+                    .disabled(!model.semanticEditable)
                 }
+            }
+        }
+    }
+
+    private func layoutObjects(flow: PipelineFlow) -> some View {
+        VStack(alignment: .leading, spacing: .sm) {
+            HStack {
+                StyledText("Layout groups", Typography.eyebrow)
+                    .foregroundStyle(theme.palette.graphite)
+                Spacer()
+                Button("Add annotation") {
+                    model.addAnnotation()
+                }
+            }
+            if model.groups.isEmpty {
+                Text("Select a Node and choose Group Node to create a visual group.")
+                    .windexStyle(Typography.dataSM)
+                    .foregroundStyle(theme.palette.graphite)
+            }
+            ForEach(model.groups) { group in
+                VStack(alignment: .leading, spacing: .xs) {
+                    HStack {
+                        TextField(
+                            "Group title",
+                            text: Binding(
+                                get: { group.title },
+                                set: { title in
+                                    var updated = group
+                                    updated.title = title
+                                    model.updateGroup(updated)
+                                }
+                            )
+                        )
+                        Menu("Nodes") {
+                            ForEach(flow.nodes) { node in
+                                Button {
+                                    var updated = group
+                                    if updated.nodes.contains(node.id) {
+                                        updated.nodes.removeAll { $0 == node.id }
+                                    } else {
+                                        updated.nodes.append(node.id)
+                                    }
+                                    model.updateGroup(updated)
+                                } label: {
+                                    Label(
+                                        node.id,
+                                        systemImage: group.nodes.contains(node.id)
+                                            ? "checkmark"
+                                            : "circle"
+                                    )
+                                }
+                            }
+                        }
+                        Button(role: .destructive) {
+                            model.removeGroup(group.id)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Text(group.nodes.isEmpty
+                         ? "No Nodes"
+                         : group.nodes.joined(separator: ", "))
+                        .windexStyle(Typography.dataSM)
+                        .foregroundStyle(theme.palette.graphite)
+                }
+                .padding(.sm)
+                .background(theme.palette.ink)
+            }
+
+            if !model.annotations.isEmpty {
+                StyledText("Annotations", Typography.eyebrow)
+                    .foregroundStyle(theme.palette.graphite)
+            }
+            ForEach(model.annotations) { annotation in
+                HStack {
+                    TextField(
+                        "Annotation",
+                        text: Binding(
+                            get: { annotation.text },
+                            set: { text in
+                                var updated = annotation
+                                updated.text = text
+                                model.updateAnnotation(updated)
+                            }
+                        ),
+                        axis: .vertical
+                    )
+                    Button(role: .destructive) {
+                        model.removeAnnotation(annotation.id)
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.sm)
+                .background(theme.palette.ink)
             }
         }
     }
@@ -1563,5 +2309,243 @@ private struct PipelineFlowInspector: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(label), \(satisfied ? "satisfied" : "incomplete")")
+    }
+}
+
+private struct PipelineParameterInspector: View {
+    @Bindable var model: PipelineComposerModel
+    let registry: PipelineRegistry?
+    @Environment(\.windexTheme) private var theme
+
+    @State private var previousKey: String?
+    @State private var key = ""
+    @State private var title = ""
+    @State private var detail = ""
+    @State private var kind = "str"
+    @State private var required = false
+    @State private var stage = Param.Stage.runtime
+    @State private var defaultJSON = ""
+    @State private var choices = ""
+    @State private var minimum = ""
+    @State private var maximum = ""
+    @State private var allowedSecrets = ""
+    @State private var errorMessage: String?
+
+    private let kinds: [(String, String)] = [
+        ("String", "str"),
+        ("Integer", "int"),
+        ("Float", "float"),
+        ("Boolean", "bool"),
+        ("Choice", "choice"),
+        ("URL", "url"),
+        ("URL list", "url_list"),
+        ("Date", "date"),
+        ("Duration", "duration"),
+        ("Secret reference", "secret_ref"),
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: .lg) {
+                HStack {
+                    StyledText("Parameters", Typography.masthead)
+                    Spacer()
+                    Button("New") { beginNew() }
+                        .disabled(!model.semanticEditable)
+                }
+                Text(
+                    "Declare typed Pipeline values here. Node fields can bind to compatible declarations in the Node inspector."
+                )
+                .windexStyle(Typography.body)
+                .foregroundStyle(theme.palette.graphite)
+
+                if let parameters = model.draft?.parameters, !parameters.isEmpty {
+                    ForEach(parameters) { parameter in
+                        Button {
+                            edit(parameter)
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: .xxs) {
+                                    Text(parameter.title)
+                                        .windexStyle(Typography.label)
+                                    Text(
+                                        "\(parameter.key) · \(parameter.kind.rawValue) · \(parameter.stage.rawValue)"
+                                    )
+                                    .windexStyle(Typography.dataSM)
+                                    .foregroundStyle(theme.palette.graphite)
+                                }
+                                Spacer()
+                                if parameter.required {
+                                    StatusBadge(.attention, word: "required")
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Hairline()
+                }
+
+                if previousKey != nil || !key.isEmpty {
+                    Group {
+                        TextField("Key", text: $key)
+                        TextField("Title", text: $title)
+                        TextField("Description", text: $detail, axis: .vertical)
+                    }
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!model.semanticEditable)
+
+                    Picker("Kind", selection: $kind) {
+                        ForEach(kinds, id: \.1) { value in
+                            Text(value.0).tag(value.1)
+                        }
+                    }
+                    .disabled(!model.semanticEditable)
+                    Picker("Stage", selection: $stage) {
+                        Text("Runtime").tag(Param.Stage.runtime)
+                        Text("Install").tag(Param.Stage.install)
+                    }
+                    .disabled(!model.semanticEditable)
+                    Toggle("Required", isOn: $required)
+                        .disabled(!model.semanticEditable)
+                    TextField(
+                        "Default as JSON (optional)",
+                        text: $defaultJSON
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!model.semanticEditable)
+                    if kind == "choice" {
+                        TextField("Choices, comma separated", text: $choices)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(!model.semanticEditable)
+                    }
+                    if kind == "int" || kind == "float" {
+                        HStack {
+                            TextField("Minimum (optional)", text: $minimum)
+                            TextField("Maximum (optional)", text: $maximum)
+                        }
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!model.semanticEditable)
+                    }
+                    if kind == "secret_ref" {
+                        TextField(
+                            "Allowed secret names, comma separated",
+                            text: $allowedSecrets
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!model.semanticEditable)
+                    }
+
+                    HStack {
+                        Button(previousKey == nil ? "Add parameter" : "Save parameter") {
+                            save()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(
+                            !model.semanticEditable
+                                || key.trimmingCharacters(in: .whitespaces).isEmpty
+                        )
+                        if let previousKey {
+                            Button("Remove", role: .destructive) {
+                                model.removeParameter(previousKey, registry: registry)
+                                beginNew()
+                            }
+                            .disabled(!model.semanticEditable)
+                        }
+                    }
+                } else {
+                    Text("Choose a parameter or create a new declaration.")
+                        .windexStyle(Typography.body)
+                        .foregroundStyle(theme.palette.graphite)
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .windexStyle(Typography.body)
+                        .foregroundStyle(theme.palette.rust)
+                }
+            }
+            .padding(.md)
+        }
+    }
+
+    private func beginNew() {
+        previousKey = nil
+        key = "parameter_\((model.draft?.parameters.count ?? 0) + 1)"
+        title = ""
+        detail = ""
+        kind = "str"
+        required = false
+        stage = .runtime
+        defaultJSON = ""
+        choices = ""
+        minimum = ""
+        maximum = ""
+        allowedSecrets = ""
+        errorMessage = nil
+    }
+
+    private func edit(_ parameter: Param) {
+        previousKey = parameter.key
+        key = parameter.key
+        title = parameter.title
+        detail = parameter.description
+        kind = parameter.kind.rawValue
+        required = parameter.required
+        stage = parameter.stage
+        choices = parameter.choices.joined(separator: ", ")
+        minimum = parameter.lo.map { String($0) } ?? ""
+        maximum = parameter.hi.map { String($0) } ?? ""
+        allowedSecrets = parameter.allow.joined(separator: ", ")
+        if let value = parameter.defaultValue,
+           let data = try? JSONEncoder().encode(value) {
+            defaultJSON = String(decoding: data, as: UTF8.self)
+        } else {
+            defaultJSON = ""
+        }
+        errorMessage = nil
+    }
+
+    private func save() {
+        do {
+            let value: JSONValue?
+            if defaultJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                value = nil
+            } else {
+                value = try JSONDecoder().decode(
+                    JSONValue.self,
+                    from: Data(defaultJSON.utf8)
+                )
+            }
+            let definition = PipelineParameterDefinition(
+                key: key.trimmingCharacters(in: .whitespacesAndNewlines),
+                kind: Param.Kind(rawValue: kind) ?? .unknown(kind),
+                title: title,
+                description: detail,
+                required: required,
+                stage: stage,
+                defaultValue: value,
+                choices: choices.split(separator: ",").map {
+                    $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                }.filter { !$0.isEmpty },
+                minimum: Double(minimum),
+                maximum: Double(maximum),
+                allowedSecrets: allowedSecrets.split(separator: ",").map {
+                    $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                }.filter { !$0.isEmpty }
+            )
+            if let previousKey {
+                model.updateParameter(
+                    previousKey: previousKey,
+                    definition: definition,
+                    registry: registry
+                )
+            } else {
+                model.addParameter(definition, registry: registry)
+            }
+            edit(try definition.parameter())
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }

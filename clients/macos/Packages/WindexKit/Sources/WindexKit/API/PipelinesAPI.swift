@@ -23,13 +23,8 @@ private struct PipelineRevisionBody: Codable, Sendable {
 }
 
 private struct LayoutBody: Codable, Sendable {
-    struct Payload: Codable, Sendable {
-        let nodes: [String: PipelineNodePosition]
-        let groups: [String: [String]]
-        let annotations: [String: String]
-    }
     let flowName: String
-    let layout: Payload
+    let layout: [String: JSONValue]
     enum CodingKeys: String, CodingKey {
         case flowName = "flow_name"
         case layout
@@ -136,8 +131,7 @@ extension WindexClient {
             surface: .admin,
             body: LayoutBody(
                 flowName: layout.flow,
-                layout: .init(nodes: layout.positions, groups: layout.groups,
-                              annotations: layout.annotations)
+                layout: try layout.wirePayload()
             ),
             headers: ["If-Match": etag], as: PipelineLayoutWire.self
         )
