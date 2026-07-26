@@ -15,6 +15,7 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
+    Request,
     Response,
 )
 from fastapi.responses import StreamingResponse
@@ -730,12 +731,78 @@ def _push_contract(source: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _entity_tag_values(value: str) -> list[str] | None:
+    """Parse an HTTP entity-tag list, returning opaque values without weakness.
+
+    Entity-tag comparison for ``If-None-Match`` on a GET uses the weak
+    comparison function: ``W/"tag"`` and ``"tag"`` identify the same selected
+    representation.  A small parser is preferable to splitting on commas
+    because comma is legal inside an opaque tag.
+    """
+    values: list[str] = []
+    offset = 0
+    length = len(value)
+
+    while offset < length:
+        while offset < length and value[offset] in " \t":
+            offset += 1
+        if offset == length:
+            break
+        # Be liberal about empty list members while still rejecting malformed
+        # entity tags. RFC list syntax permits recipients to ignore them.
+        if value[offset] == ",":
+            offset += 1
+            continue
+        if value.startswith("W/", offset):
+            offset += 2
+        if offset >= length or value[offset] != '"':
+            return None
+        offset += 1
+        start = offset
+        while offset < length and value[offset] != '"':
+            codepoint = ord(value[offset])
+            if codepoint != 0x21 and not (0x23 <= codepoint <= 0x7E) \
+                    and codepoint < 0x80:
+                return None
+            offset += 1
+        if offset >= length:
+            return None
+        values.append(value[start:offset])
+        offset += 1
+        while offset < length and value[offset] in " \t":
+            offset += 1
+        if offset < length:
+            if value[offset] != ",":
+                return None
+            offset += 1
+
+    return values
+
+
+def _if_none_match_matches(value: str | None, etag: str) -> bool:
+    if value is None:
+        return False
+    if value.strip() == "*":
+        return True
+    candidates = _entity_tag_values(value)
+    current = _entity_tag_values(etag)
+    return (
+        candidates is not None
+        and current is not None
+        and len(current) == 1
+        and current[0] in candidates
+    )
+
+
 @router.get("/registry", response_model=RegistryResponse)
-def canonical_registry(response: Response) -> dict[str, Any]:
+def canonical_registry(request: Request, response: Response) -> Any:
     with db.pooled(get_settings().pg_dsn) as conn:
         registry.load_custom(conn)
     document = registry.describe()
-    response.headers["ETag"] = f'"{document["registry_digest"]}"'
+    etag = f'"{document["registry_digest"]}"'
+    if _if_none_match_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers={"ETag": etag})
+    response.headers["ETag"] = etag
     return document
 
 
