@@ -265,9 +265,11 @@ def source_scheduler(
         prune_expired_artifacts,
         tick,
     )
+    from windex.pipeline.maintenance import prune_pipeline_storage
 
     settings = get_settings()
     last_maintenance: float | None = None
+    last_pipeline_gc: float | None = None
     stopping = threading.Event()
     previous_term = signal.signal(
         signal.SIGTERM, lambda _signum, _frame: stopping.set())
@@ -282,6 +284,13 @@ def source_scheduler(
                         maintain_partitions(conn)
                         prune_expired_artifacts(conn, settings)
                         last_maintenance = time.monotonic()
+                    if (
+                        last_pipeline_gc is None
+                        or time.monotonic() - last_pipeline_gc
+                        >= settings.pipeline_gc_interval_seconds
+                    ):
+                        prune_pipeline_storage(conn, settings)
+                        last_pipeline_gc = time.monotonic()
                     arm_unplanned(conn)
                     result = tick(conn)
                 if result.fired or result.coalesced or result.failed:

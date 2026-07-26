@@ -108,8 +108,25 @@ metric when process liveness independent of work availability is required.
 | `windex_storage_free_bytes` | `tier` | Available storage bytes |
 | `windex_storage_total_bytes` | `tier` | Total storage bytes |
 | `windex_storage_min_free_bytes` | `tier` | Configured free-space reserve |
+| `windex_storage_gc_last_run_timestamp_seconds` | — | Latest DB-recorded Pipeline storage cleanup pass |
+| `windex_storage_gc_deleted_files` | `kind` | Files removed in the latest cleanup pass |
+| `windex_storage_gc_deleted_bytes` | `kind` | Bytes removed in the latest cleanup pass |
+| `windex_storage_gc_errors` | — | Isolated errors in the latest cleanup pass |
+| `windex_storage_gc_cap_reached` | `cap` | Latest pass reached its `files` or `bytes` safety budget |
 | `windex_query_breaker_state` | `state` | One-hot query embedding breaker state |
 | `windex_build_info` | `version` | Build identity |
+
+The Source scheduler also performs DB-aware cleanup of Pipeline-owned
+transients. It considers wire and coverage files, sliced extract/fetch scratch,
+`<source>/pipeline/<run>/` parquet batches, and disposable `http.download`
+outputs. A file is removed only when its Run is terminal and past
+`WINDEX_PIPELINE_GC_TERMINAL_RETENTION_SECONDS`, the file itself is past
+`WINDEX_PIPELINE_GC_MIN_FILE_AGE_SECONDS`, and no active Run, task output,
+capture, coverage row, or `documents.text_ref` references it. `keep: true`
+downloads, unknown ownership, symlinks, paths outside the managed roots, and
+the separately retained `run_artifacts` store are never collected by this
+pass. File and byte budgets bound each pass; isolated failures are retried on a
+later pass and recorded as `storage.gc.completed` operational events.
 
 ### Request and search events
 

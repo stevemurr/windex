@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +22,18 @@ class Settings(BaseSettings):
     # failure than the one the move fixed. Jobs that stage new text check this first
     # and decline rather than fill the disk. 0 disables the check.
     storage_min_free_bytes: int = 100 * 1024 ** 3   # 100 GiB
+    # Bounded, DB-aware cleanup of Pipeline-owned transient files. A terminal
+    # Run's files must be older than both the Run retention and the file-age
+    # grace before the scheduler may remove them. The 64 GiB byte budget is
+    # deliberately larger than one observed 22 GiB Wiki shard, while still
+    # bounding each maintenance pass.
+    pipeline_gc_interval_seconds: int = Field(default=3600, ge=1)
+    pipeline_gc_terminal_retention_seconds: int = Field(
+        default=24 * 3600, ge=0)
+    pipeline_gc_min_file_age_seconds: int = Field(default=3600, ge=0)
+    pipeline_gc_max_files_per_tick: int = Field(default=500, ge=1)
+    pipeline_gc_max_bytes_per_tick: int = Field(
+        default=64 * 1024 ** 3, ge=1)
     pg_dsn: str = "postgresql://windex:windex@127.0.0.1:5432/windex"
     qdrant_url: str = "http://127.0.0.1:6333"
     # Base URL of the Grafana that scrapes windex's /metrics (the ops box at
