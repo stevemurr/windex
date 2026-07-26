@@ -424,7 +424,7 @@ _EXTRACT = (
                    help="Was cpu_count()-2, which forked 18 extraction processes on "
                         "a 20-core box and is the prime suspect for the memory-"
                         "pressure resets. Capped deliberately."),
-                _p("records_per_slice", "int", lo=250, hi=10_000, default=2000,
+                _p("records_per_slice", "int", lo=250, hi=10_000, default=1500,
                    help="Maximum WARC response records per durable worker slice. "
                         "The default keeps a 1GB CC-News shard within the two-minute "
                         "cooperative scheduling budget on the production host."),

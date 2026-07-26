@@ -18,7 +18,7 @@ from windex.modules.common import (
 from windex.pipeline.ports import ExtractedDoc, RawBlob
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
-_RECORDS_PER_SLICE = 2_000
+_RECORDS_PER_SLICE = 1_500
 _INPUT_COUNT = "warc_input_documents"
 
 

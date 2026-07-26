@@ -88,7 +88,7 @@ def test_warc_extraction_resumes_in_durable_record_chunks(
         config={
             "language": "en",
             "workers": 1,
-            "records_per_slice": 2_000,
+            "records_per_slice": 1_500,
         },
         run_id=17,
         task_id=76,
@@ -101,33 +101,38 @@ def test_warc_extraction_resumes_in_durable_record_chunks(
     second = warc.warc_datatrove(ctx)
     third = warc.warc_datatrove(ctx)
     fourth = warc.warc_datatrove(ctx)
+    fifth = warc.warc_datatrove(ctx)
     terminal = warc.warc_datatrove(ctx)
 
     assert calls == [
-        (0, 2000),
-        (2000, 2000),
-        (4000, 2000),
-        (6000, 2000),
+        (0, 1500),
+        (1500, 1500),
+        (3000, 1500),
+        (4500, 1500),
+        (6000, 1500),
     ]
     assert [item["key"] for item in completed] == [
         "download:1#records=0",
-        "download:1#records=2000",
-        "download:1#records=4000",
+        "download:1#records=1500",
+        "download:1#records=3000",
+        "download:1#records=4500",
         "download:1",
     ]
     assert [
         item["counts"]["warc_input_documents"] for item in completed
-    ] == [2000, 2000, 2000, 1250]
+    ] == [1500, 1500, 1500, 1500, 1250]
     assert [
         first.exhausted,
         second.exhausted,
         third.exhausted,
         fourth.exhausted,
+        fifth.exhausted,
     ] == [
+        False,
         False,
         False,
         False,
         True,
     ]
     assert terminal.exhausted is True
-    assert len(heartbeats) == 4
+    assert len(heartbeats) == 5
