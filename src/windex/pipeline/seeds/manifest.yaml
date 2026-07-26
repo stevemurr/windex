@@ -1,0 +1,131 @@
+schema: windex.pipeline-seeds/1
+pipelines:
+  arxiv:
+    title: arXiv papers
+    description: OAI-PMH metadata harvest over date windows.
+    builtin: true
+    source:
+      name: arxiv
+      search_name: arxiv
+      id_prefix: "arxiv:"
+      collection_key: arxiv
+      search_profile: arxiv
+      include_in_all: true
+      state_namespace: arxiv
+      ingress: pull
+  ccnews:
+    title: Common Crawl News
+    description: Common Crawl News documents.
+    builtin: true
+    source:
+      name: ccnews
+      search_name: news
+      id_prefix: "news:"
+      collection_key: news
+      search_profile: news
+      include_in_all: true
+      state_namespace: ccnews
+      ingress: pull
+  crawl:
+    title: Web cluster crawl
+    description: Reusable bounded web crawl Pipeline.
+    builtin: true
+    source: null
+  custom:
+    title: Pushed documents
+    description: Reusable pushed-document Pipeline template.
+    builtin: true
+    source: null
+  docs:
+    title: Programming documentation
+    description: DevDocs documentation bundles.
+    builtin: true
+    source:
+      name: docs
+      search_name: docs
+      id_prefix: "docs:"
+      collection_key: docs
+      search_profile: docs
+      include_in_all: true
+      state_namespace: docs
+      ingress: pull
+  gh:
+    title: GitHub projects
+    description: GitHub project discovery, hydration, and composition.
+    builtin: true
+    source:
+      name: gh
+      search_name: github
+      id_prefix: "gh:"
+      collection_key: repos
+      search_profile: repos
+      include_in_all: true
+      state_namespace: gh
+      ingress: pull
+      values:
+        tokens: github_tokens
+  hf:
+    title: Hugging Face docs and blog
+    description: Hugging Face documentation, courses, and posts.
+    builtin: true
+    source:
+      name: hf
+      search_name: hf
+      id_prefix: "hf:"
+      collection_key: hf
+      search_profile: hf
+      include_in_all: true
+      state_namespace: hf
+      ingress: pull
+  hn:
+    title: Hacker News
+    description: Hacker News stories.
+    builtin: true
+    source:
+      name: hn
+      search_name: hn
+      id_prefix: "hn:"
+      collection_key: hn
+      search_profile: hn
+      include_in_all: true
+      state_namespace: hn
+      ingress: pull
+  memory:
+    title: Chat memory
+    description: Private pushed conversation memory.
+    builtin: true
+    source:
+      name: memory
+      search_name: memory
+      id_prefix: "memory:"
+      collection_key: memory
+      search_profile: memory
+      include_in_all: false
+      state_namespace: memory
+      ingress: push
+  smallweb:
+    title: Small Web
+    description: Kagi Small Web feeds.
+    builtin: true
+    source:
+      name: smallweb
+      search_name: smallweb
+      id_prefix: "smallweb:"
+      collection_key: smallweb
+      search_profile: smallweb
+      include_in_all: true
+      state_namespace: smallweb
+      ingress: pull
+  wiki:
+    title: Wikipedia
+    description: Wikipedia CirrusSearch dump shards.
+    builtin: true
+    source:
+      name: wiki
+      search_name: wiki
+      id_prefix: "wiki:"
+      collection_key: wiki
+      search_profile: wiki
+      include_in_all: true
+      state_namespace: wiki
+      ingress: pull

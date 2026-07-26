@@ -13,9 +13,12 @@ plane that silently discarded 145 of 199 properties — 19 of the 22 on
 A client generated from the raw document compiles, looks plausible, and is
 missing almost everything.
 
-Collapsing the union to its non-null branch is exactly equivalent here: the
-affected keys are absent from `required`, so the generator emits them as Swift
-optionals, which is what `X | None` meant in the first place.
+Collapsing the union to its non-null branch is equivalent only when the key is
+also absent from `required`. FastAPI sometimes emits nullable response fields as
+both required and `X | None`: the key is always present on the wire, but its
+value may be null. Swift models represent that as an optional too, so this
+normalizer removes nullable property names from the surrounding `required`
+array before collapsing their unions.
 
 This runs at GENERATION time only, on a copy. The checked-in
 `openapi-admin.json` is the server's own artifact and is never modified — and
@@ -71,6 +74,25 @@ def normalize(node):
         if name in DOMAIN_OWNED:
             _replaced += 1
             return dict(_OPEN_OBJECT)
+
+    properties = node.get("properties")
+    required = node.get("required")
+    if isinstance(properties, dict) and isinstance(required, list):
+        nullable_required = {
+            name
+            for name, schema in properties.items()
+            if isinstance(schema, dict)
+            and isinstance(schema.get("anyOf"), list)
+            and any(
+                isinstance(alt, dict) and alt.get("type") == "null"
+                for alt in schema["anyOf"]
+            )
+        }
+        if nullable_required:
+            node = {
+                **node,
+                "required": [name for name in required if name not in nullable_required],
+            }
 
     node = {key: normalize(value) for key, value in node.items()}
 

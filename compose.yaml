@@ -1,6 +1,6 @@
 # windex — full stack for rootless podman on the Spark (DGX GB10).
 #   data plane : postgres 16 + qdrant 1.18.2 (on the local NVMe)
-#   app plane  : windex serve + the 9 embed-loops (built from ./Containerfile)
+#   app plane  : API + Source scheduler + Pipeline workers + Module sandbox
 #
 # The models (litellm gateway + vLLM) run in a SEPARATE podman project; windex reaches
 # the gateway at host.containers.internal:4000 (host-published), so it stays decoupled
@@ -10,10 +10,6 @@
 #   podman build -t localhost/windex-app:latest -f Containerfile .
 # Bring up:
 #   podman-compose -p windex -f compose.yaml up -d
-#
-# The `windex-scheduler` service runs the editable job scheduler (fires the due
-# ingest/daily/maintain entries in the `schedule` table). It WRITES parquet during
-# harvest, so it needs WINDEX_DATA_ROOT mounted rw, like every other app service.
 #
 # Data lives OUTSIDE the repo, all of it on the local NVMe:
 #   ${WINDEX_STACK_DATA:-/home/murr/windex-stack}  pgdata + qdrant storage
@@ -64,10 +60,9 @@ x-windex-app: &windex-app
         - qdrant
     restart: always
 
-x-windex-loop: &windex-loop
+x-windex-worker: &windex-worker
     <<: *windex-app
-    # embed-loops READ parquet + WRITE vectors to Qdrant; some (gh) also re-clean and
-    # WRITE parquet to the staging dir — mount is now rw (external drive remounted rw).
+    # Pipeline workers read/write generation-scoped staging and artifacts.
     volumes:
         # Host path and container path are THE SAME on purpose: both sides
         # interpolate one variable, so `WINDEX_DATA_ROOT` means the same thing to a
@@ -109,7 +104,7 @@ services:
             - "127.0.0.1:6334:6334"
         restart: unless-stopped
 
-    # --- App: REST API + dashboard + /metrics ---
+    # --- Public search/data API + canonical admin control plane -------------
     windex-serve:
         <<: *windex-app
         # `build` here makes the stack reproducible; all app services share this image.
@@ -127,48 +122,48 @@ services:
         # correct only inside a container; on the host it pointed at a root-owned
         # empty directory, so host CLI reads silently found nothing.
         - ${WINDEX_DATA_ROOT:-/home/murr/windex-data}:${WINDEX_DATA_ROOT:-/home/murr/windex-data}:rw
+        networks:
+            - default
+            - module-sandbox
 
-    # --- App: the 10 supervised embed-loops (podman is the per-loop supervisor) ---
-    windex-loop-ccnews:   { <<: *windex-loop, command: ["embed-loop", "ccnews"] }
-    windex-loop-gh:       { <<: *windex-loop, command: ["embed-loop", "gh"] }
-    windex-loop-wiki:     { <<: *windex-loop, command: ["embed-loop", "wiki"] }
-    windex-loop-arxiv:    { <<: *windex-loop, command: ["embed-loop", "arxiv"] }
-    windex-loop-docs:     { <<: *windex-loop, command: ["embed-loop", "docs"] }
-    windex-loop-smallweb: { <<: *windex-loop, command: ["embed-loop", "smallweb"] }
-    windex-loop-hn:       { <<: *windex-loop, command: ["embed-loop", "hn"] }
-    windex-loop-hf:       { <<: *windex-loop, command: ["embed-loop", "hf"] }
-    # memory is push-based: the serve container's rw mount stages the pushed
-    # parquet, and this loop drains it exactly like every other embed-loop.
-    windex-loop-memory:   { <<: *windex-loop, command: ["embed-loop", "memory"] }
-    # custom is push-based too: ONE aggregate loop drains every registered custom
-    # source (EMBED_SOURCES["custom"], PUSH_SOURCES = {memory, custom}). Without
-    # this service, custom sources only embed via the `windex custom embed` one-shot.
-    windex-loop-custom:   { <<: *windex-loop, command: ["embed-loop", "custom"] }
+    # --- Source trigger dispatcher ------------------------------------------
+    windex-source-scheduler:
+        <<: *windex-worker
+        command: ["source-scheduler"]
 
-    # --- App: web-cluster crawler -------------------------------------------
-    # Executes crawls queued by POST /v1/crawl (and the /crawl control page).
-    # Unlike the embed loops this one WRITES parquet — it stages fetched pages
-    # through custom_source.upsert_docs — so it needs the rw mount the loop
-    # anchor already provides. Its output is picked up by windex-loop-custom
-    # like any other custom source; there is no crawl-specific embed path.
-    windex-loop-crawl:    { <<: *windex-loop, command: ["crawl-loop"] }
-
-    # --- App: editable job scheduler (fires due schedule-table entries: ingest/daily/maintain) ---
-    windex-scheduler:     { <<: *windex-loop, command: ["scheduler"] }
-
-    # --- Generic recipe worker pool ----------------------------------------
-    # Executes run_tasks for every installed recipe. Four recyclable subprocess
+    # --- Pipeline worker pool -----------------------------------------------
+    # Executes canonical run_tasks. Four recyclable subprocess
     # slots share fleet-wide lane caps; cpu_heavy stays capped at one so a wiki
     # shard and datatrove extraction can never peak together.
     windex-worker:
-        <<: *windex-loop
+        <<: *windex-worker
         command: ["worker", "--slots", "4", "--name", "production"]
         mem_limit: 40g
         stop_grace_period: 40s
+        networks:
+            - default
+            - module-sandbox
 
-    # Recipe-native trigger dispatcher. The legacy scheduler remains alongside
-    # it until the clean reset proves every migrated trigger against the new
-    # runners; trigger migration is idempotent.
-    windex-recipe-scheduler:
-        <<: *windex-loop
-        command: ["scheduler2", "--migrate"]
+    # Approved local code executes only here. The internal network lets the API
+    # and worker submit JSONL jobs but provides no external route.
+    windex-module-sandbox:
+        image: localhost/windex-app:latest
+        command: ["python", "-m", "windex.module_sandbox"]
+        read_only: true
+        tmpfs:
+            - /tmp:rw,noexec,nosuid,nodev,size=64m
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        pids_limit: 16
+        mem_limit: 512m
+        cpus: 1.0
+        restart: always
+        networks:
+            - module-sandbox
+
+networks:
+    default: {}
+    module-sandbox:
+        internal: true

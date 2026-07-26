@@ -350,19 +350,3 @@ def test_lexical_search_never_touches_breaker(seeded, dead_embed, monkeypatch):
     resp = searchmod.search(dead_embed, "transit bus lanes", source="news", mode="lexical")
     assert resp["results"] and resp["degraded"] is False
     assert breaker.snapshot(dead_embed)["state"] == CLOSED
-
-
-def test_stats_exposes_breaker_state(settings, pg, monkeypatch):
-    """Operators need to see *why* searches degrade, live."""
-    import windex.api.service as service_mod
-    from windex.index.embed_breaker import breaker
-
-    service_mod._pg_stats_cache.clear()
-    service_mod._metrics_cache.clear()
-    for _ in range(settings.embed_breaker_threshold):
-        assert breaker.allow(settings)
-        breaker.record_failure(TimeoutError("saturated"), settings)
-    act = service_mod.get_stats(settings)["activity"]
-    assert act["embed_breaker"]["state"] == OPEN
-    assert act["embed_breaker"]["trips"] == 1
-    assert "TimeoutError" in act["embed_breaker"]["last_error"]

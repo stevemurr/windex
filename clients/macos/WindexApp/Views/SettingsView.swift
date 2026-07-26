@@ -6,19 +6,40 @@ import WindexUI
 @MainActor
 @Observable
 final class SettingsModel {
+    struct Conflict {
+        let changes: [String: JSONValue]
+        let server: SettingsScope
+    }
+
     private(set) var scopes: [SettingsScope] = []
     private(set) var form: FormModel?
     private(set) var isLoading = false
     private(set) var isSaving = false
     private(set) var errorMessage: String?
     private(set) var confirmation: String?
+    private(set) var conflict: Conflict?
     var selectedScope: String?
+    private var etags: [String: String] = [:]
+    private var sourceDrafts: SourceSettingsDraftStore?
+    private var session: BackendSession?
 
-    func load(client: WindexClient, appModel: AppModel) async {
+    func load(client: WindexClient, session: BackendSession, appModel: AppModel) async {
         isLoading = scopes.isEmpty
+        self.session = session
+        sourceDrafts = session.sourceSettingsDrafts
         do {
-            let response = try await client.allSettings()
-            scopes = response.scopes.sorted {
+            let global = try await client.globalSettings()
+            var loaded = [try global.settingsScope()]
+            etags[global.scope] = global.etag
+            for source in session.sources.sources {
+                let response = try await client.sourceSettings(source.name)
+                let scope = try response.settingsScope()
+                loaded.append(scope)
+                etags[source.name] = response.etag
+                session.sources.setSettingsETag(response.etag, for: source.name)
+                session.sourceSettingsDrafts.reconcile(scope)
+            }
+            scopes = loaded.sorted {
                 if $0.isGlobal != $1.isGlobal { return $0.isGlobal }
                 return $0.scope.localizedStandardCompare($1.scope) == .orderedAscending
             }
@@ -41,29 +62,123 @@ final class SettingsModel {
             form = nil
             return
         }
-        form = FormModel(scope: match)
+        form = match.isGlobal
+            ? FormModel(scope: match)
+            : sourceDrafts?.reconcile(match)
+        conflict = nil
         confirmation = nil
         errorMessage = nil
     }
 
     func save(client: WindexClient, appModel: AppModel) async {
         guard let selectedScope, let form, form.canSubmit else { return }
+        await save(
+            changes: form.changes,
+            selectedScope: selectedScope,
+            client: client,
+            appModel: appModel
+        )
+    }
+
+    func reloadServerValues() {
+        guard let conflict else { return }
+        replace(conflict.server)
+        form = conflict.server.isGlobal
+            ? FormModel(scope: conflict.server)
+            : sourceDrafts?.adopt(conflict.server)
+        self.conflict = nil
+        errorMessage = nil
+        confirmation = "Loaded the current server values."
+    }
+
+    func reapply(client: WindexClient, appModel: AppModel) async {
+        guard let conflict, let selectedScope else { return }
+        await save(
+            changes: conflict.changes,
+            selectedScope: selectedScope,
+            client: client,
+            appModel: appModel
+        )
+    }
+
+    private func save(
+        changes: [String: JSONValue],
+        selectedScope: String,
+        client: WindexClient,
+        appModel: AppModel
+    ) async {
         isSaving = true
         confirmation = nil
         do {
-            let updated = try await client.patchSettings(
-                scope: selectedScope,
-                values: form.changes)
+            guard let etag = etags[selectedScope] else {
+                throw WindexError.preconditionRequired(message: "Settings ETag is unavailable.")
+            }
+            let updated: SettingsScope
+            if selectedScope == SettingsScope.global {
+                let response = try await client.patchGlobalSettings(changes, etag: etag)
+                etags[selectedScope] = response.etag
+                updated = try response.settingsScope()
+            } else {
+                let response = try await client.patchSourceSettings(
+                    selectedScope, values: changes, etag: etag)
+                etags[selectedScope] = response.etag
+                session?.sources.setSettingsETag(
+                    response.etag,
+                    for: selectedScope
+                )
+                updated = try response.settingsScope()
+            }
             replace(updated)
-            form.apply(updated.fields)
+            if updated.isGlobal {
+                form?.apply(updated.fields)
+            } else {
+                form = sourceDrafts?.adopt(updated)
+            }
+            conflict = nil
             confirmation = "Settings saved."
             isSaving = false
             errorMessage = nil
+        } catch let error as WindexError {
+            isSaving = false
+            if case .preconditionFailed = error {
+                do {
+                    let current = try await fetch(
+                        scope: selectedScope,
+                        client: client
+                    )
+                    conflict = Conflict(changes: changes, server: current.scope)
+                    etags[selectedScope] = current.etag
+                    if selectedScope != SettingsScope.global {
+                        session?.sources.setSettingsETag(
+                            current.etag,
+                            for: selectedScope
+                        )
+                    }
+                    errorMessage = "The settings changed after this editor opened. Compare the values below, then reload or reapply."
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            } else {
+                errorMessage = form?.apply(error)
+            }
+            appModel.handleClientError(error)
         } catch {
             isSaving = false
-            errorMessage = form.apply(error)
+            errorMessage = error.localizedDescription
             appModel.handleClientError(error)
         }
+    }
+
+    private func fetch(
+        scope: String,
+        client: WindexClient
+    ) async throws -> (scope: SettingsScope, etag: String) {
+        if scope == SettingsScope.global {
+            let response = try await client.globalSettings()
+            return (try response.settingsScope(), response.etag)
+        }
+        let response = try await client.sourceSettings(scope)
+        return (try response.settingsScope(), response.etag)
     }
 
     func revert(
@@ -75,11 +190,28 @@ final class SettingsModel {
         isSaving = true
         confirmation = nil
         do {
-            let updated = try await client.revertSetting(
-                scope: selectedScope,
-                key: key)
+            guard let etag = etags[selectedScope] else {
+                throw WindexError.preconditionRequired(message: "Settings ETag is unavailable.")
+            }
+            let updated: SettingsScope
+            if selectedScope == SettingsScope.global {
+                let response = try await client.deleteGlobalSetting(key, etag: etag)
+                etags[selectedScope] = response.etag
+                updated = try response.settingsScope()
+            } else {
+                let response = try await client.deleteSourceSetting(
+                    selectedScope, key: key, etag: etag)
+                etags[selectedScope] = response.etag
+                session?.sources.setSettingsETag(
+                    response.etag,
+                    for: selectedScope
+                )
+                updated = try response.settingsScope()
+            }
             replace(updated)
-            form = FormModel(scope: updated)
+            form = updated.isGlobal
+                ? FormModel(scope: updated)
+                : sourceDrafts?.adopt(updated)
             confirmation = "\(key) now follows its environment or default value."
             isSaving = false
             errorMessage = nil
@@ -112,6 +244,7 @@ struct SettingsView: View {
     @Bindable var appModel: AppModel
     let client: WindexClient
     let backend: ConnectedBackend
+    @Environment(BackendSession.self) private var session
 
     @State private var model = SettingsModel()
     @Environment(\.windexTheme) private var theme
@@ -142,7 +275,7 @@ struct SettingsView: View {
         }
         .background(theme.palette.ink)
         .task(id: backend.profile) {
-            await model.load(client: client, appModel: appModel)
+            await model.load(client: client, session: session, appModel: appModel)
         }
     }
 
@@ -153,7 +286,7 @@ struct SettingsView: View {
                 Spacer()
                 Button {
                     Task {
-                        await model.load(client: client, appModel: appModel)
+                        await model.load(client: client, session: session, appModel: appModel)
                     }
                 } label: {
                     Image(systemName: "arrow.clockwise")
@@ -214,7 +347,10 @@ struct SettingsView: View {
                         .frame(maxWidth: Layout.proseMeasure, alignment: .leading)
                     Hairline()
 
-                    SchemaForm(model: form)
+                    SchemaForm(
+                        model: form,
+                        configuredSecretReferences: session.sources.configuredSecrets
+                    )
 
                     HStack(spacing: .sm) {
                         Button("Save changes") {
@@ -238,6 +374,10 @@ struct SettingsView: View {
                         notice(confirmation, colour: theme.palette.graphite)
                     }
 
+                    if let conflict = model.conflict {
+                        conflictNotice(conflict)
+                    }
+
                     overrides(scope)
                 }
                 .padding(.xl)
@@ -245,13 +385,45 @@ struct SettingsView: View {
             }
         } else if let error = model.errorMessage {
             SourceFailureView(message: error) {
-                Task { await model.load(client: client, appModel: appModel) }
+                Task { await model.load(client: client, session: session, appModel: appModel) }
             }
         } else {
             ProgressView()
                 .controlSize(.small)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func conflictNotice(_ conflict: SettingsModel.Conflict) -> some View {
+        VStack(alignment: .leading, spacing: .sm) {
+            StyledText("Concurrent settings update", Typography.eyebrow)
+                .foregroundStyle(theme.palette.rust)
+            ForEach(conflict.changes.keys.sorted(), id: \.self) { key in
+                let serverValue = conflict.server.fields.first {
+                    $0.key == key
+                }?.value?.displayString ?? "unset"
+                Text(
+                    "\(key): server \(serverValue) · yours "
+                        + (conflict.changes[key]?.displayString ?? "unset")
+                )
+                .windexStyle(Typography.dataSM)
+            }
+            HStack {
+                Button("Reload server values") {
+                    model.reloadServerValues()
+                }
+                Button("Reapply my changes") {
+                    Task {
+                        await model.reapply(client: client, appModel: appModel)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isSaving)
+            }
+        }
+        .padding(.md)
+        .frame(maxWidth: Layout.proseMeasure, alignment: .leading)
+        .background(theme.palette.plate)
     }
 
     private func overrides(_ scope: SettingsScope) -> some View {

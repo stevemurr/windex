@@ -7,7 +7,7 @@ from datetime import datetime
 from psycopg.types.json import Jsonb
 
 from windex.modules.common import _store_outputs
-from windex.recipe.ports import ExtractedDoc, PartitionRef
+from windex.pipeline.ports import ExtractedDoc, PartitionRef
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 
@@ -34,10 +34,7 @@ def push_docs(ctx: TaskContext) -> SliceResult:
             ctx.conn.commit()
             return SliceResult(exhausted=True, units_total=1)
 
-    payload = dict(ctx.params.get("input") or {})
-    for key in ("documents", "partition", "conversation_id", "title", "chunks"):
-        if key in ctx.params and key not in payload:
-            payload[key] = ctx.params[key]
+    payload = dict(ctx.inputs.get("documents") or {})
     raw_docs = payload.get("documents")
     if raw_docs is None:
         raw_docs = payload.get("chunks", [])
@@ -52,7 +49,7 @@ def push_docs(ctx: TaskContext) -> SliceResult:
     mode = str(ctx.config.get("mode", "delta"))
     partition = str(
         payload.get("partition") or payload.get("conversation_id") or "push")
-    source = ctx.source
+    source = ctx.search_name
     outputs = []
     for index, raw in enumerate(raw_docs):
         if not isinstance(raw, dict):
@@ -87,7 +84,7 @@ def push_docs(ctx: TaskContext) -> SliceResult:
             store="",
             key=partition,
             id_scope=(
-                f"{(ctx.spec.get('corpus') or {}).get('id_prefix', source + ':')}"
+                f"{ctx.id_prefix}"
                 f"{partition}/"
                 if mode == "full_set" else None
             ),
@@ -108,7 +105,7 @@ def push_docs(ctx: TaskContext) -> SliceResult:
         ))
     if not outputs:
         prefix = str(
-            (ctx.spec.get("corpus") or {}).get("id_prefix") or f"{source}:")
+            ctx.id_prefix or f"{source}:")
         outputs.append(ExtractedDoc(
             ref=PartitionRef(
                 store="", key=partition,

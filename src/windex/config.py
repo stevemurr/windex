@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     # open, matching windex's trusted-LAN posture; when set, those endpoints
     # require `Authorization: Bearer <token>`. Read endpoints stay open.
     write_token: str = ""
+    # Separate high-trust credential and isolated executor endpoint for local
+    # custom Module administration. The ordinary admin token cannot author code.
+    module_admin_token: str = ""
+    module_sandbox_url: str = "http://windex-module-sandbox:8110"
     # --- search-quality eval (windex eval) ---
     eval_per_source: int = 25      # known-item samples per source
     eval_k: int = 10               # cutoff for NDCG@k / Recall@k
@@ -203,16 +207,16 @@ class Settings(BaseSettings):
     hf_blog_batch: int = 100                # posts per staged parquet / pause-checked batch
 
     # --- crawl (arbitrary web clusters from a seed link) ---------------------
-    # Ceilings and defaults for the recipe-driven cluster crawler. A recipe may
+    # Ceilings and defaults for the policy-driven cluster crawler. A Pipeline may
     # tune the per-run knobs below, but never past the *_max ceilings — those are
-    # the operator's guardrail against a recipe (which arrives over the API)
+    # the operator's guardrail against a policy (which may arrive over the API)
     # asking for an unbounded crawl. host_interval is deliberately gentler-per-
     # host than it looks: unlike smallweb's 37.6k strangers, a cluster crawl
     # hammers ONE host for its whole run, so 2s is the floor, not a target.
     crawl_host_interval: float = 2.0        # min seconds between hits to the target host
-    crawl_host_interval_min: float = 1.0    # a recipe may not go below this
+    crawl_host_interval_min: float = 1.0    # a policy may not go below this
     crawl_max_pages: int = 500              # default per-run page budget
-    crawl_max_pages_ceiling: int = 20_000   # a recipe may not exceed this
+    crawl_max_pages_ceiling: int = 20_000   # a policy may not exceed this
     crawl_max_depth: int = 2                # default BFS depth from the seed
     crawl_max_depth_ceiling: int = 8
     crawl_robots_ttl: float = 3600.0        # per-host robots.txt cache TTL
@@ -235,11 +239,6 @@ class Settings(BaseSettings):
 
     github_tokens: str = ""  # comma-separated PATs for hydration
 
-    # Additional inert recipe catalogs. Each entry is a server-local directory
-    # of *.yaml files, typically maintained by a read-only git sync. The admin
-    # API never fetches catalog URLs supplied by a client.
-    recipe_catalog_dirs: str = ""
-
     # Threads draining Qdrant upserts in the embed pass. The embed workers hand
     # finished points off to these instead of blocking a GPU slot on PUT /points
     # (avg 355ms, worst case 36s observed). Upserts stay wait=True — the pass
@@ -251,8 +250,13 @@ class Settings(BaseSettings):
     embed_upsert_workers: int = 0
 
     @property
+    def active_data_root(self) -> Path:
+        """Generation-scoped runtime root selected by the cutover symlink."""
+        return self.data_root / "generations" / "current"
+
+    @property
     def downloads_dir(self) -> Path:
-        return self.data_root / "downloads"
+        return self.active_data_root / "downloads"
 
     @property
     def ccnews_downloads_dir(self) -> Path:
@@ -264,7 +268,11 @@ class Settings(BaseSettings):
 
     @property
     def staging_dir(self) -> Path:
-        return self.data_root / "staging"
+        return self.active_data_root / "staging"
+
+    @property
+    def artifacts_dir(self) -> Path:
+        return self.active_data_root / "artifacts"
 
     @property
     def news_staging_dir(self) -> Path:
@@ -349,13 +357,6 @@ class Settings(BaseSettings):
     def hf_root_list(self) -> list[str]:
         """Configured HF doc roots; [] means "every root the sitemap lists"."""
         return [s.strip() for s in self.hf_roots.split(",") if s.strip()]
-
-    def recipe_catalog_dir_list(self) -> list[str]:
-        return [
-            path.strip() for path in self.recipe_catalog_dirs.split(",")
-            if path.strip()
-        ]
-
 
 # The source this process is working on, if it is a single-source job. Set once
 # at CLI-group entry (`windex hf …` → "hf"), so every `get_settings()` inside

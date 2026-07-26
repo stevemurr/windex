@@ -6,7 +6,7 @@ hydration). Files are deleted after counting unless keep=True."""
 import concurrent.futures as cf
 import gzip
 import orjson
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import httpx

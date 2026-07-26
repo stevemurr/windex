@@ -94,25 +94,25 @@ def suggest_prefix(urls: list[str]) -> tuple[str, int] | None:
     return (prefix, n) if n * 2 > sum(counts.values()) else None
 
 
-def in_scope(url: str, recipe, seed: str) -> tuple[bool, str]:
+def in_scope(url: str, policy, seed: str) -> tuple[bool, str]:
     """Return ``(allowed, reason)``. ``reason`` is "" when allowed, otherwise the
     rule that rejected it — it is written to ``crawl_urls.reason`` and shown in the
     control page, so a surprising crawl is diagnosable without re-running it."""
     parts = urlsplit(url)
     if parts.scheme.lower() not in ALLOWED_SCHEMES:
         return False, "scheme"
-    if recipe.scope.same_host and not same_host(url, seed):
+    if policy.scope.same_host and not same_host(url, seed):
         return False, "host"
-    if recipe.scope.path_prefix and not parts.path.startswith(recipe.scope.path_prefix):
+    if policy.scope.path_prefix and not parts.path.startswith(policy.scope.path_prefix):
         return False, "prefix"
     # Exclude is evaluated against path+query, not the whole URL: an operator
     # writing `\.png$` means the path, and matching the host too would make a
     # rule like `/assets/` accidentally match a host containing that string.
     target = parts.path + (f"?{parts.query}" if parts.query else "")
-    for pattern in recipe.scope.exclude_re:
+    for pattern in policy.scope.exclude_re:
         if pattern.search(target):
             return False, "exclude"
-    if recipe.scope.include_re:
-        if not any(p.search(target) for p in recipe.scope.include_re):
+    if policy.scope.include_re:
+        if not any(p.search(target) for p in policy.scope.include_re):
             return False, "include"
     return True, ""

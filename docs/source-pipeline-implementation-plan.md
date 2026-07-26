@@ -1,6 +1,6 @@
 # Source and Pipeline Implementation Plan
 
-Status: approved product direction, implementation pending  
+Status: backend BE-0 through BE-9 implemented and verified; macOS/integration pending
 Date: 2026-07-25
 
 ## 1. Goal

@@ -14,7 +14,7 @@ from windex.modules.common import (
     pending_batches,
     require_type,
 )
-from windex.recipe.ports import ExtractedDoc
+from windex.pipeline.ports import ExtractedDoc
 from windex.sanitize import strip_smuggled
 from windex.textguard import is_empty_text
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
@@ -23,7 +23,7 @@ _INPUT_BATCH = 20
 
 
 def _prefix(ctx: TaskContext) -> str:
-    return str((ctx.spec.get("corpus") or {}).get("id_prefix") or f"{ctx.source}:")
+    return str((ctx.spec.get("corpus") or {}).get("id_prefix") or f"{ctx.search_name}:")
 
 
 def _doc_id(ctx: TaskContext, doc: ExtractedDoc) -> str:
@@ -280,7 +280,7 @@ def filter_lang(ctx: TaskContext) -> SliceResult:
 
 
 def sanitize_documents(ctx: TaskContext) -> SliceResult:
-    """Mandatory last transform, callable even though recipes do not name it."""
+    """Mandatory last transform, callable even when a Pipeline does not name it."""
 
     def transform(docs: list[ExtractedDoc]) -> list[ExtractedDoc]:
         outputs = []

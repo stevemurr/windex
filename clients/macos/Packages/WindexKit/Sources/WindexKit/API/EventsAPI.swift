@@ -1,93 +1,101 @@
 import Foundation
 
-/// One decoded message from the dashboard stream.
-///
-/// The server multiplexes six feeds down one connection at different cadences —
-/// `stats` every ~2s, `workers` every tick, `jobs` and `logsizes` every third,
-/// `timeseries` every eighth, and `recent` only when it actually changes. A
-/// consumer switches on a case rather than comparing event-name strings, so a
-/// typo can't silently drop a feed.
-public enum DashboardEvent: Sendable {
-    /// Corpus counts, queue depths, control flags, stages, breaker, uptime.
-    case stats(JSONValue)
-    /// Newest documents. Only sent when the head of the feed moves.
-    case recent([RecentDoc])
-    /// Per-minute throughput, trailing hour.
-    case timeseries([TimeseriesPoint])
-    case jobs([JobInfo])
-    /// Log sizes and availability, for the log catalogue.
-    case logSizes([LogSource])
-    case workers(WorkersState)
-    /// An event name this client doesn't model. Carried rather than dropped so a
-    /// server that adds a feed is visible in a debug view before it is supported.
-    case unknown(name: String, data: String)
+public struct LogQuery: Sendable, Hashable {
+    public var after: Int?
+    public var before: Int?
+    public var limit: Int
+    public var level: String?
+    public var component: String?
+    public var source: String?
+    public var pipeline: String?
+    public var runID: Int?
+    public var node: String?
+    public var module: String?
+    public var text: String?
+    public var startedAt: String?
+    public var endedAt: String?
 
-    /// The wire name, useful for logging.
-    public var name: String {
-        switch self {
-        case .stats: return "stats"
-        case .recent: return "recent"
-        case .timeseries: return "timeseries"
-        case .jobs: return "jobs"
-        case .logSizes: return "logsizes"
-        case .workers: return "workers"
-        case .unknown(let name, _): return name
+    public init(after: Int? = nil, before: Int? = nil, limit: Int = 500,
+                level: String? = nil, component: String? = nil,
+                source: String? = nil, pipeline: String? = nil,
+                runID: Int? = nil, node: String? = nil, module: String? = nil,
+                text: String? = nil, startedAt: String? = nil,
+                endedAt: String? = nil) {
+        self.after = after; self.before = before; self.limit = limit
+        self.level = level; self.component = component; self.source = source
+        self.pipeline = pipeline; self.runID = runID; self.node = node
+        self.module = module; self.text = text; self.startedAt = startedAt
+        self.endedAt = endedAt
+    }
+
+    var queryItems: [URLQueryItem] {
+        var items = [URLQueryItem(name: "limit", value: String(limit))]
+        func add(_ name: String, _ value: String?) {
+            if let value, !value.isEmpty { items.append(.init(name: name, value: value)) }
         }
+        add("after", after.map(String.init)); add("before", before.map(String.init))
+        add("level", level); add("component", component); add("source", source)
+        add("pipeline", pipeline); add("run_id", runID.map(String.init))
+        add("node", node); add("module", module); add("text", text)
+        add("started_at", startedAt); add("ended_at", endedAt)
+        return items
+    }
+}
+
+extension LogQuery {
+    public init(
+        filter: OperationalEventFilter,
+        after: Int? = nil,
+        before: Int? = nil,
+        limit: Int = 500
+    ) {
+        let formatter = ISO8601DateFormatter()
+        self.init(
+            after: after,
+            before: before,
+            limit: min(max(limit, 1), 1_000),
+            level: filter.levels.count == 1 ? filter.levels.first?.rawValue : nil,
+            component: filter.components.count == 1 ? filter.components.first : nil,
+            source: filter.sourceName,
+            pipeline: filter.pipelineName,
+            runID: filter.runID,
+            node: filter.node,
+            module: filter.module,
+            text: filter.text,
+            startedAt: filter.startedAt.map(formatter.string(from:)),
+            endedAt: filter.endedAt.map(formatter.string(from:))
+        )
     }
 }
 
 extension WindexClient {
-
-    /// The live dashboard stream.
-    ///
-    /// Decoding happens per event, and a single malformed payload is skipped
-    /// rather than tearing down the connection: losing one `stats` tick is
-    /// recoverable — the next arrives in two seconds — whereas dropping the
-    /// stream turns a transient server hiccup into a dead dashboard.
-    ///
-    /// - Parameter ticks: bound the stream to N iterations. For tests; omit in
-    ///   the app, where the stream should run until the view goes away.
-    public func dashboardEvents(ticks: Int? = nil) throws
-        -> AsyncThrowingStream<DashboardEvent, any Error> {
-        let query = ticks.map { [URLQueryItem(name: "ticks", value: String($0))] } ?? []
-        let raw = try events("/v1/events", surface: .admin, query: query)
-
-        return AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    for try await event in raw {
-                        if let decoded = Self.decodeDashboard(event) {
-                            continuation.yield(decoded)
-                        }
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
+    public func controlEvents(after: Int? = nil, ticks: Int? = nil,
+                              lastEventID: String? = nil) throws
+        -> AsyncThrowingStream<SSEEvent, any Error> {
+        var query: [URLQueryItem] = []
+        if let after { query.append(.init(name: "after", value: String(after))) }
+        if let ticks { query.append(.init(name: "ticks", value: String(ticks))) }
+        return try events("/v1/events/stream", surface: .admin, query: query,
+                          lastEventID: lastEventID)
     }
 
-    /// Returns nil when the payload doesn't match its event name — a skipped
-    /// tick, not a fatal error. Exposed for the parser tests.
-    static func decodeDashboard(_ event: SSEEvent) -> DashboardEvent? {
-        switch event.event {
-        case "stats":
-            return (try? event.decode(JSONValue.self)).map(DashboardEvent.stats)
-        case "recent":
-            return (try? event.decode([RecentDoc].self)).map(DashboardEvent.recent)
-        case "timeseries":
-            return (try? event.decode([TimeseriesPoint].self))
-                .map(DashboardEvent.timeseries)
-        case "jobs":
-            return (try? event.decode([JobInfo].self)).map(DashboardEvent.jobs)
-        case "logsizes":
-            return (try? event.decode([LogSource].self)).map(DashboardEvent.logSizes)
-        case "workers":
-            return (try? event.decode(WorkersState.self)).map(DashboardEvent.workers)
-        default:
-            return .unknown(name: event.event, data: event.data)
-        }
+    public func logEvents(_ query: LogQuery = .init()) async throws -> LogEventsWire {
+        try await send("GET", "/v1/log-events", surface: .admin,
+                       query: query.queryItems, as: LogEventsWire.self)
+    }
+
+    public func logFacets() async throws -> LogFacetsWire {
+        try await send("GET", "/v1/log-events/facets", surface: .admin,
+                       as: LogFacetsWire.self)
+    }
+
+    public func logEventStream(_ query: LogQuery = .init(),
+                               ticks: Int? = nil,
+                               lastEventID: String? = nil) throws
+        -> AsyncThrowingStream<SSEEvent, any Error> {
+        var items = query.queryItems.filter { $0.name != "limit" && $0.name != "before" }
+        if let ticks { items.append(.init(name: "ticks", value: String(ticks))) }
+        return try events("/v1/log-events/stream", surface: .admin, query: items,
+                          lastEventID: lastEventID)
     }
 }

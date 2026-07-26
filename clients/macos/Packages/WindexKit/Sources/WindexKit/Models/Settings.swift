@@ -11,9 +11,17 @@ public enum SettingOrigin: String, Sendable, Hashable, Codable {
     case env
     /// A runtime override in `source_config`. This is the only one DELETE removes.
     case db
+    /// Explicitly configured on the Source.
+    case source
+    /// Explicitly configured in the operator/global scope.
+    case operatorValue = "operator"
+    /// No value or default currently resolves this field.
+    case unset
 
     /// Whether `DELETE /settings/{scope}/{key}` would change anything.
-    public var isOverride: Bool { self == .db }
+    public var isOverride: Bool {
+        self == .db || self == .source || self == .operatorValue
+    }
 }
 
 /// One row of a settings form: the `Param` schema plus its current effective
@@ -49,7 +57,11 @@ public struct SettingsField: Sendable, Hashable, Codable, Identifiable {
         value = try c.decodeIfPresent(JSONValue.self, forKey: .value)
         // An unrecognised origin is not worth failing a whole form over; it only
         // costs the revert affordance for that one row.
-        origin = try c.decodeIfPresent(SettingOrigin.self, forKey: .origin)
+        if let raw = try c.decodeIfPresent(String.self, forKey: .origin) {
+            origin = SettingOrigin(rawValue: raw)
+        } else {
+            origin = nil
+        }
     }
 
     public func encode(to encoder: Encoder) throws {

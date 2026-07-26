@@ -4,8 +4,9 @@ from windex.index.qdrant import alias_name, collection_name, slug
 
 def test_settings_paths_derive_from_data_root(tmp_path):
     s = Settings(data_root=tmp_path, _env_file=None)
-    assert s.ccnews_downloads_dir == tmp_path / "downloads" / "ccnews"
-    assert s.news_staging_dir == tmp_path / "staging" / "news"
+    active = tmp_path / "generations" / "current"
+    assert s.ccnews_downloads_dir == active / "downloads" / "ccnews"
+    assert s.news_staging_dir == active / "staging" / "news"
 
 
 def test_github_token_list_parses_csv():

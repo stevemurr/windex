@@ -1,0 +1,191 @@
+"""Platform-owned searchable-output continuation."""
+
+from __future__ import annotations
+
+import pyarrow.parquet as pq
+from psycopg.types.json import Jsonb
+from qdrant_client import QdrantClient
+from qdrant_client import models as qm
+
+from windex.config import Settings
+from windex.embed import build_embedder
+from windex.embed.base import embed_isolating
+from windex.embed.pipeline import point_id
+from windex.index import qdrant as qidx
+from windex.index.sparse import bm25_model
+from windex.sanitize import strip_smuggled
+from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
+
+_BATCH = 256
+
+
+def _rows(ctx: TaskContext, ids: list[str], refs: list[str]) -> dict[str, dict]:
+    wanted = set(ids)
+    result: dict[str, dict] = {}
+    for reference in sorted(set(refs)):
+        root = Settings().staging_dir.resolve()
+        path = (root / reference).resolve()
+        if root not in path.parents or not path.is_file():
+            raise PermanentTaskError(f"staged text is unavailable: {reference}")
+        table = pq.read_table(path, filters=[("id", "in", sorted(wanted))])
+        for row in table.to_pylist():
+            if row.get("id") in wanted:
+                result[row["id"]] = row
+    return result
+
+
+def platform_index(ctx: TaskContext) -> SliceResult:
+    """Make this Source's staged documents queryable before the Run succeeds."""
+    if ctx.source_id is None or not ctx.collection_key:
+        raise PermanentTaskError(
+            "platform.index requires a frozen Source deployment binding")
+    with ctx.conn.cursor() as cur:
+        cur.execute(
+            """SELECT id, text_ref
+                 FROM documents
+                WHERE source_id = %s AND owner_run_id = %s
+                  AND status = 'staged'
+                  AND text_ref IS NOT NULL
+                ORDER BY created_at, id LIMIT %s
+                FOR UPDATE SKIP LOCKED""",
+            (ctx.source_id, ctx.run_id, _BATCH),
+        )
+        pending = cur.fetchall()
+        if pending:
+            cur.execute(
+                "UPDATE documents SET status = 'embedding', updated_at = now() "
+                "WHERE id = ANY(%s)",
+                ([row[0] for row in pending],),
+            )
+    ctx.conn.commit()
+    if not pending:
+        return SliceResult(
+            exhausted=True, units_total=ctx.units_done if hasattr(ctx, "units_done") else -1,
+            stats={"searchable": 0})
+
+    ids = [row[0] for row in pending]
+    rows = _rows(ctx, ids, [row[1] for row in pending])
+    missing = sorted(set(ids) - set(rows))
+    if missing:
+        with ctx.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE documents SET status = 'failed', updated_at = now() "
+                "WHERE id = ANY(%s)",
+                (missing,),
+            )
+        ctx.conn.commit()
+        raise PermanentTaskError(
+            f"{len(missing)} staged documents are missing from their artifact")
+
+    settings = Settings()
+    embedder = None
+    client = None
+    try:
+        embedder = build_embedder(settings, bulk=True)
+        client = QdrantClient(url=settings.qdrant_url, timeout=120)
+        collection = qidx.ensure_collection(
+            client, ctx.collection_key, settings.embed_model, settings.embed_dim)
+        with ctx.conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO storage_ownership
+                       (resource_type, resource_name, source_id, metadata)
+                   VALUES ('qdrant_collection', %s, %s, %s),
+                          ('qdrant_alias', %s, %s, %s)
+                   ON CONFLICT (resource_type, resource_name) DO UPDATE SET
+                       source_id = EXCLUDED.source_id,
+                       metadata = EXCLUDED.metadata""",
+                (
+                    collection, ctx.source_id,
+                    Jsonb({"model": settings.embed_model}),
+                    qidx.alias_name(ctx.collection_key), ctx.source_id,
+                    Jsonb({"collection": collection}),
+                ),
+            )
+        ctx.conn.commit()
+        ordered = [rows[doc_id] for doc_id in ids]
+        texts = [
+            strip_smuggled(
+                ((str(row.get("title") or "") + "\n\n")
+                 if row.get("title") else "")
+                + str(
+                    row.get("text") or row.get("abstract")
+                    or row.get("story_text") or "")
+            )[: settings.embed_max_tokens * 4]
+            for row in ordered
+        ]
+        dense, accepted = embed_isolating(embedder, texts)
+        sparse = list(bm25_model().embed([
+            text for text, okay in zip(texts, accepted) if okay]))
+        points = []
+        sparse_index = 0
+        searchable: list[str] = []
+        failed: list[str] = []
+        for position, (row, vector, okay) in enumerate(
+                zip(ordered, dense, accepted)):
+            doc_id = row["id"]
+            if not okay:
+                failed.append(doc_id)
+                continue
+            payload = {
+                key: value for key, value in row.items()
+                if key not in {"text", "abstract", "story_text"} and value is not None
+            }
+            payload.update({
+                "doc_id": doc_id,
+                "source": ctx.search_name,
+                "snippet": texts[position][:400],
+            })
+            item = sparse[sparse_index]
+            sparse_index += 1
+            points.append(qm.PointStruct(
+                id=point_id(doc_id),
+                vector={
+                    qidx.DENSE: vector,
+                    qidx.SPARSE: qm.SparseVector(
+                        indices=item.indices.tolist(), values=item.values.tolist()),
+                },
+                payload=payload,
+            ))
+            searchable.append(doc_id)
+        if points:
+            client.upsert(collection_name=collection, points=points, wait=True)
+        with ctx.conn.cursor() as cur:
+            if searchable:
+                cur.execute(
+                    """UPDATE documents
+                          SET status = 'searchable', embedded_model = %s,
+                              indexed_at = now(), updated_at = now()
+                        WHERE id = ANY(%s)""",
+                    (settings.embed_model, searchable),
+                )
+            if failed:
+                cur.execute(
+                    "UPDATE documents SET status = 'failed', updated_at = now() "
+                    "WHERE id = ANY(%s)",
+                    (failed,),
+                )
+        ctx.conn.commit()
+    except Exception:
+        ctx.conn.rollback()
+        with ctx.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE documents SET status = 'staged', updated_at = now() "
+                "WHERE id = ANY(%s) AND status = 'embedding'",
+                (ids,),
+            )
+        ctx.conn.commit()
+        raise
+    finally:
+        if embedder is not None:
+            embedder.close()
+        if client is not None:
+            client.close()
+    ctx.heartbeat(len(searchable), len(failed), {
+        "staged": len(ids), "searchable": len(searchable), "failed": len(failed)})
+    return SliceResult(
+        units_done=len(searchable), units_failed=len(failed),
+        exhausted=len(pending) < _BATCH,
+        stats={"searchable": len(searchable), "failed": len(failed)})
+
+
+__all__ = ["platform_index"]

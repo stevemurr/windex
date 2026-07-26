@@ -38,9 +38,10 @@ from typing import Any
 import psycopg
 
 from windex import db
-from windex.worker import claim as C
+from windex.worker import canonical_claim as C
 from windex.worker import control as ctrlfile
-from windex.worker import dag, memory
+from windex.worker import memory
+from windex.pipeline import run_store
 from windex.worker.config import PoolConfig
 from windex.worker.control import SlotStatus
 from windex.worker.protocol import Resolve
@@ -183,7 +184,8 @@ class Pool:
             total_rss, self.cfg.mem_limit_bytes, self.cfg.backpressure_fraction,
             self.cfg.backpressure_lanes)
 
-        summary = self._sweep(retire_pids)
+        satisfied = self._safe_precond()
+        summary = self._sweep(retire_pids, satisfied)
         summary["rss_total"] = total_rss
         summary["blocked_lanes"] = blocked
 
@@ -203,7 +205,7 @@ class Pool:
         self._press_retirements()
 
         self._generation += 1
-        ctrlfile.write(self.cfg.control_path, satisfied=self._safe_precond(),
+        ctrlfile.write(self.cfg.control_path, satisfied=satisfied,
                        blocked_lanes=blocked, generation=self._generation)
 
         # Reaping and forking come last, and only here, because forking with an
@@ -221,11 +223,20 @@ class Pool:
             log.warning("precondition evaluation failed: %s", exc)
             return set()
 
-    def _sweep(self, retire_pids: list[int]) -> dict:
+    def _sweep(self, retire_pids: list[int], satisfied: set[str]) -> dict:
         """All the database-side reaping, in one short-lived connection."""
         with db.connect(self.dsn) as conn:
             reclaimed = C.reclaim_expired(conn)
-            cancelled = dag.apply_cancellations(conn)
+            blocked = C.reconcile_blocked(conn, satisfied)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM runs WHERE cancel_requested "
+                    "AND state IN ('queued','running','blocked')")
+                cancelled_ids = [row[0] for row in cur.fetchall()]
+            conn.commit()
+            cancelled = 0
+            for run_id in cancelled_ids:
+                cancelled += int(run_store.cancel(conn, run_id, by="supervisor"))
             preempted = C.request_yield_for_priority(conn)
             for pid in retire_pids:
                 status = self._by_pid(pid)
@@ -233,9 +244,20 @@ class Pool:
                     C.request_yield(conn, worker=status.worker, reason="memory high-water")
             self._hung_watch(conn)
             C.reconcile_in_flight(conn)
-            runs = dag.advance_live(conn)
-        return {"reclaimed": len(reclaimed), "cancelled": cancelled,
-                "preempted": preempted, "runs_advanced": runs}
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM runs WHERE state IN ('queued','running','blocked') "
+                    "ORDER BY id LIMIT 500")
+                live_ids = [row[0] for row in cur.fetchall()]
+            conn.commit()
+            for run_id in live_ids:
+                run_store.advance(conn, run_id)
+            runs = len(live_ids)
+        return {
+            "reclaimed": len(reclaimed), "cancelled": cancelled,
+            "preempted": preempted, "runs_advanced": runs,
+            **blocked,
+        }
 
     def _hung_watch(self, conn: psycopg.Connection) -> None:
         """Notice a slot that has been asked to yield and hasn't.

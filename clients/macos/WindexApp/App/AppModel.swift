@@ -5,12 +5,11 @@ import WindexKit
 enum SidebarDestination: String, CaseIterable, Hashable, Identifiable, Sendable {
     case overview
     case sources
+    case pipelines
     case runs
-    case settings
     case logs
     case search
-    case recipes
-    case marketplace
+    case settings
 
     var id: Self { self }
 
@@ -18,12 +17,11 @@ enum SidebarDestination: String, CaseIterable, Hashable, Identifiable, Sendable 
         switch self {
         case .overview: "Overview"
         case .sources: "Sources"
+        case .pipelines: "Pipelines"
         case .runs: "Runs"
-        case .settings: "Settings"
         case .logs: "Logs"
         case .search: "Search"
-        case .recipes: "Recipes"
-        case .marketplace: "Marketplace"
+        case .settings: "Settings"
         }
     }
 
@@ -31,12 +29,11 @@ enum SidebarDestination: String, CaseIterable, Hashable, Identifiable, Sendable 
         switch self {
         case .overview: "rectangle.3.group"
         case .sources: "tray.full"
+        case .pipelines: "point.3.connected.trianglepath.dotted"
         case .runs: "waveform.path.ecg"
-        case .settings: "slider.horizontal.3"
         case .logs: "text.alignleft"
         case .search: "magnifyingglass"
-        case .recipes: "point.3.connected.trianglepath.dotted"
-        case .marketplace: "shippingbox"
+        case .settings: "slider.horizontal.3"
         }
     }
 }
@@ -115,6 +112,21 @@ struct PairingEvidence: Equatable, Sendable {
     let uptimeSeconds: Int
     let authRequired: Bool
     let scopes: [String]
+    let contractEpoch: Int?
+
+    init(
+        version: String?,
+        uptimeSeconds: Int,
+        authRequired: Bool,
+        scopes: [String],
+        contractEpoch: Int? = nil
+    ) {
+        self.version = version
+        self.uptimeSeconds = uptimeSeconds
+        self.authRequired = authRequired
+        self.scopes = scopes
+        self.contractEpoch = contractEpoch
+    }
 }
 
 enum PairingOutcome: Equatable, Sendable {
@@ -137,6 +149,7 @@ enum ConnectionFailure: Equatable, Sendable {
     case unauthorized
     case adminDisabled(String)
     case notWindex(service: String)
+    case incompatibleContract(String)
     case credential(String)
     case unexpected(String)
 
@@ -152,6 +165,8 @@ enum ConnectionFailure: Equatable, Sendable {
             "Admin access is disabled."
         case .notWindex:
             "That service is not windex."
+        case .incompatibleContract:
+            "This backend contract is incompatible."
         case .credential:
             "The credential could not be stored."
         case .unexpected:
@@ -162,7 +177,8 @@ enum ConnectionFailure: Equatable, Sendable {
     var guidance: String {
         switch self {
         case .invalidAddress(let message), .credential(let message),
-             .adminDisabled(let message), .unexpected(let message):
+             .adminDisabled(let message), .incompatibleContract(let message),
+             .unexpected(let message):
             message
         case .unreachable:
             "The backend may be down, or this Mac may be off the network."
@@ -172,6 +188,11 @@ enum ConnectionFailure: Equatable, Sendable {
             "The address answered as “\(service)”. Check the host and port."
         }
     }
+}
+
+struct PipelineNavigationRequest: Hashable, Sendable {
+    let reference: PipelineRevisionReference
+    let flow: String?
 }
 
 @MainActor
@@ -189,9 +210,15 @@ final class AppModel {
         @Sendable (WindexClient, String?) async throws -> PairingOutcome
 
     var selection: SidebarDestination = .overview
+    var pipelineNavigation: PipelineNavigationRequest?
+    var sourceCreationRevision: PipelineRevisionReference?
+    var selectedSourceName: String?
+    var selectedRunID: Int?
+    var consoleFilterRequest: OperationalEventFilter?
     var connectionState: ConnectionState = .unconfigured
     var backendAddress = ""
     private(set) var client: WindexClient?
+    private(set) var session: BackendSession?
 
     private let tokenStore: any TokenStoring
     private let addressStore: any BackendAddressStoring
@@ -204,12 +231,14 @@ final class AppModel {
             do {
                 switch try await client.pair(with: token) {
                 case .paired(let health, let identity):
+                    let scopes = identity["scopes"]?.stringArrayValue ?? []
                     return .paired(
                         PairingEvidence(
                             version: health.version,
-                            uptimeSeconds: Int(health.uptimeS ?? 0),
+                            uptimeSeconds: Int(health.uptimeS),
                             authRequired: health.needsToken,
-                            scopes: identity.scopes ?? []))
+                            scopes: scopes,
+                            contractEpoch: health.contractEpoch))
                 case .tokenRequired:
                     return .tokenRequired
                 case .notWindex(let service):
@@ -235,6 +264,31 @@ final class AppModel {
     var connectedBackend: ConnectedBackend? {
         guard case .ready(let backend) = connectionState else { return nil }
         return backend
+    }
+
+    func openPipeline(_ reference: PipelineRevisionReference, flow: String? = nil) {
+        pipelineNavigation = .init(reference: reference, flow: flow)
+        selection = .pipelines
+    }
+
+    func createSource(using reference: PipelineRevisionReference) {
+        sourceCreationRevision = reference
+        selection = .sources
+    }
+
+    func openSource(_ name: String) {
+        selectedSourceName = name
+        selection = .sources
+    }
+
+    func openRun(_ id: Int) {
+        selectedRunID = id
+        selection = .runs
+    }
+
+    func openConsole(_ filter: OperationalEventFilter) {
+        consoleFilterRequest = filter
+        selection = .logs
     }
 
     var currentProfile: ConnectionProfile? {
@@ -268,6 +322,7 @@ final class AppModel {
         do {
             profile = try ConnectionProfile(input)
         } catch {
+            disconnectSession()
             client = nil
             connectionState = .failed(
                 nil,
@@ -286,6 +341,7 @@ final class AppModel {
                 ? try tokenStore.loadToken(for: profile)
                 : candidateToken?.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
+            disconnectSession()
             client = nil
             connectionState = .failed(
                 profile,
@@ -304,22 +360,26 @@ final class AppModel {
             case .paired(let evidence):
                 try persistVerifiedToken(candidate, for: profile)
                 addressStore.save(profile.displayAddress)
+                let backend = ConnectedBackend(
+                    profile: profile,
+                    evidence: evidence,
+                    hasStoredToken: candidate != nil)
+                disconnectSession()
                 client = connectingClient
-                connectionState = .ready(
-                    ConnectedBackend(
-                        profile: profile,
-                        evidence: evidence,
-                        hasStoredToken: candidate != nil))
+                session = BackendSession(client: connectingClient, backend: backend)
+                connectionState = .ready(backend)
 
             case .tokenRequired:
                 if useStoredToken {
                     try? tokenStore.deleteToken(for: profile)
                 }
                 addressStore.save(profile.displayAddress)
+                disconnectSession()
                 client = nil
                 connectionState = .tokenRequired(profile)
 
             case .notWindex(let service):
+                disconnectSession()
                 client = nil
                 connectionState = .failed(profile, .notWindex(service: service))
 
@@ -327,14 +387,17 @@ final class AppModel {
                 if useStoredToken {
                     try? tokenStore.deleteToken(for: profile)
                 }
+                disconnectSession()
                 client = nil
                 connectionState = .failed(profile, .unauthorized)
 
             case .adminDisabled(let message):
+                disconnectSession()
                 client = nil
                 connectionState = .failed(profile, .adminDisabled(message))
             }
         } catch {
+            disconnectSession()
             client = nil
             if useStoredToken, let windexError = error as? WindexError,
                case .unauthorized = windexError {
@@ -358,6 +421,7 @@ final class AppModel {
         if let windexError = error as? WindexError,
            case .unauthorized = windexError {
             try? tokenStore.deleteToken(for: profile)
+            disconnectSession()
             client = nil
             connectionState = .failed(profile, .unauthorized)
         }
@@ -371,9 +435,15 @@ final class AppModel {
     func changeBackend() {
         addressStore.remove()
         backendAddress = ""
+        disconnectSession()
         client = nil
         connectionState = .unconfigured
         selection = .overview
+        pipelineNavigation = nil
+        sourceCreationRevision = nil
+        selectedSourceName = nil
+        selectedRunID = nil
+        consoleFilterRequest = nil
     }
 
     func forgetBackend() {
@@ -399,6 +469,11 @@ final class AppModel {
             return .adminDisabled(message)
         case .http(_, let message), .notFound(let message):
             return .unexpected(message)
+        case .conflict(let message), .preconditionFailed(let message),
+             .preconditionRequired(let message):
+            return .unexpected(message)
+        case .unsupportedContractEpoch:
+            return .incompatibleContract(windexError.localizedDescription)
         case .validation(_, let message):
             return .unexpected(message)
         case .decoding:
@@ -406,5 +481,10 @@ final class AppModel {
         case .invalidURL(let raw):
             return .invalidAddress(raw)
         }
+    }
+
+    private func disconnectSession() {
+        session?.stop()
+        session = nil
     }
 }

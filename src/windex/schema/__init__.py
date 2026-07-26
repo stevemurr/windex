@@ -1,4 +1,4 @@
-"""Form-schema primitives shared by settings, job params and recipe modules.
+"""Form-schema primitives shared by settings, job params, and Pipeline Modules.
 
 One `Param` type describes every editable value windex exposes, and one
 `describe()` shape is what every client renders a control from. See

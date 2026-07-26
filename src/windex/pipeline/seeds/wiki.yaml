@@ -1,0 +1,105 @@
+schema: windex.pipeline/1
+parameters:
+- key: dump
+  kind: str
+  default: enwiki
+  stage: install
+  label: Dump
+- key: chunk_rows
+  kind: int
+  lo: 100
+  hi: 50000
+  default: 2000
+  label: Chunk rows
+state:
+  shard:
+    key: shard filename
+    order: key
+flows:
+  sync:
+    inputs: []
+    outputs: []
+    nodes:
+      once:
+        kind: discover
+        uses: static.once
+        with:
+          key: dump-index
+      index:
+        kind: fetch
+        uses: http.download
+        with:
+          url_template: https://dumps.wikimedia.org/other/cirrus_search_index/
+          allowed_hosts: dumps.wikimedia.org
+      shards:
+        kind: catalog
+        uses: list.apache_index
+        with:
+          require_marker: _SUCCESS
+          newest_only: true
+      record:
+        kind: collect
+        uses: store.upsert
+        with:
+          store: shard
+          on_conflict: skip
+    edges:
+    - from:
+        node: once
+      to:
+        node: index
+    - from:
+        node: index
+      to:
+        node: shards
+    - from:
+        node: shards
+      to:
+        node: record
+  ingest:
+    inputs: []
+    outputs: []
+    nodes:
+      pending:
+        kind: discover
+        uses: state.pending
+        with:
+          store: shard
+          predicate: token_moved
+          order: key
+          batch: 1
+          claim: lease
+          stale_minutes: 60
+      shard:
+        kind: fetch
+        uses: http.download
+        with:
+          url_template: https://dumps.wikimedia.org/other/cirrus_search_index/{dump_date}/index_name={dump}_content/{key}
+          allowed_hosts: dumps.wikimedia.org
+          keep: false
+      pages:
+        kind: extract
+        uses: cirrus.articles
+        with:
+          chunk_rows: '@param.chunk_rows'
+      stage:
+        kind: load
+        uses: ledger.stage
+        with:
+          replace: false
+    edges:
+    - from:
+        node: pending
+      to:
+        node: shard
+    - from:
+        node: shard
+      to:
+        node: pages
+    - from:
+        node: pages
+      to:
+        node: stage
+refresh:
+- sync
+- ingest

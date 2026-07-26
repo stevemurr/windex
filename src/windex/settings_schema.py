@@ -11,7 +11,7 @@ for exactly this reason.
 Bounds are the second half of it. A value that passes the allowlist can still
 wedge a source (a 10,000s request interval stalls ingest as surely as a crash),
 so every numeric field carries a range and is CLAMPED to it rather than rejected
-— the same call `crawl/recipe.py` makes for recipe limits: a caller may ask to be
+— the same call `crawl/policy.py` makes for crawl limits: a caller may ask to be
 slower or smaller, never faster or bigger than the operator's ceiling.
 
 Deliberately absent even though they look editable:
@@ -20,7 +20,7 @@ Deliberately absent even though they look editable:
     is a re-embed plus a Qdrant alias flip, not a settings edit; offering it here
     would silently corrupt every search until someone noticed.
   * anything under ``crawl_*_ceiling`` — those ARE the operator ceilings that
-    bound what a recipe may request, so making them editable through the same API
+    bound what a Pipeline may request, so making them editable through the same API
     that they constrain defeats them.
 """
 
@@ -33,7 +33,7 @@ GLOBAL = "_global"
 
 # One editable setting; ``key`` is the attribute name on ``Settings``. This is
 # `windex.schema.Param` under its original name — the same allowlist-and-clamp
-# semantics, now shared with job params and recipe module config so a client
+# semantics, now shared with job params and Pipeline Module config so a client
 # renders one form shape instead of three. Param's first seven fields are Field's
 # in the same order, so the positional `_f(...)` calls below are unchanged, and
 # `describe()` still emits the six legacy keys the console reads.
@@ -115,7 +115,7 @@ SCHEMA: dict[str, tuple[Field, ...]] = {
         _f("embed_order", "choice", choices=("oldest", "newest"), label="Embed order",
            help="oldest = drain the backlog; newest = index fresh docs first."),
         _f("crawl_host_interval", "float", 1.0, 300, label="Crawl per-host interval (s)",
-           help="Default politeness for web-cluster crawls; a recipe may go slower, never faster."),
+           help="Default politeness for web-cluster crawls; a policy may go slower, never faster."),
         _f("crawl_max_pages", "int", 1, 20_000, label="Crawl page budget (default)"),
         _f("crawl_max_depth", "int", 0, 8, label="Crawl depth (default)"),
     ),
@@ -154,7 +154,7 @@ def coerce(scope: str, key: str, value) -> object:
     if owner != scope:
         raise ValueError(f"setting {key!r} belongs to scope {owner!r}, not {scope!r}")
     # Typing, bounds and the clamp-don't-reject rule live on Param, shared with job
-    # params and recipe module config. What stays here is the part that is specific
+    # params and Pipeline Module config. What stays here is specific
     # to settings: which keys are editable at all, and under which scope.
     return spec.coerce(value)
 

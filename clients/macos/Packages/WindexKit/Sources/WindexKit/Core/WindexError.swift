@@ -40,6 +40,15 @@ public enum WindexError: Error, Sendable {
 
     case notFound(message: String)
 
+    /// The write raced with another semantic update (409).
+    case conflict(message: String)
+
+    /// The supplied revision/hash/ETag no longer matches (412).
+    case preconditionFailed(message: String)
+
+    /// The server requires an explicit concurrency precondition (428).
+    case preconditionRequired(message: String)
+
     /// 422. Carries the per-field failures so a form can attach them to controls.
     case validation(failures: [ValidationFailure], message: String)
 
@@ -51,6 +60,9 @@ public enum WindexError: Error, Sendable {
 
     /// The base URL couldn't be formed into a request URL.
     case invalidURL(String)
+
+    /// The desktop client intentionally supports only the epoch-2 cutover.
+    case unsupportedContractEpoch(received: Int, supported: Int)
 }
 
 extension WindexError: LocalizedError {
@@ -64,6 +76,12 @@ extension WindexError: LocalizedError {
             return message
         case .notFound(let message):
             return message
+        case .conflict(let message):
+            return message
+        case .preconditionFailed(let message):
+            return message
+        case .preconditionRequired(let message):
+            return message
         case .validation(let failures, let message):
             guard !failures.isEmpty else { return message }
             return failures
@@ -75,6 +93,8 @@ extension WindexError: LocalizedError {
             return "unexpected response from server: \(underlying)"
         case .invalidURL(let raw):
             return "not a usable server address: \(raw)"
+        case .unsupportedContractEpoch(let received, let supported):
+            return "This app requires backend contract epoch \(supported); the server reported epoch \(received)."
         }
     }
 
