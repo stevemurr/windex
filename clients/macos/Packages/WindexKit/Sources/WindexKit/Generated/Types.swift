@@ -12108,6 +12108,57 @@ public enum Operations {
             }
         }
         @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/pipelines/{name}/revisions/POST/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/pipelines/{name}/revisions/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.PipelineRevisionModel)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.PipelineRevisionModel {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.PipelineRevisionPublish.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.PipelineRevisionPublish.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// An existing semantic revision is now the Pipeline head (rollback or idempotent no-op).
+            ///
+            /// - Remark: Generated from `#/paths//v1/pipelines/{name}/revisions/post(pipeline_revision_publish)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.PipelineRevisionPublish.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.PipelineRevisionPublish.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
             public struct Created: Sendable, Hashable {
                 /// - Remark: Generated from `#/paths/v1/pipelines/{name}/revisions/POST/responses/201/content`.
                 @frozen public enum Body: Sendable, Hashable {

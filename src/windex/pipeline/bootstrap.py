@@ -56,7 +56,7 @@ def seed_canonical(
                 note="built-in definition update",
             )
             action = "revised"
-            version = revision["version"]
+            version = revision.revision["version"]
         actions.append({"pipeline": item["name"], "action": action})
 
         binding = item.get("source")

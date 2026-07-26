@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 import psycopg
 import yaml
@@ -15,6 +16,7 @@ from psycopg.types.json import Jsonb
 from windex.config import Settings
 from windex.pipeline import compile as pipeline_compile
 from windex.pipeline import registry
+from windex.pipeline.events import append
 from windex.pipeline.hashing import layout_etag, module_locks, semantic_hash
 from windex.pipeline.spec import Pipeline, parse
 from windex.pipeline.validation import source_capability
@@ -30,6 +32,14 @@ class PipelinePreconditionRequiredError(RuntimeError):
 
 class PipelinePreconditionConflictError(RuntimeError):
     """Two representations of the expected Pipeline head disagree."""
+
+
+@dataclass(frozen=True)
+class PublicationResult:
+    """The immutable revision now at the Pipeline head and how it got there."""
+
+    revision: dict[str, Any]
+    action: Literal["created", "rollback", "noop"]
 
 
 def seed_dir() -> Path:
@@ -80,6 +90,23 @@ def _revision(row: tuple[Any, ...]) -> dict[str, Any]:
         out["created_at"] = out["created_at"].isoformat()
     out["capability"] = source_capability(parse(out["spec"]))
     return out
+
+
+def _revision_by_id(
+    cur: psycopg.Cursor,
+    revision_id: int,
+) -> dict[str, Any]:
+    cur.execute(
+        f"""SELECT {_REVISION_COLS}
+              FROM pipelines p
+              JOIN pipeline_revisions r ON r.pipeline_id = p.id
+             WHERE r.id = %s""",
+        (revision_id,),
+    )
+    row = cur.fetchone()
+    if row is None:  # pragma: no cover - protected by caller's row lock/FK
+        raise RuntimeError(f"Pipeline revision {revision_id} disappeared")
+    return _revision(row)
 
 
 def get_revision(
@@ -232,7 +259,14 @@ def publish_revision(
     expected_hash: str | None = None,
     author: str = "",
     note: str = "",
-) -> dict[str, Any]:
+) -> PublicationResult:
+    """Publish a new semantic revision or atomically reactivate an existing one.
+
+    The expected-head guard is checked while holding the Pipeline row lock. An
+    existing hash is therefore either an idempotent no-op at the current head or
+    a semantic rollback that moves only the Pipeline head; immutable revisions,
+    their layouts, and Source revision pins remain untouched.
+    """
     if expected_version is None and expected_hash is None:
         raise PipelinePreconditionRequiredError(
             "publishing an existing Pipeline requires parent_version, "
@@ -276,9 +310,49 @@ def publish_revision(
             )
             existing = cur.fetchone()
             if existing is not None:
+                revision_id, version = existing
+                action: Literal["rollback", "noop"] = (
+                    "noop" if revision_id == parent_id else "rollback"
+                )
+                if action == "rollback":
+                    cur.execute(
+                        """UPDATE pipelines
+                              SET head_revision_id = %s, updated_at = now()
+                            WHERE id = %s""",
+                        (revision_id, pipeline_id),
+                    )
+                    append(
+                        cur,
+                        component="pipeline",
+                        event="pipeline.head_rolled_back",
+                        pipeline_name=name,
+                        pipeline_version=version,
+                        message=(
+                            f"Pipeline head moved from version {current_version} "
+                            f"to existing version {version}"
+                        ),
+                        data={
+                            "from_revision_id": parent_id,
+                            "from_version": current_version,
+                            "from_hash": current_hash,
+                            "to_revision_id": revision_id,
+                            "to_version": version,
+                            "to_hash": digest,
+                        },
+                    )
+                revision = _revision_by_id(cur, revision_id)
                 conn.commit()
-                return get_revision(conn, name, existing[1])  # type: ignore[return-value]
-            version = current_version + 1
+                return PublicationResult(revision=revision, action=action)
+            cur.execute(
+                """SELECT coalesce(max(version), 0)
+                     FROM pipeline_revisions
+                    WHERE pipeline_id = %s""",
+                (pipeline_id,),
+            )
+            # Version numbers identify immutable history, not distance from the
+            # mutable head. After a rollback the next publication must therefore
+            # advance past every historic version rather than reuse head + 1.
+            version = cur.fetchone()[0] + 1
             cur.execute(
                 """INSERT INTO pipeline_revisions
                        (pipeline_id, version, parent_revision_id, spec, spec_hash,
@@ -318,11 +392,28 @@ def publish_revision(
                     WHERE id = %s""",
                 (revision_id, pipeline_id),
             )
+            append(
+                cur,
+                component="pipeline",
+                event="pipeline.revision_published",
+                pipeline_name=name,
+                pipeline_version=version,
+                message=f"Published Pipeline revision {version}",
+                data={
+                    "revision_id": revision_id,
+                    "version": version,
+                    "spec_hash": digest,
+                    "parent_revision_id": parent_id,
+                    "parent_version": current_version,
+                    "parent_hash": current_hash,
+                },
+            )
+            revision = _revision_by_id(cur, revision_id)
         conn.commit()
     except Exception:
         conn.rollback()
         raise
-    return get_revision(conn, name, version)  # type: ignore[return-value]
+    return PublicationResult(revision=revision, action="created")
 
 
 def get_layout(
@@ -419,6 +510,7 @@ def task_preview(
 
 
 __all__ = [
+    "PublicationResult",
     "StalePipelineError",
     "archive",
     "create_pipeline",
