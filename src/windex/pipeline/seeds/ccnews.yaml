@@ -19,12 +19,13 @@ parameters:
   default: 30
   label: Near-dup window (days)
   help: News syndication crosses days; this is the MinHash comparison window.
-- key: batch_warcs
+- key: warcs_per_lane
   kind: int
   lo: 1
-  hi: 64
-  default: 8
-  label: WARCs per slice
+  hi: 32
+  default: 4
+  label: WARCs per extraction lane
+  help: Two independent lanes run this many WARCs each.
 state:
   manifest:
     key: YYYY/MM
@@ -81,25 +82,49 @@ flows:
     inputs: []
     outputs: []
     nodes:
-      pending:
+      pending_a:
         kind: discover
         uses: state.pending
         with:
           store: warc
           predicate: unseen
           order: key
-          batch: '@param.batch_warcs'
-          limit: '@param.batch_warcs'
+          batch: '@param.warcs_per_lane'
+          limit: '@param.warcs_per_lane'
           claim: lease
           stale_minutes: 60
-      download:
+      download_a:
         kind: fetch
         uses: http.download
         with:
           url_template: https://data.commoncrawl.org/{key}
           allowed_hosts: data.commoncrawl.org
           keep: false
-      extract:
+      extract_a:
+        kind: extract
+        uses: warc.datatrove
+        with:
+          language: '@param.language'
+          workers: 1
+      pending_b:
+        kind: discover
+        uses: state.pending
+        with:
+          store: warc
+          predicate: unseen
+          order: key
+          batch: '@param.warcs_per_lane'
+          limit: '@param.warcs_per_lane'
+          claim: lease
+          stale_minutes: 60
+      download_b:
+        kind: fetch
+        uses: http.download
+        with:
+          url_template: https://data.commoncrawl.org/{key}
+          allowed_hosts: data.commoncrawl.org
+          keep: false
+      extract_b:
         kind: extract
         uses: warc.datatrove
         with:
@@ -127,15 +152,27 @@ flows:
           replace: false
     edges:
     - from:
-        node: pending
+        node: pending_a
       to:
-        node: download
+        node: download_a
     - from:
-        node: download
+        node: download_a
       to:
-        node: extract
+        node: extract_a
     - from:
-        node: extract
+        node: extract_a
+      to:
+        node: canon
+    - from:
+        node: pending_b
+      to:
+        node: download_b
+    - from:
+        node: download_b
+      to:
+        node: extract_b
+    - from:
+        node: extract_b
       to:
         node: canon
     - from:

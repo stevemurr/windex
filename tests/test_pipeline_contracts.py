@@ -7,6 +7,7 @@ import pytest
 from windex.pipeline import compile_pipeline, parse, validate
 from windex.pipeline.contracts import PIPELINE_SCHEMA, SEARCH_SOURCE_CONTRACT
 from windex.pipeline.hashing import semantic_hash
+from windex.pipeline.store import load_seed_matrix
 from windex.pipeline.validation import source_capability, validate_deployment
 
 
@@ -112,6 +113,25 @@ def test_generic_compile_freezes_module_locks_and_values(settings):
     assert compiled["parameters"]["max_docs"] == 17
     assert set(compiled["module_locks"]) == {"push.docs", "ledger.stage"}
     assert all(task["module_digest"].startswith("sha256:") for task in compiled["tasks"])
+
+
+def test_ccnews_seed_has_two_bounded_warc_lanes_and_serial_dedup(settings):
+    seed = next(
+        item for item in load_seed_matrix(settings)
+        if item["name"] == "ccnews"
+    )
+    compiled = compile_pipeline(
+        seed["spec"], flow="ingest", settings=settings, values={},
+        source_bound=True,
+    )
+    tasks = {task["node"]: task for task in compiled["tasks"]}
+
+    assert tasks["extract_a"]["lane"] == "warc"
+    assert tasks["extract_b"]["lane"] == "warc"
+    assert tasks["pending_a"]["config"]["limit"] == 4
+    assert tasks["pending_b"]["config"]["limit"] == 4
+    assert tasks["canon"]["depends_on"] == ["extract_a", "extract_b"]
+    assert tasks["exact"]["depends_on"] == ["canon"]
 
 
 def test_pipeline_rejects_mixed_ingress(settings):

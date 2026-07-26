@@ -21,16 +21,17 @@ from windex.worker.protocol import LANES
 
 GIB = 1024 ** 3
 
-# Fleet-wide in-flight cap per lane. cpu_heavy = 1 is load-bearing: it is what
-# makes "datatrove extraction and a wiki shard stream can never run at the same
-# time" a structural property instead of a scheduling accident, and those two are
-# the measured peaks behind the memory-pressure resets. gpu = 2 sits above the
+# Fleet-wide in-flight cap per lane. General cpu_heavy work stays serialized.
+# WARC extraction has a separate measured budget: one process consumed about
+# 1.6 GiB on the 20-core/40-GiB worker, so two are a conservative next step and
+# do not admit a concurrent Wiki/custom-module peak. gpu = 2 sits above the
 # flock budget in embed/budget.py rather than replacing it — 2 tasks x
 # embed_concurrency 3 = 6 in flight *by construction*, so the flock becomes a
 # correctness backstop that rarely blocks instead of the primary throttle.
 DEFAULT_LANE_CAPS: dict[str, int] = {
     "gpu": 2,
-    "net": 4,        # politeness is per-host inside the fetcher, not per-lane
+    "net": 5,        # bounded download/pagination concurrency
+    "warc": 2,
     "cpu_heavy": 1,
     "io": 4,
     "maint": 1,      # maintenance is never worth contending with real ingest
@@ -78,7 +79,7 @@ class PoolConfig:
     # Stop claiming cpu_heavy above this fraction of the limit; keep claiming
     # io/net so the pool trickles instead of dying.
     backpressure_fraction: float = 0.70
-    backpressure_lanes: tuple[str, ...] = ("cpu_heavy",)
+    backpressure_lanes: tuple[str, ...] = ("warc", "cpu_heavy")
     max_tasks_per_slot: int = 20       # unconditional recycle (counts slices)
 
     # --- supervisor --------------------------------------------------------

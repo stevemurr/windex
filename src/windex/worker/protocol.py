@@ -42,10 +42,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # The lane vocabulary (run_tasks.lane). A lane is a *contended resource class*,
-# not a priority: the pool caps how many tasks may run per lane fleet-wide, which
-# is what keeps two datatrove extractions (cpu_heavy, cap 1) from ever coexisting
-# and what bounds GPU pressure independently of the flock budget in embed/.
-LANES: tuple[str, ...] = ("gpu", "net", "cpu_heavy", "io", "maint")
+# not a priority: the pool caps how many tasks may run per lane fleet-wide.
+# DataTrove has its own measured two-task budget; other memory-heavy work remains
+# serialized so a Wiki shard and a custom module cannot peak together.
+LANES: tuple[str, ...] = ("gpu", "net", "warc", "cpu_heavy", "io", "maint")
 
 
 @dataclass(frozen=True)

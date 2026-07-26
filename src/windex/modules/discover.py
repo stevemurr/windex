@@ -264,6 +264,7 @@ def state_pending(ctx: TaskContext) -> SliceResult:
                   WHERE t.task_id = %s AND t.unit_key = u.unit_key)
          ORDER BY {order}
          LIMIT %s
+           FOR UPDATE OF u SKIP LOCKED
         """).format(
             pending=pending,
             lease=lease,

@@ -19,6 +19,7 @@ TASK_KEYS = frozenset({
 
 LEASE_SECONDS = {
     "net": 900,
+    "warc": 1800,
     "cpu_heavy": 1800,
     "gpu": 300,
     "io": 300,

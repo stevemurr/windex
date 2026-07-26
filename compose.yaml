@@ -133,9 +133,9 @@ services:
 
     # --- Pipeline worker pool -----------------------------------------------
     # Executes canonical run_tasks. Six recyclable subprocess slots let all four
-    # network lanes coexist with one CPU-heavy and one GPU/IO task. Fleet-wide
-    # lane caps still keep cpu_heavy at one so a wiki shard and datatrove
-    # extraction can never peak together.
+    # network lanes coexist with extraction and GPU/IO work. Dedicated WARC
+    # capacity permits two measured extraction processes while general
+    # cpu_heavy work remains serialized.
     windex-worker:
         <<: *windex-worker
         command: ["worker", "--slots", "6", "--name", "production"]

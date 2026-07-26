@@ -53,9 +53,9 @@ class Module:
     # Which worker lane this runs in, and what must hold before it may be claimed.
     # Assigned below rather than inferred from `kind`: the lane is a property of
     # what a module DOES, and inferring it would put a 333MB shard reader in the
-    # same lane as a status query. cpu_heavy is capped at 1 concurrent because
-    # that cap IS the memory ceiling on this box.
-    lane: str = "io"                         # gpu | net | cpu_heavy | io | maint
+    # same lane as a status query. General cpu_heavy work remains serialized;
+    # WARC extraction has its own measured two-task budget.
+    lane: str = "io"                    # gpu | net | warc | cpu_heavy | io | maint
     preconditions: tuple[str, ...] = ()      # worker.preconditions.KNOWN
     version: str = "1.0"
     stability: str = "stable"                # stable | beta | experimental
@@ -522,9 +522,10 @@ _PLACEMENT: dict[str, tuple[str, tuple[str, ...]]] = {
     "http.download":        ("net", ("storage:downloads",)),
     "http.paginate":        ("net", ()),
     "github.graphql_batch": ("net", ("gh_token",)),
-    # cpu_heavy — the two memory-hungry paths, and the extraction that is both
-    # CPU-bound and not thread-safe
-    "warc.datatrove":       ("cpu_heavy", ("storage:downloads", "storage:staging")),
+    # warc — measured separately so two WARC processes can run without admitting
+    # a concurrent Wiki/custom-module peak.
+    "warc.datatrove":       ("warc", ("storage:downloads", "storage:staging")),
+    # cpu_heavy — serialized memory-hungry and non-thread-safe work.
     "cirrus.articles":      ("cpu_heavy", ("storage:staging",)),
     "html.trafilatura":     ("cpu_heavy", ()),
     # io, but they touch the staging tree, so they wait on it being present and
