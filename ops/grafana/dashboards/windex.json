@@ -147,7 +147,7 @@
     {
       "id": 3,
       "type": "state-timeline",
-      "title": "Uptime \u2014 dependencies & loops",
+      "title": "Uptime \u2014 dependencies & worker",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -259,14 +259,14 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "windex_loop_up",
+          "expr": "1 - clamp_max(windex_worker_claim_stalled, 1)",
           "refId": "D",
           "range": true,
           "instant": false,
-          "legendFormat": "loop: {{source}}"
+          "legendFormat": "worker claim path"
         }
       ],
-      "description": "Red = the signal reported 0 (down) in that interval. One row per external dependency and per embed-loop, so an outage's blast radius and its exact timing are visible in one place."
+      "description": "Red = a dependency is unavailable, a task lease expired, or ready Pipeline work has gone more than 60 seconds without any live task heartbeat. Epoch 2 uses one leased worker pool, not per-source loops."
     },
     {
       "id": 4,
@@ -617,7 +617,7 @@
     {
       "id": 9,
       "type": "stat",
-      "title": "Indexing",
+      "title": "Worker claims",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -635,12 +635,12 @@
               "type": "value",
               "options": {
                 "0": {
-                  "text": "running",
+                  "text": "healthy",
                   "color": "green",
                   "index": 0
                 },
                 "1": {
-                  "text": "PAUSED",
+                  "text": "STALLED",
                   "color": "red",
                   "index": 1
                 }
@@ -688,7 +688,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "windex_indexing_paused",
+          "expr": "windex_worker_claim_stalled",
           "refId": "A",
           "range": false,
           "instant": true
@@ -749,7 +749,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(windex_documents{status=\"deduped\"})",
+          "expr": "sum(windex_documents{status=\"staged\"})",
           "refId": "A",
           "range": false,
           "instant": true
@@ -815,7 +815,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "60 * sum(rate(windex_documents{status=\"embedded\"}[10m]))",
+          "expr": "sum(windex_embeds_per_minute{window=\"10m\"})",
           "refId": "A",
           "range": false,
           "instant": true
@@ -876,7 +876,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(windex_documents{status=\"deduped\"}) / sum(rate(windex_documents{status=\"embedded\"}[10m]))",
+          "expr": "60 * sum(windex_documents{status=\"staged\"}) / clamp_min(sum(windex_embeds_per_minute{window=\"10m\"}), 0.001)",
           "refId": "A",
           "range": false,
           "instant": true
@@ -899,7 +899,7 @@
     {
       "id": 14,
       "type": "timeseries",
-      "title": "Backlog vs embedded (all sources)",
+      "title": "Backlog vs searchable (all sources)",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -958,11 +958,11 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(windex_documents{status=\"deduped\"})",
+          "expr": "sum(windex_documents{status=\"staged\"})",
           "refId": "A",
           "range": true,
           "instant": false,
-          "legendFormat": "backlog (deduped)"
+          "legendFormat": "backlog (staged)"
         },
         {
           "datasource": {
@@ -970,11 +970,11 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(windex_documents{status=\"embedded\"})",
+          "expr": "sum(windex_documents{status=\"searchable\"})",
           "refId": "B",
           "range": true,
           "instant": false,
-          "legendFormat": "embedded"
+          "legendFormat": "searchable"
         }
       ]
     },
@@ -1042,7 +1042,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "60 * sum(rate(windex_documents{status=\"embedded\"}[$__rate_interval]))",
+          "expr": "sum(windex_embeds_per_minute{window=\"2m\"})",
           "refId": "A",
           "range": true,
           "instant": false,
@@ -1879,7 +1879,7 @@
         {
           "id": 28,
           "type": "state-timeline",
-          "title": "Background jobs (non-loop)",
+          "title": "Active worker lanes",
           "datasource": {
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
@@ -1955,14 +1955,14 @@
                 "uid": "${DS_PROMETHEUS}"
               },
               "editorMode": "code",
-              "expr": "windex_job_up",
+              "expr": "sum by (lane) (windex_run_tasks{state=\"running\"}) > bool 0",
               "refId": "A",
               "range": true,
               "instant": false,
-              "legendFormat": "{{job}}"
+              "legendFormat": "{{lane}}"
             }
           ],
-          "description": "gh discover/hydrate, ingest/harvest passes, the scheduler, \u2026 (windex_job_up)."
+          "description": "The canonical worker pool's active execution lanes. Zero means the lane is idle, not that a legacy background process is down."
         },
         {
           "id": 29,
@@ -2057,7 +2057,7 @@
     {
       "id": 32,
       "type": "timeseries",
-      "title": "$source \u2014 backlog vs embedded",
+      "title": "$source \u2014 backlog vs searchable",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2116,11 +2116,11 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "windex_documents{source=\"$source\", status=\"deduped\"}",
+          "expr": "windex_documents{source=\"$source\", status=\"staged\"}",
           "refId": "A",
           "range": true,
           "instant": false,
-          "legendFormat": "backlog (deduped)"
+          "legendFormat": "backlog (staged)"
         },
         {
           "datasource": {
@@ -2128,11 +2128,11 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "windex_documents{source=\"$source\", status=\"embedded\"}",
+          "expr": "windex_documents{source=\"$source\", status=\"searchable\"}",
           "refId": "B",
           "range": true,
           "instant": false,
-          "legendFormat": "embedded"
+          "legendFormat": "searchable"
         }
       ]
     },
@@ -2200,7 +2200,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "60 * sum(rate(windex_documents{source=\"$source\", status=\"embedded\"}[$__rate_interval]))",
+          "expr": "windex_embeds_per_minute{source=\"$source\", window=\"2m\"}",
           "refId": "A",
           "range": true,
           "instant": false,
@@ -2211,7 +2211,7 @@
     {
       "id": 34,
       "type": "stat",
-      "title": "$source \u2014 loop",
+      "title": "$source \u2014 active tasks",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2282,7 +2282,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "windex_loop_up{source=\"$source\"}",
+          "expr": "(sum(windex_run_tasks{source=\"$source\", state=\"running\"}) or vector(0)) > bool 0",
           "refId": "A",
           "range": false,
           "instant": true
@@ -2292,7 +2292,7 @@
     {
       "id": 35,
       "type": "timeseries",
-      "title": "$source \u2014 embed log staleness",
+      "title": "$source \u2014 oldest task age",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2364,14 +2364,14 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "time() - max by (source) (windex_log_last_modified_timestamp_seconds{source=\"$source\"})",
+          "expr": "max(windex_task_running_age_seconds{source=\"$source\"})",
           "refId": "A",
           "range": true,
           "instant": false,
-          "legendFormat": "staleness"
+          "legendFormat": "running age"
         }
       ],
-      "description": "Seconds since the embed-loop log last moved; yellow >5m, red >15m (a wedged-but-alive loop)."
+      "description": "Age of the Source's oldest running canonical task. A long age with a fresh heartbeat can still indicate a module that is not honoring slice yield requests."
     },
     {
       "id": 40,
@@ -2389,12 +2389,12 @@
     {
       "id": 41,
       "type": "table",
-      "title": "Ingest ledgers \u2014 rows needing attention",
+      "title": "Source units \u2014 rows needing attention",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Per-source freshness ledgers (warc_files, arxiv_windows, wiki_dumps, hn_windows, gharchive_files, docsets, feeds, hf_roots/posts) with the healthy/benign states (done, pending, active, removed, no_llms) filtered out. A row here = an ingest unit that failed, is held, is stuck, or died \u2014 content that never reached the corpus. Sorted by count.",
+      "description": "Canonical Source units outside the healthy done/pending/processing states. A row here is a unit that needs operator attention. Sorted by count.",
       "gridPos": {
         "h": 8,
         "w": 10,
@@ -2436,7 +2436,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "windex_watermark_rows{status!~\"done|pending|active|removed|no_llms\"}",
+          "expr": "windex_source_units{status!~\"done|pending|processing\"}",
           "format": "table",
           "instant": true,
           "range": false,
@@ -2520,7 +2520,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(windex_watermark_rows{status=\"failed\"})",
+          "expr": "sum(windex_source_units{status=\"failed\"})",
           "refId": "A",
           "instant": true,
           "range": false,
@@ -2587,7 +2587,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (source) (windex_watermark_rows{status=\"failed\"})",
+          "expr": "sum by (source) (windex_source_units{status=\"failed\"})",
           "refId": "A",
           "instant": true,
           "range": false,
@@ -2660,7 +2660,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (source) (windex_watermark_rows{status!~\"done|pending|active|removed|no_llms\"})",
+          "expr": "sum by (source) (windex_source_units{status!~\"done|pending|processing\"})",
           "legendFormat": "{{source}}",
           "range": true,
           "instant": false,

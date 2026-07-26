@@ -52,10 +52,10 @@ groups:
             datasourceUid: REPLACE_WITH_PROMETHEUS_DS_UID
             model:
               refId: A
-              # 1 iff embedded throughput is exactly zero over 15m AND >1000 docs
-              # sit deduped-but-unembedded; 0 otherwise. Product of two boolean
+              # 1 iff searchable throughput is zero AND >1000 canonical staged
+              # documents are waiting; 0 otherwise. Product of two boolean
               # aggregations (both label-less, so they join on the empty set).
-              expr: '(sum(rate(windex_documents{status="embedded"}[15m])) == bool 0) * (sum(windex_documents{status="deduped"}) > bool 1000)'
+              expr: '(sum(windex_embeds_per_minute{window="10m"}) == bool 0) * (sum(windex_documents{status="staged"}) > bool 1000)'
               instant: true
               range: false
               editorMode: code
@@ -80,16 +80,15 @@ groups:
         annotations:
           summary: "Embedding pipeline has stalled with a backlog waiting"
           description: >-
-            Embed throughput has been zero for 15m while >1000 docs are deduped
-            but unembedded. This is the 2026-07-17 failure mode: a 25-min
+            Searchable throughput has been zero for 15m while >1000 docs are
+            staged. This is the 2026-07-17 failure mode: a 25-min
             gateway outage silently stalled indexing for ~36h because no alert
-            watched throughput against backlog. Check the embed loops
-            (windex_loop_up), the embedding gateway (windex_gateway_up), and
-            embed-<source> log staleness on the windex ops dashboard.
+            watched throughput against backlog. Check the Pipeline worker task
+            and lease metrics plus the embedding gateway.
 
-      # Any per-source ingest/embed loop process is down.
-      - uid: windex-loop-down
-        title: LoopDown
+      # A lease expired, or ready work exists without a live task heartbeat.
+      - uid: windex-worker-claims-stalled
+        title: WorkerClaimsStalled
         condition: C
         for: 10m
         data:
@@ -100,8 +99,7 @@ groups:
             datasourceUid: REPLACE_WITH_PROMETHEUS_DS_UID
             model:
               refId: A
-              # Keeps the {source} label so the firing instance names the loop.
-              expr: windex_loop_up
+              expr: windex_worker_claim_stalled
               instant: true
               range: false
               editorMode: code
@@ -116,18 +114,20 @@ groups:
               conditions:
                 - type: query
                   evaluator:
-                    type: lt
-                    params: [1]
+                    type: gt
+                    params: [0]
         noDataState: NoData
         execErrState: Error
         labels:
           app: windex
           severity: warning
         annotations:
-          summary: "A windex ingest/embed loop is down ({{ $labels.source }})"
+          summary: "The Pipeline worker is not claiming ready work"
           description: >-
-            windex_loop_up == 0 for 10m. The named source's loop process is not
-            running; its backlog will grow until it is restarted.
+            windex_worker_claim_stalled == 1 for 10m. A running task lease has
+            expired, or canonical tasks are ready but nothing has heartbeated in
+            the last 60 seconds. Check the windex-worker container, expired
+            leases, and task preconditions.
 
       # The embedding gateway (upstream model endpoint) is unreachable.
       - uid: windex-gateway-down

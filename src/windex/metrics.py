@@ -7,9 +7,10 @@ layer (the query-embed leg in index/search.py) import it without a cycle and
 without api/ ⇄ index/ layering inversion.
 
 Two kinds of metric live in windex:
-  * point-in-time STATE (row counts, is-a-loop-running, gateway reachable) —
-    generated at scrape time by the custom collector in api/prom.py, which needs
-    request-scoped Settings, so it is NOT registered here.
+  * point-in-time STATE (canonical Run/task/Source-unit row counts and dependency
+    reachability) — generated at scrape time by the custom collector in
+    api/prom.py, which needs request-scoped Settings, so it is NOT registered
+    here.
   * cumulative EVENT instruments (HTTP RED, search + query-embed counters and
     histograms) — long-lived objects that accumulate across scrapes. Those are
     the ones defined here, on REGISTRY, so a single process-global instance is
