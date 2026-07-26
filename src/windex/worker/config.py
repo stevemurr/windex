@@ -13,7 +13,9 @@ pressure rather than graceful OOM kills.
 
 from __future__ import annotations
 
+import math
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -85,12 +87,12 @@ class PoolConfig:
     # --- supervisor --------------------------------------------------------
     tick_seconds: float = 5.0          # reaper / RSS / control-file cadence
     precondition_ttl_seconds: float = 30.0
-    # SIGKILL a slot that has ignored a yield request for this long. 0 = never,
-    # and that is the default on purpose: some units are legitimately minutes
-    # long (one ccnews extract batch is datatrove inside a single unit), so a
-    # kill would punish a module for behaving as designed. See
-    # supervisor._hung_watch for the full argument.
-    hung_grace_seconds: float = 0.0
+    # WINDEX_WORKER_HUNG_GRACE_SECONDS. A runner gets this much time beyond its
+    # slice deadline, or after a cancel/pause/yield request, before the supervisor
+    # kills its slot. This is deliberately finite by default: a module that never
+    # calls should_yield() must not renew its lease and hold a lane forever.
+    # Zero means no additional grace, not "disabled".
+    hung_grace_seconds: float = 60.0
     # A slot refuses tasks with preconditions when the control file is older than
     # this. Fail-closed: a precondition nobody has checked recently is not
     # satisfied, and "claimed a load task onto a full disk" is worse than idling.
@@ -102,12 +104,31 @@ class PoolConfig:
     # safe but wastes the slice.
     stop_grace_seconds: float = 30.0
 
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.slice_seconds) or self.slice_seconds <= 0:
+            raise ValueError("slice_seconds must be greater than zero")
+        if not math.isfinite(self.heartbeat_seconds) or self.heartbeat_seconds <= 0:
+            raise ValueError("heartbeat_seconds must be greater than zero")
+        if not math.isfinite(self.hung_grace_seconds) or self.hung_grace_seconds < 0:
+            raise ValueError("hung_grace_seconds must be zero or greater")
+        if not math.isfinite(self.stop_grace_seconds) or self.stop_grace_seconds < 0:
+            raise ValueError("stop_grace_seconds must be zero or greater")
+
     def cap_for(self, lane: str) -> int:
         return self.lane_caps.get(lane, self.default_lane_cap)
 
     @property
     def control_path(self) -> Path:
         return self.state_dir / "pool.json"
+
+    def active_slice_path(self, index: int) -> Path:
+        """Per-slot safety record consumed by the supervisor.
+
+        Pool names are operator input, so make them path-safe rather than letting
+        a name containing a slash escape ``state_dir``.
+        """
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", self.name).strip("._")
+        return self.state_dir / "slots" / f"{safe_name or 'pool'}-{index}.json"
 
     def with_overrides(self, **kw: object) -> PoolConfig:
         """A copy with non-None overrides applied — the CLI's "0 means default"
@@ -140,11 +161,15 @@ def config_from_env(base: PoolConfig | None = None) -> PoolConfig:
     for env, attr, cast in (
         ("WINDEX_WORKER_SLOTS", "slots", int),
         ("WINDEX_WORKER_SLICE_SECONDS", "slice_seconds", float),
+        ("WINDEX_WORKER_SLICE_UNITS", "slice_units", int),
+        ("WINDEX_WORKER_HEARTBEAT_SECONDS", "heartbeat_seconds", float),
         ("WINDEX_WORKER_MEM_LIMIT_BYTES", "mem_limit_bytes", int),
         ("WINDEX_WORKER_RSS_HIGH_WATER_BYTES", "rss_high_water_bytes", int),
         ("WINDEX_WORKER_RSS_HARD_BYTES", "rss_hard_bytes", int),
         ("WINDEX_WORKER_MAX_TASKS_PER_SLOT", "max_tasks_per_slot", int),
         ("WINDEX_WORKER_TICK_SECONDS", "tick_seconds", float),
+        ("WINDEX_WORKER_HUNG_GRACE_SECONDS", "hung_grace_seconds", float),
+        ("WINDEX_WORKER_STOP_GRACE_SECONDS", "stop_grace_seconds", float),
     ):
         val = _num(env, cast)
         if val is not None:

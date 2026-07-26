@@ -94,7 +94,22 @@ def slot_main(dsn: str, resolve: Resolve, cfg: PoolConfig, index: int) -> int:
                 drain.wait(cfg.claim_idle_seconds)
                 continue
             slices += 1
-            _run_one(ctl, work, task, resolve, cfg, drain)
+            active_path = cfg.active_slice_path(index)
+            # Publish before resolving or invoking module code. Failure to
+            # publish is fail-closed: the slot exits and the supervisor releases
+            # the lease rather than running work it cannot bound.
+            ctrlfile.write_active_slice(
+                active_path,
+                pid=os.getpid(),
+                worker=me,
+                task_id=task.id,
+                generation=slices,
+                started_at=time.monotonic(),
+            )
+            try:
+                _run_one(ctl, work, task, resolve, cfg, drain)
+            finally:
+                ctrlfile.clear_active_slice(active_path)
     except psycopg.OperationalError as exc:
         # Postgres went away. Exiting is correct: the supervisor re-forks with
         # backoff, and a slot that sat retrying forever is how the embed loops
