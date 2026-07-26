@@ -641,15 +641,14 @@ def implementation_digest(name: str) -> str:
     runner = runners.RUNNERS.get(name)
     if module is None or runner is None:
         return ""
-    implementations = (
-        runner,
-        *getattr(runner, "__windex_digest_dependencies__", ()),
-    )
-    source = b""
-    for implementation in implementations:
+    path = inspect.getsourcefile(runner)
+    source = Path(path).read_bytes() if path else repr(runner).encode()
+    for implementation in getattr(
+        runner, "__windex_digest_dependencies__", ()
+    ):
         path = inspect.getsourcefile(implementation)
         source += (
-            b"\0"
+            b"\0dependency\0"
             + implementation.__module__.encode()
             + b"\0"
             + implementation.__qualname__.encode()
