@@ -207,7 +207,11 @@ def _insert(
                 source_name=source["name"] if source else None,
                 pipeline_name=pipeline["pipeline_name"],
                 pipeline_version=pipeline["version"], run_id=run_id,
-                data={"task_count": len(tasks), "trigger": trigger_type},
+                data={
+                    "task_count": len(tasks),
+                    "trigger": trigger_type,
+                    "mode": mode,
+                },
             )
             _advance_cur(cur, run_id)
         if commit:
@@ -230,6 +234,7 @@ def submit_pipeline(
     settings: Settings | None = None,
     expected_head: str | None = None,
     priority: int = 50,
+    dry_run: bool = False,
 ) -> int:
     registry.load_custom(conn)
     revision = get_revision(conn, name, version)
@@ -244,7 +249,8 @@ def submit_pipeline(
     _apply_revision_locks(conn, compiled, revision["module_locks"])
     run_id = _insert(
         conn, pipeline=revision, compiled=compiled, source=None,
-        trigger_type="manual", trigger_by="admin API", mode="run",
+        trigger_type="manual", trigger_by="admin API",
+        mode="dry_run" if dry_run else "run",
         priority=priority, dedupe_key=None, idempotency_key=None,
     )
     assert run_id is not None
