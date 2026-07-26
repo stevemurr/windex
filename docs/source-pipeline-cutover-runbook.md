@@ -28,7 +28,8 @@ Choose a unique, immutable bootstrap ID such as the release tag plus UTC time:
 
 ```console
 uv run windex source-pipeline-cutover \
-  --bootstrap-id epoch2-20260725T220000Z
+  --bootstrap-id epoch2-20260725T220000Z \
+  --dedicated-qdrant-reset
 ```
 
 Review every resolved value in the JSON:
@@ -37,6 +38,8 @@ Review every resolved value in the JSON:
 - exact Qdrant endpoint and each manifest-owned alias/collection;
 - new `WINDEX_DATA_ROOT/generations/<bootstrap-id>` path;
 - prior generation path and exact quarantine destination;
+- exact flat legacy `downloads`/`staging` directories, when upgrading the
+  pre-generation filesystem layout;
 - contract epoch and deterministic seed hash.
 
 The command rejects blank values, wildcards, filesystem roots, an escaped
@@ -50,6 +53,7 @@ With writers still stopped, provide the exact reviewed reset confirmation:
 ```console
 uv run windex source-pipeline-cutover \
   --bootstrap-id epoch2-20260725T220000Z \
+  --dedicated-qdrant-reset \
   --execute \
   --confirm 'RESET epoch2-20260725T220000Z <manifest-hash>'
 ```
@@ -61,6 +65,11 @@ The durable marker is
 preflight -> postgres_reset -> qdrant_reset -> filesystem_generation
           -> schema_bootstrap -> seed -> verified
 ```
+
+`--dedicated-qdrant-reset` is an explicit assertion that the resolved Qdrant
+service is dedicated to Windex. Its manifest enumerates every existing alias
+and collection by exact name; execution never discovers broader targets after
+confirmation.
 
 Re-running the exact command resumes completed phases. A manifest-hash mismatch
 is refused. The reset drops only the resolved Postgres `public` schema, deletes
@@ -101,10 +110,11 @@ uv run windex source-pipeline-quarantine \
   --confirm 'QUARANTINE epoch2-20260725T220000Z <manifest-hash>'
 ```
 
-This refuses the active generation, paths outside `generations/`, paths outside
-the exact quarantine root, an existing destination, and an unverified marker.
-It renames rather than deletes the old generation. Pruning quarantined data is a
-separate exact-target operation and is not part of this cutover.
+This refuses the active generation, paths outside `generations/`, unknown flat
+legacy entries, paths outside the exact quarantine root, and an unverified
+marker. It renames rather than deletes the old generation or the exact reviewed
+flat legacy `downloads`/`staging` entries. Pruning quarantined data is a separate
+exact-target operation and is not part of this cutover.
 
 ## Rollback boundary
 

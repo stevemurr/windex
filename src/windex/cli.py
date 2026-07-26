@@ -144,6 +144,11 @@ def source_pipeline_cutover(
     reset_qdrant: bool = typer.Option(
         True, "--reset-qdrant/--keep-qdrant",
         help="Delete only manifest-owned Qdrant resources"),
+    dedicated_qdrant: bool = typer.Option(
+        False,
+        "--dedicated-qdrant-reset",
+        help="Acknowledge every enumerated Qdrant resource is Windex-owned",
+    ),
 ) -> None:
     """Dry-run or execute the fail-closed contract-epoch reset."""
     import psycopg
@@ -159,7 +164,8 @@ def source_pipeline_cutover(
                 conn = None
             try:
                 manifest = preflight(
-                    settings, bootstrap_id=bootstrap_id, conn=conn)
+                    settings, bootstrap_id=bootstrap_id, conn=conn,
+                    dedicated_qdrant=dedicated_qdrant)
             finally:
                 if conn is not None:
                     conn.close()
@@ -169,7 +175,8 @@ def source_pipeline_cutover(
             raise UnsafeCutover("--confirm is required with --execute")
         result = execute(
             settings, bootstrap_id=bootstrap_id, confirmation=confirm,
-            reset_qdrant=reset_qdrant)
+            reset_qdrant=reset_qdrant,
+            dedicated_qdrant=dedicated_qdrant)
         console.print_json(json.dumps(result))
     except UnsafeCutover as exc:
         console.print(f"[red]cutover refused:[/red] {exc}")

@@ -32,6 +32,7 @@ PHASES = (
     "seed",
     "verified",
 )
+_LEGACY_DATA_ENTRIES = ("artifacts", "downloads", "staging")
 
 
 class UnsafeCutover(RuntimeError):
@@ -106,6 +107,56 @@ def _owned_resources(
     return resources
 
 
+def _dedicated_qdrant_resources(settings: Settings) -> list[dict[str, Any]]:
+    """Enumerate every exact resource in an explicitly dedicated Qdrant service."""
+    endpoint = _qdrant_endpoint(settings)
+    collections_response = httpx.get(
+        f"{endpoint}/collections", timeout=15)
+    collections_response.raise_for_status()
+    aliases_response = httpx.get(f"{endpoint}/aliases", timeout=15)
+    aliases_response.raise_for_status()
+    aliases = aliases_response.json().get("result", {}).get("aliases", [])
+    collections = collections_response.json().get(
+        "result", {}).get("collections", [])
+    resources = [{
+        "type": "qdrant_alias",
+        "name": str(item["alias_name"]),
+        "metadata": {
+            "collection": str(item["collection_name"]),
+            "reset_scope": "dedicated",
+        },
+    } for item in aliases]
+    resources.extend({
+        "type": "qdrant_collection",
+        "name": str(item["name"]),
+        "metadata": {"reset_scope": "dedicated"},
+    } for item in collections)
+    for resource in resources:
+        name = resource["name"]
+        if not name or any(ch in name for ch in "*?/"):
+            raise UnsafeCutover(f"unsafe Qdrant resource name: {name!r}")
+    return sorted(resources, key=lambda item: (item["type"], item["name"]))
+
+
+def _legacy_data_entries(root: Path, current: Path) -> list[str]:
+    if current.is_symlink():
+        return []
+    entries: list[str] = []
+    for name in _LEGACY_DATA_ENTRIES:
+        candidate = root / name
+        if not candidate.exists():
+            continue
+        if candidate.is_symlink() or not candidate.is_dir():
+            raise UnsafeCutover(
+                f"legacy data entry must be a real directory: {candidate}")
+        resolved = candidate.resolve()
+        if resolved.parent != root or resolved.name != name:
+            raise UnsafeCutover(
+                f"legacy data entry escaped WINDEX_DATA_ROOT: {candidate}")
+        entries.append(str(resolved))
+    return entries
+
+
 def _manifest_digest(manifest: dict[str, Any]) -> str:
     base = {
         key: value for key, value in manifest.items()
@@ -122,16 +173,22 @@ def preflight(
     *,
     bootstrap_id: str,
     conn: psycopg.Connection | None = None,
+    dedicated_qdrant: bool = False,
 ) -> dict[str, Any]:
     if not bootstrap_id or any(ch in bootstrap_id for ch in "/*?${}"):
         raise UnsafeCutover("bootstrap ID must be an exact non-empty identifier")
     root = _safe_root(settings.data_root)
-    resources = _owned_resources(conn, settings)
+    resources = (
+        _dedicated_qdrant_resources(settings)
+        if dedicated_qdrant
+        else _owned_resources(conn, settings)
+    )
     target = root / "generations" / bootstrap_id
     if target == root or root not in target.parents:
         raise UnsafeCutover("generation target escaped WINDEX_DATA_ROOT")
     current = root / "generations" / "current"
     old = current.resolve() if current.is_symlink() else None
+    legacy_entries = _legacy_data_entries(root, current)
     generations = (root / "generations").resolve()
     if old is not None and generations not in old.parents:
         raise UnsafeCutover("current generation resolves outside generations/")
@@ -145,12 +202,14 @@ def preflight(
         "postgres": _database(settings),
         "qdrant": {
             "endpoint": _qdrant_endpoint(settings),
+            "reset_scope": "dedicated" if dedicated_qdrant else "owned",
             "resources": resources,
         },
         "filesystem": {
             "data_root": str(root),
             "new_generation": str(target),
             "old_generation": str(old) if old else None,
+            "legacy_entries": legacy_entries,
             "quarantine": str(quarantine),
         },
         "seed_hash": seed_matrix_hash(settings),
@@ -168,6 +227,7 @@ def _resume_manifest(
     *,
     bootstrap_id: str,
     root: Path,
+    dedicated_qdrant: bool = False,
 ) -> dict[str, Any] | None:
     """Load the pre-reset target manifest after any partially completed phase."""
     path = root / "cutover" / f"{bootstrap_id}.json"
@@ -190,6 +250,8 @@ def _resume_manifest(
         or manifest.get("seed_hash") != seed_matrix_hash(settings)
         or manifest.get("postgres") != _database(settings)
         or manifest.get("qdrant", {}).get("endpoint") != _qdrant_endpoint(settings)
+        or manifest.get("qdrant", {}).get("reset_scope") != (
+            "dedicated" if dedicated_qdrant else "owned")
         or manifest.get("filesystem", {}).get("data_root") != str(root)
     ):
         raise UnsafeCutover(
@@ -270,14 +332,17 @@ def execute(
     bootstrap_id: str,
     confirmation: str,
     reset_qdrant: bool = True,
+    dedicated_qdrant: bool = False,
 ) -> dict[str, Any]:
     root = _safe_root(settings.data_root)
     manifest = _resume_manifest(
-        settings, bootstrap_id=bootstrap_id, root=root)
+        settings, bootstrap_id=bootstrap_id, root=root,
+        dedicated_qdrant=dedicated_qdrant)
     with psycopg.connect(settings.pg_dsn) as conn:
         if manifest is None:
             manifest = preflight(
-                settings, bootstrap_id=bootstrap_id, conn=conn)
+                settings, bootstrap_id=bootstrap_id, conn=conn,
+                dedicated_qdrant=dedicated_qdrant)
         if confirmation != manifest["confirmation"]:
             raise UnsafeCutover(
                 "confirmation mismatch; rerun preflight and provide its exact value")
@@ -340,31 +405,61 @@ def quarantine_previous(
     if confirmation != expected:
         raise UnsafeCutover(
             f"confirmation mismatch; expected the reviewed value {expected!r}")
-    old_value = manifest["filesystem"].get("old_generation")
-    if old_value is None:
-        return {"quarantined": False, "reason": "no prior generation"}
-    old = Path(old_value).resolve()
+    filesystem = manifest["filesystem"]
+    old_value = filesystem.get("old_generation")
+    legacy_values = filesystem.get("legacy_entries") or []
+    if old_value is None and not legacy_values:
+        return {
+            "quarantined": False,
+            "reason": "no prior generation or legacy data",
+        }
     generations = (root / "generations").resolve()
-    target = Path(manifest["filesystem"]["quarantine"]).resolve()
+    target = Path(filesystem["quarantine"]).resolve()
     quarantine_root = (root / "quarantine").resolve()
     current = (root / "generations" / "current").resolve()
-    if (
-        generations not in old.parents
-        or quarantine_root not in target.parents
-        or old == current
-        or old == generations
-        or target.exists()
-    ):
+    if quarantine_root not in target.parents or target == quarantine_root:
         raise UnsafeCutover("prior generation quarantine target is unsafe")
-    if not old.exists():
-        raise UnsafeCutover("prior generation is no longer present")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(old, target)
-    document["quarantined"] = str(target)
+    moved: list[dict[str, str]] = []
+    if old_value is not None:
+        old = Path(old_value).resolve()
+        if (
+            generations not in old.parents
+            or old == current
+            or old == generations
+            or target.exists()
+        ):
+            raise UnsafeCutover("prior generation quarantine target is unsafe")
+        if not old.exists():
+            raise UnsafeCutover("prior generation is no longer present")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(old, target)
+        moved.append({"from": str(old), "to": str(target)})
+    else:
+        target.mkdir(parents=True, exist_ok=True)
+        for value in legacy_values:
+            source = Path(value)
+            if (
+                source.is_symlink()
+                or source.parent.resolve() != root
+                or source.name not in _LEGACY_DATA_ENTRIES
+            ):
+                raise UnsafeCutover(
+                    f"legacy quarantine source is unsafe: {source}")
+            destination = target / source.name
+            if source.exists() and destination.exists():
+                raise UnsafeCutover(
+                    f"legacy quarantine destination already exists: {destination}")
+            if source.exists():
+                os.replace(source, destination)
+                moved.append({"from": str(source), "to": str(destination)})
+            elif not destination.exists():
+                raise UnsafeCutover(
+                    f"legacy quarantine source is missing: {source}")
+    document["quarantined"] = moved
     temporary = marker_path.with_suffix(".tmp")
     temporary.write_text(json.dumps(document, indent=2, sort_keys=True))
     os.replace(temporary, marker_path)
-    return {"quarantined": True, "from": str(old), "to": str(target)}
+    return {"quarantined": True, "moved": moved}
 
 
 __all__ = [
