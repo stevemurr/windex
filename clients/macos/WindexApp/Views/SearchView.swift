@@ -6,17 +6,48 @@ import WindexUI
 @MainActor
 @Observable
 final class SearchModel {
-    var query = ""
-    var source: SearchSource = .all
-    var mode: SearchMode = .hybrid
-    var limit = 20
+    typealias SearchOperation =
+        @Sendable (SearchQuery) async throws -> SearchResponse
+    typealias DocumentOperation =
+        @Sendable (String) async throws -> WindexKit.Document
+
+    var query = "" {
+        didSet {
+            guard query != oldValue else { return }
+            searchInputChanged()
+        }
+    }
+    var source: SearchSource = .all {
+        didSet {
+            guard source != oldValue else { return }
+            searchInputChanged()
+        }
+    }
+    var mode: SearchMode = .hybrid {
+        didSet {
+            guard mode != oldValue else { return }
+            searchInputChanged()
+        }
+    }
+    var limit = 20 {
+        didSet {
+            guard limit != oldValue else { return }
+            searchInputChanged()
+        }
+    }
     private(set) var sources: [SearchSource] = [.all]
     private(set) var response: SearchResponse?
     private(set) var document: WindexKit.Document?
     private(set) var isSearching = false
     private(set) var isLoadingDocument = false
-    private(set) var errorMessage: String?
+    private(set) var searchErrorMessage: String?
+    private(set) var documentErrorMessage: String?
     var selectedID: String?
+
+    @ObservationIgnored private var searchGeneration: UInt64 = 0
+    @ObservationIgnored private var documentGeneration: UInt64 = 0
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var documentTask: Task<Void, Never>?
 
     func useSources(_ deployments: [SourceDeployment]) {
         guard !deployments.isEmpty else { return }
@@ -31,45 +62,183 @@ final class SearchModel {
         }
     }
 
-    func perform(client: WindexClient) async {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        isSearching = true
-        errorMessage = nil
-        document = nil
-        selectedID = nil
-        do {
-            response = try await client.search(
-                trimmed,
-                source: source,
-                limit: limit,
-                mode: mode)
-            isSearching = false
-        } catch {
-            response = nil
-            isSearching = false
-            errorMessage = (error as? WindexError)?.localizedDescription
-                ?? "Search could not be completed."
+    /// Start a search owned by the current input snapshot.
+    ///
+    /// Cancellation reduces wasted transport work, while `searchGeneration`
+    /// remains the correctness boundary: a transport may finish after
+    /// cancellation and its stale completion will still be ignored.
+    @discardableResult
+    func submit(client: WindexClient) -> Task<Void, Never>? {
+        submit { query in
+            try await client.search(query)
         }
     }
 
-    func select(_ id: String?, client: WindexClient) async {
-        selectedID = id
-        document = nil
-        guard let id else { return }
-        isLoadingDocument = true
-        do {
-            let loaded = try await client.document(id: id)
-            guard selectedID == id else { return }
-            document = loaded
-            isLoadingDocument = false
-            errorMessage = nil
-        } catch {
-            guard selectedID == id else { return }
-            isLoadingDocument = false
-            errorMessage = (error as? WindexError)?.localizedDescription
-                ?? "The document could not be loaded."
+    @discardableResult
+    func submit(
+        using operation: @escaping SearchOperation
+    ) -> Task<Void, Never>? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            invalidateSearch(clearPresentedState: true)
+            return nil
         }
+
+        invalidateSearch(clearPresentedState: true)
+        let generation = searchGeneration
+        let request = SearchQuery(
+            q: trimmed,
+            source: source,
+            limit: limit,
+            mode: mode
+        )
+        isSearching = true
+        let task = Task { [weak self] in
+            do {
+                try Task.checkCancellation()
+                let response = try await operation(request)
+                guard let self else { return }
+                self.completeSearch(response, generation: generation)
+            } catch {
+                guard let self else { return }
+                self.failSearch(error, generation: generation)
+            }
+        }
+        searchTask = task
+        return task
+    }
+
+    @discardableResult
+    func select(
+        _ id: String?,
+        client: WindexClient
+    ) -> Task<Void, Never>? {
+        select(id) { id in
+            try await client.document(id: id)
+        }
+    }
+
+    @discardableResult
+    func select(
+        _ id: String?,
+        using operation: @escaping DocumentOperation
+    ) -> Task<Void, Never>? {
+        invalidateDocument(clearSelection: true)
+        selectedID = id
+        guard let id else { return nil }
+
+        let generation = documentGeneration
+        isLoadingDocument = true
+        let task = Task { [weak self] in
+            do {
+                try Task.checkCancellation()
+                let loaded = try await operation(id)
+                guard let self else { return }
+                self.completeDocument(
+                    loaded,
+                    id: id,
+                    generation: generation
+                )
+            } catch {
+                guard let self else { return }
+                self.failDocument(
+                    error,
+                    id: id,
+                    generation: generation
+                )
+            }
+        }
+        documentTask = task
+        return task
+    }
+
+    /// Stop work when the Search workspace goes away. Any cancellation-
+    /// insensitive completion is made stale before its task is cancelled.
+    func cancelPending() {
+        searchGeneration &+= 1
+        searchTask?.cancel()
+        searchTask = nil
+        isSearching = false
+        invalidateDocument(clearSelection: true)
+    }
+
+    private func searchInputChanged() {
+        invalidateSearch(clearPresentedState: true)
+    }
+
+    private func invalidateSearch(clearPresentedState: Bool) {
+        searchGeneration &+= 1
+        searchTask?.cancel()
+        searchTask = nil
+        isSearching = false
+        invalidateDocument(clearSelection: true)
+        if clearPresentedState {
+            response = nil
+            searchErrorMessage = nil
+        }
+    }
+
+    private func invalidateDocument(clearSelection: Bool) {
+        documentGeneration &+= 1
+        documentTask?.cancel()
+        documentTask = nil
+        isLoadingDocument = false
+        if clearSelection {
+            selectedID = nil
+            document = nil
+            documentErrorMessage = nil
+        }
+    }
+
+    private func completeSearch(
+        _ completed: SearchResponse,
+        generation: UInt64
+    ) {
+        guard generation == searchGeneration else { return }
+        searchTask = nil
+        response = completed
+        searchErrorMessage = nil
+        isSearching = false
+    }
+
+    private func failSearch(_ error: any Error, generation: UInt64) {
+        guard generation == searchGeneration else { return }
+        searchTask = nil
+        response = nil
+        isSearching = false
+        guard !(error is CancellationError) else { return }
+        searchErrorMessage = (error as? WindexError)?.localizedDescription
+            ?? "Search could not be completed."
+    }
+
+    private func completeDocument(
+        _ completed: WindexKit.Document,
+        id: String,
+        generation: UInt64
+    ) {
+        guard generation == documentGeneration, selectedID == id else {
+            return
+        }
+        documentTask = nil
+        document = completed
+        documentErrorMessage = nil
+        isLoadingDocument = false
+    }
+
+    private func failDocument(
+        _ error: any Error,
+        id: String,
+        generation: UInt64
+    ) {
+        guard generation == documentGeneration, selectedID == id else {
+            return
+        }
+        documentTask = nil
+        document = nil
+        isLoadingDocument = false
+        guard !(error is CancellationError) else { return }
+        documentErrorMessage = (error as? WindexError)?.localizedDescription
+            ?? "The document could not be loaded."
     }
 }
 
@@ -104,9 +273,7 @@ struct SearchView: View {
                             .toolbar {
                                 ToolbarItem(placement: .navigation) {
                                     Button {
-                                        Task {
-                                            await model.select(nil, client: client)
-                                        }
+                                        model.select(nil, client: client)
                                     } label: {
                                         Label("All results", systemImage: "chevron.left")
                                     }
@@ -119,6 +286,9 @@ struct SearchView: View {
         .background(theme.palette.ink)
         .task(id: session.sources.sources) {
             model.useSources(session.sources.sources)
+        }
+        .onDisappear {
+            model.cancelPending()
         }
     }
 
@@ -151,15 +321,14 @@ struct SearchView: View {
             Button("Search", action: search)
                 .buttonStyle(.borderedProminent)
                 .disabled(
-                    model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || model.isSearching)
+                    model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(.md)
     }
 
     @ViewBuilder
     private var initialState: some View {
-        if let error = model.errorMessage {
+        if let error = model.searchErrorMessage {
             SourceFailureView(message: error, retry: search)
         } else {
             VStack(alignment: .leading, spacing: .sm) {
@@ -224,7 +393,7 @@ struct SearchView: View {
             get: { model.selectedID },
             set: { id in
                 guard id != model.selectedID else { return }
-                Task { await model.select(id, client: client) }
+                model.select(id, client: client)
             })
     }
 
@@ -236,9 +405,10 @@ struct SearchView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let document = model.document {
             DocumentView(document: document)
-        } else if let error = model.errorMessage, model.selectedID != nil {
+        } else if let error = model.documentErrorMessage,
+                  model.selectedID != nil {
             SourceFailureView(message: error) {
-                Task { await model.select(model.selectedID, client: client) }
+                model.select(model.selectedID, client: client)
             }
         } else {
             Text("Choose a result to inspect its stored document.")
@@ -249,7 +419,7 @@ struct SearchView: View {
     }
 
     private func search() {
-        Task { await model.perform(client: client) }
+        model.submit(client: client)
     }
 }
 

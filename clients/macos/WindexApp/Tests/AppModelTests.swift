@@ -333,6 +333,195 @@ struct AppModelTests {
         #expect(PipelineRunMode.dryRun.queueTitle == "Queue Dry Run")
     }
 
+    @Test("re-submitting the same query gives the newest request ownership")
+    func repeatedSearchUsesRequestIdentity() async throws {
+        let gate = SearchOperationGate()
+        let model = SearchModel()
+        let operation: SearchModel.SearchOperation = { query in
+            try await gate.search(query)
+        }
+
+        model.query = "same query"
+        let older = try #require(model.submit(using: operation))
+        #expect(await gate.waitForRequest("same query"))
+
+        let newer = try #require(model.submit(using: operation))
+        #expect(await gate.waitForRequest("same query", count: 2))
+
+        await gate.succeedNewest(
+            try Self.searchResponse(
+                query: "same query",
+                id: "newer-result"
+            ),
+            request: "same query"
+        )
+        await newer.value
+        #expect(model.response?.query == "same query")
+        #expect(model.response?.results.first?.id == "newer-result")
+        #expect(model.searchErrorMessage == nil)
+        #expect(!model.isSearching)
+
+        await gate.fail(
+            WindexError.http(status: 503, message: "stale outage"),
+            request: "same query"
+        )
+        await older.value
+        #expect(model.response?.query == "same query")
+        #expect(model.response?.results.first?.id == "newer-result")
+        #expect(model.searchErrorMessage == nil)
+        #expect(!model.isSearching)
+    }
+
+    @Test("a stale search response cannot replace a newer error")
+    func staleSearchResponseIsIgnored() async throws {
+        let gate = SearchOperationGate()
+        let model = SearchModel()
+        let operation: SearchModel.SearchOperation = { query in
+            try await gate.search(query)
+        }
+
+        model.query = "older"
+        let older = try #require(model.submit(using: operation))
+        #expect(await gate.waitForRequest("older"))
+
+        model.query = "newer"
+        let newer = try #require(model.submit(using: operation))
+        #expect(await gate.waitForRequest("newer"))
+
+        await gate.fail(
+            WindexError.http(status: 503, message: "current outage"),
+            request: "newer"
+        )
+        await newer.value
+        #expect(model.response == nil)
+        #expect(model.searchErrorMessage == "current outage")
+        #expect(!model.isSearching)
+
+        await gate.succeed(
+            try Self.searchResponse(
+                query: "older",
+                id: "stale-result"
+            ),
+            request: "older"
+        )
+        await older.value
+        #expect(model.response == nil)
+        #expect(model.searchErrorMessage == "current outage")
+        #expect(!model.isSearching)
+    }
+
+    @Test("every search input change invalidates in-flight ownership")
+    func searchInputChangesInvalidatePendingWork() async throws {
+        let gate = SearchOperationGate()
+        let model = SearchModel()
+        let operation: SearchModel.SearchOperation = { query in
+            try await gate.search(query)
+        }
+        model.query = "pending"
+
+        let sourceTask = try #require(model.submit(using: operation))
+        #expect(await gate.waitForRequest("pending"))
+        model.source = .wiki
+        #expect(sourceTask.isCancelled)
+        #expect(!model.isSearching)
+        #expect(model.response == nil)
+        await gate.succeed(
+            try Self.searchResponse(query: "pending", id: "stale-source"),
+            request: "pending"
+        )
+        await sourceTask.value
+        #expect(model.response == nil)
+
+        let modeTask = try #require(model.submit(using: operation))
+        #expect(await gate.waitForRequest("pending"))
+        model.mode = .lexical
+        #expect(modeTask.isCancelled)
+        #expect(!model.isSearching)
+        await gate.succeed(
+            try Self.searchResponse(query: "pending", id: "stale-mode"),
+            request: "pending"
+        )
+        await modeTask.value
+        #expect(model.response == nil)
+
+        let limitTask = try #require(model.submit(using: operation))
+        #expect(await gate.waitForRequest("pending"))
+        model.limit = 30
+        #expect(limitTask.isCancelled)
+        #expect(!model.isSearching)
+        await gate.succeed(
+            try Self.searchResponse(query: "pending", id: "stale-limit"),
+            request: "pending"
+        )
+        await limitTask.value
+        #expect(model.response == nil)
+
+        let queryTask = try #require(model.submit(using: operation))
+        #expect(await gate.waitForRequest("pending"))
+        model.query = "   "
+        #expect(queryTask.isCancelled)
+        #expect(!model.isSearching)
+        #expect(model.submit(using: operation) == nil)
+        await gate.succeed(
+            try Self.searchResponse(query: "pending", id: "stale-query"),
+            request: "pending"
+        )
+        await queryTask.value
+        #expect(model.response == nil)
+        #expect(model.searchErrorMessage == nil)
+    }
+
+    @Test("current degraded and unavailable searches have deterministic state")
+    func currentSearchOutcomesAndDisappearance() async throws {
+        let gate = SearchOperationGate()
+        let model = SearchModel()
+        let operation: SearchModel.SearchOperation = { query in
+            try await gate.search(query)
+        }
+
+        model.query = "degraded"
+        let degraded = try #require(model.submit(using: operation))
+        #expect(await gate.waitForRequest("degraded"))
+        await gate.succeed(
+            try Self.searchResponse(
+                query: "degraded",
+                id: "partial-result",
+                mode: "hybrid (partial: wiki unavailable)"
+            ),
+            request: "degraded"
+        )
+        await degraded.value
+        #expect(model.response?.isDegraded == true)
+        #expect(model.searchErrorMessage == nil)
+        #expect(!model.isSearching)
+
+        model.query = "unavailable"
+        let unavailable = try #require(model.submit(using: operation))
+        #expect(await gate.waitForRequest("unavailable"))
+        await gate.fail(
+            WindexError.http(status: 503, message: "search unavailable"),
+            request: "unavailable"
+        )
+        await unavailable.value
+        #expect(model.response == nil)
+        #expect(model.searchErrorMessage == "search unavailable")
+        #expect(!model.isSearching)
+
+        model.query = "leaving"
+        let leaving = try #require(model.submit(using: operation))
+        #expect(await gate.waitForRequest("leaving"))
+        model.cancelPending()
+        #expect(leaving.isCancelled)
+        #expect(!model.isSearching)
+        await gate.succeed(
+            try Self.searchResponse(query: "leaving", id: "too-late"),
+            request: "leaving"
+        )
+        await leaving.value
+        #expect(model.response == nil)
+        #expect(model.searchErrorMessage == nil)
+    }
+
     @Test("Source upgrade editor confirms only the latest server candidate")
     func editableSourceUpgradeCandidate() throws {
         let parameter = try PipelineParameterDefinition(
@@ -640,6 +829,28 @@ struct AppModelTests {
         )
     }
 
+    private static func searchResponse(
+        query: String,
+        id: String,
+        mode: String = "hybrid"
+    ) throws -> SearchResponse {
+        let object: [String: Any] = [
+            "query": query,
+            "results": [
+                [
+                    "id": id,
+                    "score": 0.9,
+                    "source": "test",
+                ],
+            ],
+            "mode": mode,
+            "took_ms": 4,
+            "timings": ["search": 3.5],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: object)
+        return try JSONDecoder().decode(SearchResponse.self, from: data)
+    }
+
     private static func upgradePreview(
         targetVersion: Int = 5,
         candidate: Int,
@@ -684,6 +895,60 @@ struct AppModelTests {
                 """.utf8
             )
         )
+    }
+}
+
+/// A manually completed transport which deliberately ignores task
+/// cancellation. It exercises the generation check rather than relying on
+/// URLSession to abort promptly.
+private actor SearchOperationGate {
+    private typealias Continuation =
+        CheckedContinuation<SearchResponse, any Error>
+    private var requests: [String: [Continuation]] = [:]
+
+    func search(_ query: SearchQuery) async throws -> SearchResponse {
+        try await withCheckedThrowingContinuation { continuation in
+            requests[query.q, default: []].append(continuation)
+        }
+    }
+
+    func waitForRequest(_ query: String, count: Int = 1) async -> Bool {
+        for _ in 0..<10_000 {
+            if (requests[query]?.count ?? 0) >= count {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    func succeed(_ response: SearchResponse, request query: String) {
+        take(query).resume(returning: response)
+    }
+
+    func succeedNewest(_ response: SearchResponse, request query: String) {
+        take(query, newest: true).resume(returning: response)
+    }
+
+    func fail(_ error: WindexError, request query: String) {
+        take(query).resume(throwing: error)
+    }
+
+    private func take(
+        _ query: String,
+        newest: Bool = false
+    ) -> Continuation {
+        guard var pending = requests[query], !pending.isEmpty else {
+            preconditionFailure("No pending search request for \(query)")
+        }
+        let continuation: Continuation
+        if newest {
+            continuation = pending.removeLast()
+        } else {
+            continuation = pending.removeFirst()
+        }
+        requests[query] = pending
+        return continuation
     }
 }
 
