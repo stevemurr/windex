@@ -32,19 +32,18 @@ def _apply_revision_locks(
 ) -> None:
     """Bind a new Run to the exact implementations frozen by its revision."""
     task_modules = {str(task["module"]) for task in compiled["tasks"]}
-    if task_modules != set(locks):
-        missing = sorted(task_modules - set(locks))
-        extra = sorted(set(locks) - task_modules)
-        details = []
-        if missing:
-            details.append("missing " + ", ".join(missing))
-        if extra:
-            details.append("unexpected " + ", ".join(extra))
+    missing = sorted(task_modules - set(locks))
+    if missing:
         raise RunConflictError(
-            "revision Module locks do not match its graph: " + "; ".join(details))
+            "revision Module locks do not match its graph: missing "
+            + ", ".join(missing))
 
     unavailable: list[str] = []
-    for name, lock in locks.items():
+    selected = {
+        name: locks[name]
+        for name in sorted(task_modules)
+    }
+    for name, lock in selected.items():
         executor = str(lock.get("executor") or "")
         if executor == "sandbox":
             with conn.cursor() as cur:
@@ -74,7 +73,7 @@ def _apply_revision_locks(
             + ", ".join(sorted(unavailable)))
 
     compiled["module_locks"] = {
-        name: dict(lock) for name, lock in locks.items()}
+        name: dict(lock) for name, lock in selected.items()}
     for task in compiled["tasks"]:
         lock = locks[str(task["module"])]
         task["module_version"] = str(lock["version"])

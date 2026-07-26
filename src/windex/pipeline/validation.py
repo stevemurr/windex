@@ -129,7 +129,7 @@ def deployment_issues(
                 f"unknown Pipeline parameter {key!r}",
             ))
     for key, declaration in fields.items():
-        if key not in values:
+        if key not in values or values[key] is None:
             if declaration.required and declaration.default is None:
                 issues.append(issue(
                     f"values.{key}", "required",

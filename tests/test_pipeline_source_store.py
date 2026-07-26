@@ -95,6 +95,24 @@ def test_source_run_freezes_binding_and_index_continuation(canonical_conn):
     assert run["tasks"][-1]["depends_on"]
 
 
+def test_multiflow_source_run_selects_only_its_flow_locks(canonical_conn):
+    source = get_source(canonical_conn, "docs")
+    assert source and source["values"]["slugs"] is None
+
+    run_id = submit_source(canonical_conn, "docs", flow="sync", dedupe=False)
+    run = get_run(canonical_conn, run_id, include_spec=True)
+    task_modules = {
+        task["module"]
+        for task in run["tasks"]
+        if task["node"] != "__index__"
+    }
+
+    assert task_modules == {
+        "static.once", "http.download", "list.json_manifest", "store.upsert",
+    }
+    assert set(run["module_locks"]) == task_modules
+
+
 def test_source_upgrade_accepts_edited_candidate_and_is_atomic(canonical_conn):
     pipeline = get_pipeline(canonical_conn, "hn")
     source = get_source(canonical_conn, "hn")

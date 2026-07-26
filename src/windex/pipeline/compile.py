@@ -56,7 +56,7 @@ def resolve_parameters(
             f"unknown Pipeline parameter(s): {', '.join(sorted(unknown))}")
     result: dict[str, Any] = {}
     for key, declaration in fields.items():
-        if key in values:
+        if key in values and values[key] is not None:
             try:
                 result[key] = declaration.coerce(values[key], settings)
             except ValueError as exc:
