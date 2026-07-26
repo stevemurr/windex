@@ -59,6 +59,48 @@ def binding() -> dict:
     }
 
 
+def pulled_pipeline() -> dict:
+    return {
+        "schema": PIPELINE_SCHEMA,
+        "parameters": [],
+        "state": {},
+        "flows": {
+            "ingest": {
+                "inputs": [],
+                "outputs": [],
+                "nodes": {
+                    "once": {
+                        "kind": "discover",
+                        "uses": "static.once",
+                        "with": {},
+                    },
+                    "get": {
+                        "kind": "fetch",
+                        "uses": "http.get",
+                        "with": {},
+                    },
+                    "document": {
+                        "kind": "extract",
+                        "uses": "html.trafilatura",
+                        "with": {},
+                    },
+                    "stage": {
+                        "kind": "load",
+                        "uses": "ledger.stage",
+                        "with": {},
+                    },
+                },
+                "edges": [
+                    {"from": {"node": "once"}, "to": {"node": "get"}},
+                    {"from": {"node": "get"}, "to": {"node": "document"}},
+                    {"from": {"node": "document"}, "to": {"node": "stage"}},
+                ],
+            },
+        },
+        "refresh": ["ingest"],
+    }
+
+
 def test_pipeline_normalizes_and_round_trips(settings):
     parsed = parse(pushed_pipeline(), settings)
     assert parsed.to_dict() == parse(parsed.to_dict(), settings).to_dict()
@@ -158,6 +200,157 @@ def test_pipeline_rejects_mixed_ingress(settings):
     result = source_capability(pipeline)
     assert result["capable"] is False
     assert any(value["code"] == "mixed_ingress" for value in result["issues"])
+
+
+def test_source_capability_rejects_disconnected_staging(settings):
+    document = pushed_pipeline()
+    flow = document["flows"]["receive"]
+    flow["inputs"].append({
+        "id": "orphan_documents",
+        "type": "ExtractedDoc",
+    })
+    flow["nodes"]["orphan_stage"] = {
+        "kind": "load",
+        "uses": "ledger.stage",
+        "with": {},
+    }
+    flow["edges"].append({
+        "from": {"input": "orphan_documents"},
+        "to": {"node": "orphan_stage"},
+    })
+
+    result = source_capability(parse(document, settings))
+
+    assert result["capable"] is False
+    assert {
+        (value["path"], value["code"])
+        for value in result["issues"]
+    } == {
+        ("flows.receive.nodes.orphan_stage", "disconnected_staging"),
+    }
+
+
+def test_source_capability_requires_ingress_to_staging_path(settings):
+    document = pushed_pipeline()
+    flow = document["flows"]["receive"]
+    flow["inputs"].append({
+        "id": "orphan_documents",
+        "type": "ExtractedDoc",
+    })
+    flow["outputs"] = [{
+        "id": "documents_out",
+        "type": "ExtractedDoc",
+    }]
+    flow["edges"] = [
+        edge for edge in flow["edges"]
+        if edge["to"] != {"node": "load"}
+    ]
+    flow["edges"].extend([
+        {
+            "from": {"node": "receive"},
+            "to": {"output": "documents_out"},
+        },
+        {
+            "from": {"input": "orphan_documents"},
+            "to": {"node": "load"},
+        },
+    ])
+
+    result = source_capability(parse(document, settings))
+    issues = {(value["path"], value["code"]) for value in result["issues"]}
+
+    assert result["capable"] is False
+    assert ("flows.receive.nodes.load", "disconnected_staging") in issues
+    assert ("flows.receive.nodes.receive", "unsearchable_terminal") in issues
+    assert ("flows", "missing_searchable_path") in issues
+
+
+@pytest.mark.parametrize("terminal_kind", ["extract", "transform"])
+def test_source_capability_rejects_document_terminal_branches(
+    settings,
+    terminal_kind,
+):
+    document = pulled_pipeline()
+    flow = document["flows"]["ingest"]
+    flow["outputs"] = [{
+        "id": "documents_out",
+        "type": "ExtractedDoc",
+    }]
+    if terminal_kind == "extract":
+        flow["nodes"]["dead_end"] = {
+            "kind": "extract",
+            "uses": "html.trafilatura",
+            "with": {},
+        }
+        branch_from = "get"
+    else:
+        flow["nodes"]["dead_end"] = {
+            "kind": "transform",
+            "uses": "canonical.url",
+            "with": {"strategy": "sha1_of_canonical"},
+        }
+        branch_from = "document"
+    flow["edges"].extend([
+        {
+            "from": {"node": branch_from},
+            "to": {"node": "dead_end"},
+        },
+        {
+            "from": {"node": "dead_end"},
+            "to": {"output": "documents_out"},
+        },
+    ])
+
+    result = source_capability(parse(document, settings))
+
+    assert result["capable"] is False
+    assert any(
+        value["path"] == "flows.ingest.nodes.dead_end"
+        and value["code"] == "unsearchable_terminal"
+        for value in result["issues"]
+    )
+
+
+def test_source_capability_preserves_valid_fan_in_fan_out_and_capture(settings):
+    document = pulled_pipeline()
+    flow = document["flows"]["ingest"]
+    flow["outputs"] = [{
+        "id": "documents_out",
+        "type": "ExtractedDoc",
+    }]
+    flow["nodes"]["document_b"] = {
+        "kind": "extract",
+        "uses": "html.trafilatura",
+        "with": {},
+    }
+    flow["edges"].extend([
+        {
+            "from": {"node": "get"},
+            "to": {"node": "document_b"},
+        },
+        {
+            "from": {"node": "document_b"},
+            "to": {"node": "stage"},
+        },
+        {
+            "from": {"node": "document"},
+            "to": {"output": "documents_out"},
+        },
+    ])
+
+    result = source_capability(parse(document, settings))
+
+    assert result["capable"] is True
+    assert result["issues"] == []
+
+
+def test_all_canonical_seed_topologies_remain_source_capable(settings):
+    results = {
+        item["name"]: source_capability(parse(item["spec"], settings))
+        for item in load_seed_matrix(settings)
+    }
+
+    assert all(result["capable"] for result in results.values()), results
 
 
 def test_required_flow_inputs_are_enforced(settings):
