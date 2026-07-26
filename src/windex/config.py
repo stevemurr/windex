@@ -379,9 +379,10 @@ def get_settings() -> Settings:
 
 
 # --- runtime-editable settings ----------------------------------------------
-# Per-source config used to live only in .env, which containers read at CREATE
-# time — so retuning `hf_request_interval` meant rebuild + recreate. A row in
-# `source_config` now overrides that at run time. Precedence is
+# Operator settings used to live only in .env, which containers read at CREATE
+# time. Canonical ``operator_settings`` values now override them at run time.
+# Source-specific execution values belong to the Source's frozen Pipeline
+# configuration and are not projected into process-wide Settings. Precedence is
 #
 #     DB override  >  env / .env  >  code default
 #
@@ -396,11 +397,11 @@ _override_warned = False
 
 
 def _fetch_overrides(dsn: str) -> dict[str, dict]:
-    """All scopes' overrides in one query: ``{scope: {key: value}}``."""
+    """Canonical operator overrides as ``{scope: {key: value}}``."""
     import psycopg
 
     with psycopg.connect(dsn, connect_timeout=5) as conn, conn.cursor() as cur:
-        cur.execute("SELECT scope, settings FROM source_config")
+        cur.execute("SELECT scope, values FROM operator_settings")
         return {row[0]: (row[1] or {}) for row in cur.fetchall()}
 
 
@@ -429,7 +430,7 @@ def load_overrides(dsn: str | None = None, *, refresh: bool = False) -> dict[str
         if not _override_warned:
             _override_warned = True
             logging.getLogger("windex.config").warning(
-                "source_config unreadable (%s); using env settings only", exc)
+                "operator_settings unreadable (%s); using env settings only", exc)
         return dict(_override_cache["values"])  # type: ignore[arg-type]
     with _override_lock:
         _override_cache["at"], _override_cache["values"] = now, values
@@ -479,5 +480,5 @@ def effective_settings(scope: str | None = None, *, dsn: str | None = None) -> S
             clean[key] = coerce(owner or GLOBAL, key, value)
         except ValueError:
             logging.getLogger("windex.config").warning(
-                "ignoring unusable source_config value %s=%r", key, value)
+                "ignoring unusable operator setting %s=%r", key, value)
     return Settings(**clean)

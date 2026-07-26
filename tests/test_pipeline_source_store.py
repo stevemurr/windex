@@ -6,7 +6,7 @@ import uuid
 import psycopg
 import pytest
 
-from windex.config import Settings
+from windex.config import Settings, effective_settings, invalidate_overrides
 from windex.api.canonical import UpgradePreviewResponse
 from windex.db.canonical import init_canonical_db
 from windex.pipeline.run_store import get_run, submit_source
@@ -21,7 +21,10 @@ from windex.source.store import (
     SourceConflictError,
     StaleSourceError,
     get_source,
+    get_operator_settings,
+    delete_operator_setting,
     patch_settings,
+    patch_operator_settings,
     settings_projection,
     upgrade,
     upgrade_preview,
@@ -156,3 +159,40 @@ def test_source_upgrade_accepts_edited_candidate_and_is_atomic(canonical_conn):
     )
     assert upgraded["pipeline_version"] == 2
     assert upgraded["values"]["install_profile"] == "standard"
+
+
+def test_operator_settings_use_canonical_store_and_runtime_cache(canonical_conn):
+    environment = Settings()
+    dsn = (
+        environment.pg_dsn.rsplit("/", 1)[0]
+        + "/"
+        + canonical_conn.info.dbname
+    )
+    current = get_operator_settings(canonical_conn)
+    assert current["scope"] == "_global"
+    assert current["values"] == {}
+
+    updated = patch_operator_settings(
+        canonical_conn,
+        {"embed_concurrency": 12},
+        if_match=current["etag"],
+    )
+    assert updated["values"]["embed_concurrency"] == 12
+    assert effective_settings(dsn=dsn).embed_concurrency == 12
+
+    with pytest.raises(ValueError, match="not editable"):
+        patch_operator_settings(
+            canonical_conn,
+            {"pg_dsn": "postgresql://attacker/other"},
+            if_match=updated["etag"],
+        )
+
+    reverted = delete_operator_setting(
+        canonical_conn,
+        "embed_concurrency",
+        if_match=updated["etag"],
+    )
+    assert reverted["values"] == {}
+    assert effective_settings(
+        dsn=dsn).embed_concurrency == environment.embed_concurrency
+    invalidate_overrides(clear=True)

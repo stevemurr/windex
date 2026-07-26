@@ -12,7 +12,7 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-from windex.config import Settings
+from windex.config import Settings, invalidate_overrides
 from windex.pipeline.compile import resolve_parameters
 from windex.pipeline.contracts import SEARCH_SOURCE_CONTRACT
 from windex.pipeline.spec import parse
@@ -850,10 +850,14 @@ def patch_operator_settings(
     *,
     if_match: str,
 ) -> dict[str, Any]:
+    from windex import settings_schema
+
     current = get_operator_settings(conn)
     if current["etag"] != if_match:
         raise StaleSourceError("operator settings ETag is stale")
-    candidate = {**current["values"], **dict(changes)}
+    normalized = settings_schema.coerce_all(
+        settings_schema.GLOBAL, dict(changes))
+    candidate = {**current["values"], **normalized}
     digest = values_hash(candidate)
     with conn.cursor() as cur:
         cur.execute(
@@ -866,12 +870,24 @@ def patch_operator_settings(
             conn.rollback()
             raise StaleSourceError("operator settings ETag is stale")
     conn.commit()
+    invalidate_overrides()
     return get_operator_settings(conn)
 
 
 def delete_operator_setting(
-    conn: psycopg.Connection, key: str, *, if_match: str,
+    conn: psycopg.Connection,
+    key: str,
+    *,
+    if_match: str,
 ) -> dict[str, Any]:
+    from windex import settings_schema
+
+    allowed = {
+        declaration.key
+        for declaration in settings_schema.fields_for(settings_schema.GLOBAL)
+    }
+    if key not in allowed:
+        raise ValueError(f"{key!r} is not an editable operator setting")
     current = get_operator_settings(conn)
     candidate = dict(current["values"])
     candidate.pop(key, None)
@@ -890,6 +906,7 @@ def delete_operator_setting(
             conn.rollback()
             raise StaleSourceError("operator settings ETag is stale")
     conn.commit()
+    invalidate_overrides()
     return get_operator_settings(conn)
 
 
