@@ -16,6 +16,8 @@ pairing, field names, bzip2, URL derivation) lives here so a different upstream
 
 import bz2
 import io
+from typing import BinaryIO
+
 import orjson
 from collections.abc import Iterable, Iterator
 from urllib.parse import quote
@@ -124,6 +126,34 @@ def iter_articles(lines: Iterable[str], namespace: int = CONTENT_NAMESPACE) -> I
         rec = parse_pair(action, doc, namespace=namespace)
         if rec is not None:
             yield rec
+
+
+def read_article_pair(
+    stream: BinaryIO,
+    namespace: int = CONTENT_NAMESPACE,
+) -> tuple[dict | None, int] | None:
+    """Read one bulk action/document pair from a seekable decoded stream.
+
+    The returned offset is immediately after the pair, including when it is
+    malformed or filtered. This lets the Pipeline extractor durably checkpoint
+    bounded progress without duplicating CirrusSearch format knowledge. ``None``
+    means the stream is exhausted (a dangling truncation action is consumed).
+    """
+    action_line = stream.readline()
+    if not action_line:
+        return None
+    doc_line = stream.readline()
+    end_offset = stream.tell()
+    if not doc_line:
+        return None
+    try:
+        action = orjson.loads(action_line)
+        doc = orjson.loads(doc_line)
+    except ValueError:  # orjson.JSONDecodeError subclasses ValueError
+        return None, end_offset
+    if not isinstance(action, dict) or "index" not in action:
+        return None, end_offset
+    return parse_pair(action, doc, namespace=namespace), end_offset
 
 
 def iter_articles_from_bytes(
