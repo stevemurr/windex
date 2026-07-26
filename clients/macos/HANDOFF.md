@@ -55,7 +55,9 @@ document.
   instructions, and in-app push ingestion. Interval, cron, and event triggers
   can be created and edited independently from enable/disable. Pipeline values
   are rendered from the selected revision schema; secret-reference controls use
-  configured secret names.
+  configured secret names. Memory ingestion is a partitioned full replacement:
+  one conversation per request, conversation-prefixed document IDs and fields,
+  with deletion represented by an empty full push for that partition.
 - Upgrade can target any eligible Source-capable revision and renders retained,
   defaulted, removed, clamped, missing, installation-stage, and state-impact
   details plus structured validation issues. The server-returned candidate is

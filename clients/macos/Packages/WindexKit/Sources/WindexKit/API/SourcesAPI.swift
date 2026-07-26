@@ -141,10 +141,11 @@ public struct IngestDocument: Codable, Hashable, Sendable {
 private struct IngestBody: Codable, Sendable {
     let schemaVersion = "windex.ingest/1"
     let mode: String
+    let partition: String?
     let documents: [IngestDocument]
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
-        case mode, documents
+        case mode, partition, documents
     }
 }
 
@@ -306,12 +307,17 @@ extension WindexClient {
     }
 
     public func ingest(_ documents: [IngestDocument], into source: String,
-                       mode: String = "delta", idempotencyKey: String) async throws
+                       mode: String = "delta", partition: String? = nil,
+                       idempotencyKey: String) async throws
         -> QueuedRunWire {
         try await send(
             "POST", "/v1/sources/\(Self.escapePath(source))/ingest",
             surface: .agentAuthenticated,
-            body: IngestBody(mode: mode, documents: documents),
+            body: IngestBody(
+                mode: mode,
+                partition: partition,
+                documents: documents
+            ),
             headers: ["Idempotency-Key": idempotencyKey],
             as: QueuedRunWire.self
         )

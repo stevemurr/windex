@@ -196,6 +196,18 @@
             "title": "Mode",
             "type": "string"
           },
+          "partition": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partition"
+          },
           "schema_version": {
             "const": "windex.ingest/1",
             "default": "windex.ingest/1",
