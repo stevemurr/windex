@@ -5,7 +5,9 @@ on:
     paths:
       - "clients/macos/**"
       - "src/windex/api/**"
-      - "src/windex/recipe/**"
+      - "src/windex/pipeline/**"
+      - "src/windex/source/**"
+      - "src/windex/schema/**"
       - "scripts/dump-openapi.py"
       - ".github/workflows/macos.yml"
   push:
@@ -13,7 +15,9 @@ on:
     paths:
       - "clients/macos/**"
       - "src/windex/api/**"
-      - "src/windex/recipe/**"
+      - "src/windex/pipeline/**"
+      - "src/windex/source/**"
+      - "src/windex/schema/**"
       - "scripts/dump-openapi.py"
       - ".github/workflows/macos.yml"
 
