@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS source_units (
     state_namespace text NOT NULL,
     store          text NOT NULL,
     unit_key       text NOT NULL,
-    ord            bigint,
+    ord            text,
     upstream       jsonb,
     ingested       jsonb,
     stage          text NOT NULL DEFAULT 'pending',

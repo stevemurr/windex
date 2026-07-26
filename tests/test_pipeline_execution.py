@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 import uuid
 
 import psycopg
@@ -15,6 +16,7 @@ from windex.api.canonical import (
     TaskPreviewResponse,
 )
 from windex.db.canonical import init_canonical_db
+from windex.modules.discover import time_calendar, time_windows
 from windex.pipeline.events import append, list_events
 from windex.pipeline.indexing import _record_ownership
 from windex.pipeline import wire
@@ -193,6 +195,59 @@ def test_index_ownership_matches_canonical_generation_schema(canonical_conn):
             str(source["id"]),
         ),
     ]
+
+
+def test_discovery_order_accepts_canonical_text_partition_keys(canonical_conn):
+    run_id = submit_source(canonical_conn, "arxiv", dedupe=False)
+    task = canonical_claim.claim_task(
+        canonical_conn,
+        worker="pytest/windows",
+        lanes=["io"],
+        caps={"io": 1},
+        satisfied=[],
+        default_cap=1,
+    )
+    assert task is not None
+    assert task.run_id == run_id
+    assert task.module == "time.windows"
+
+    def heartbeat(_done, _failed, _stats):
+        return None
+
+    context = SimpleNamespace(
+        config=task.config,
+        search_name=task.search_name,
+        state_namespace=task.state_namespace,
+        conn=canonical_conn,
+        task_id=task.id,
+        run_id=task.run_id,
+        should_yield=lambda: False,
+        heartbeat=heartbeat,
+    )
+    windows = time_windows(context)
+    assert windows.units_done == 100
+    context.config = {
+        "unit": "day",
+        "trailing_days": 2,
+        "into": "calendar",
+        "format": "%Y-%m-%d",
+    }
+    calendar = time_calendar(context)
+    assert calendar.units_done == 2
+
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """SELECT data_type FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'source_units' AND column_name = 'ord'""")
+        assert cur.fetchone()[0] == "text"
+        cur.execute(
+            """SELECT count(*), count(source_id), bool_and(ord IS NOT NULL)
+                 FROM source_units WHERE state_namespace = 'arxiv'""")
+        total, bound, ordered = cur.fetchone()
+    assert total > 100
+    assert bound == total
+    assert ordered is True
 
 
 def _generic_output_pipeline():
