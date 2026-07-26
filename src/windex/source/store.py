@@ -15,6 +15,7 @@ from psycopg.types.json import Jsonb
 from windex.config import Settings, invalidate_overrides
 from windex.pipeline.compile import resolve_parameters
 from windex.pipeline.contracts import SEARCH_SOURCE_CONTRACT
+from windex.pipeline.events import lock_journal
 from windex.pipeline.spec import parse
 from windex.pipeline.store import get_revision
 from windex.pipeline.validation import validate_deployment
@@ -434,6 +435,30 @@ def _scheduled_deadline(
     return None
 
 
+def _event_journal_tail(cur: psycopg.Cursor) -> int:
+    """Return the highest committed operational event visible to this change."""
+
+    lock_journal(cur, exclusive=True)
+    cur.execute("SELECT coalesce(max(seq), 0) FROM operational_events")
+    return int(cur.fetchone()[0])
+
+
+def _rebase_event_cursor(cur: psycopg.Cursor, trigger_id: int) -> None:
+    """Start an event trigger after the journal state visible right now."""
+
+    tail = _event_journal_tail(cur)
+    cur.execute(
+        """INSERT INTO source_event_trigger_cursors
+                   (trigger_id, after_seq, last_checked_at, updated_at)
+           VALUES (%s, %s, now(), now())
+           ON CONFLICT (trigger_id) DO UPDATE
+                   SET after_seq = excluded.after_seq,
+                       last_checked_at = excluded.last_checked_at,
+                       updated_at = excluded.updated_at""",
+        (trigger_id, tail),
+    )
+
+
 def create_trigger(
     conn: psycopg.Connection, name: str, body: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -475,6 +500,8 @@ def create_trigger(
             ),
         )
         trigger_id = cur.fetchone()[0]
+        if body["trigger_type"] == "event":
+            _rebase_event_cursor(cur, trigger_id)
     conn.commit()
     return next(item for item in list_triggers(conn, name) if item["id"] == trigger_id)
 
@@ -603,6 +630,16 @@ def update_trigger(
         if cur.fetchone() is None:
             conn.rollback()
             raise KeyError(trigger_id)
+        if candidate["trigger_type"] == "event":
+            # Any effective edit changes the meaning or availability of the
+            # binding.  Rebase rather than applying a new binding to events
+            # observed under the old one (including time spent disabled).
+            _rebase_event_cursor(cur, trigger_id)
+        elif current["trigger_type"] == "event":
+            cur.execute(
+                "DELETE FROM source_event_trigger_cursors WHERE trigger_id = %s",
+                (trigger_id,),
+            )
     conn.commit()
     return next(item for item in list_triggers(conn, name) if item["id"] == trigger_id)
 

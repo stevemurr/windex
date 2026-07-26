@@ -437,6 +437,29 @@ CREATE INDEX IF NOT EXISTS operational_events_source_idx
 CREATE INDEX IF NOT EXISTS operational_events_error_idx
     ON operational_events (seq) WHERE level IN ('warn', 'error');
 
+-- Event-trigger dispatch consumes the operational journal independently for
+-- each trigger.  The cursor is intentionally internal: trigger projections
+-- expose the resulting Run, not scheduler bookkeeping.  New rows are rebased
+-- at the committed journal tail so deploying this additive migration never
+-- replays historical events.
+CREATE TABLE IF NOT EXISTS source_event_trigger_cursors (
+    trigger_id      bigint PRIMARY KEY
+        REFERENCES source_triggers(id) ON DELETE CASCADE,
+    after_seq       bigint NOT NULL DEFAULT 0 CHECK (after_seq >= 0),
+    last_checked_at timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS source_event_trigger_cursors_fair_idx
+    ON source_event_trigger_cursors (last_checked_at, trigger_id);
+SELECT pg_advisory_xact_lock(6289644409727763798);
+INSERT INTO source_event_trigger_cursors
+       (trigger_id, after_seq, last_checked_at, updated_at)
+SELECT t.id, coalesce(tail.seq, 0), now(), now()
+  FROM source_triggers t
+ CROSS JOIN (SELECT max(seq) AS seq FROM operational_events) tail
+ WHERE t.trigger_type = 'event'
+ON CONFLICT (trigger_id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS search_metrics (
     ts             timestamptz NOT NULL DEFAULT now(),
     source         text NOT NULL,
