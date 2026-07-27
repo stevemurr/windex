@@ -7,7 +7,7 @@ nothing. Three independent faults, none of which announced itself:
 |---|-------|---------|--------|
 | 1 | App containers start ~19s **before** the CIFS mount | Stack "up", every embed cycle fails on a missing parquet path | **gone** — corpus moved to local NVMe, 2026-07-24 |
 | 2 | `/etc/cdi/nvidia.yaml` pins a stale `/dev/dri/cardN` | `failed to stat CDI host device`; no GPU container starts | fixed here |
-| 3 | `windex-models.service` runs a bare `up -d` | Starts qwen3.6 too — a second large model on a memory-tight box | fixed here |
+| 3 | `windex-models.service` runs a bare `up -d` | Boot membership changes whenever the compose file changes | fixed here |
 
 `install.sh` fixes 2 and 3, and removes the now-obsolete guard for 1 if a previous
 install left it behind. Run it as your normal user (it sudo's internally):
@@ -82,23 +82,17 @@ podman can use.
 The real fix is **podman 5.x**, which reads 0.7.0 natively — then this whole
 service and `/etc/cdi/nvidia.yaml` can be deleted.
 
-## 3. qwen3.6 no longer auto-starts
+## 3. The production model set is explicit
 
-The bare `up -d` started every compose service. That was masked while GPU
-containers were dying on fault 2; fixing that would have brought qwen3.6 up
-automatically, loading a second large model during a multi-day backfill on a box
-with a history of OOM resets. The boot set is now explicit:
+The bare `up -d` made every compose declaration part of the boot contract by
+accident. The boot set is now explicit, and includes qwen3.6 because it is a
+production system component:
 
-    litellm-db litellm embeddings dcgm-exporter prometheus grafana
+    litellm-db litellm qwen3.6 embeddings dcgm-exporter prometheus grafana
 
-Start the judge model by hand when you want it:
-
-```sh
-podman start llm-inference-platform_qwen3.6_1
-```
-
-Nothing scheduled needs it — the LLM-as-judge eval leg is opt-in (`--judge`,
-default off) and is skipped when the model is unset.
+Adding an experimental service to the compose file therefore does not make it
+start unattended; changing the production set requires changing and reviewing
+the drop-in.
 
 ## Ordering
 
@@ -134,8 +128,9 @@ systemctl --user show windex-models.service -p ExecStart --value
 ```
 
 A real reboot is still the only complete test. After one, the pass condition is:
-15 windex containers + embeddings + dcgm-exporter up, `windex_embeds_per_minute`
-non-zero, `windex_storage_ok` 1 for both tiers, and **no** `qwen3.6`.
+all Windex services plus qwen3.6, embeddings, and dcgm-exporter are up,
+`windex_embeds_per_minute` is non-zero, and `windex_storage_ok` is 1 for both
+tiers.
 
 Note the post-outage manual restart that used to be required (fault 1) is no longer
 needed — there is no mount for the containers to miss.

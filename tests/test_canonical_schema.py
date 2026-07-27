@@ -10,6 +10,7 @@ from windex.db.canonical import LegacySchemaError, init_canonical_db
 from windex.pipeline.contracts import CONTRACT_EPOCH
 
 ADMIN_DSN = "postgresql://windex:windex@127.0.0.1:5432/windex"
+ROOT = Path(__file__).parents[1]
 _KEY = hashlib.sha1(str(Path(__file__).resolve()).encode()).hexdigest()[:8]
 DATABASE = f"windex_canonical_test_{_KEY}"
 DSN = f"postgresql://windex:windex@127.0.0.1:5432/{DATABASE}"
@@ -38,6 +39,13 @@ def test_fresh_schema_is_idempotent_and_epoch_guarded(canonical_conn):
     assert first == second
     assert first["contract_epoch"] == CONTRACT_EPOCH
     assert first["bootstrap_id"] == "pytest-bootstrap"
+
+
+def test_canonical_schema_has_one_source_of_truth():
+    database_package = ROOT / "src" / "windex" / "db"
+    assert (database_package / "canonical.sql").is_file()
+    assert not (database_package / "schema.sql").exists()
+    assert 'joinpath("canonical.sql")' in (database_package / "canonical.py").read_text()
 
 
 def test_canonical_schema_contains_no_legacy_control_plane(canonical_conn):

@@ -106,24 +106,6 @@ class ExtractedDoc:
     epoch: int = 0
 
 
-@dataclass(frozen=True)
-class Coverage:
-    """What `load` is allowed to treat as a complete census.
-
-    The guard on every destructive operation. `prune`/replace may only act when a
-    batch actually saw everything it claims to have seen — a truncated or partly
-    failed run deleting "missing" documents is data loss dressed as tidying.
-    """
-
-    refs: tuple[PartitionRef, ...] = ()
-    failures: int = 0
-    truncated: bool = False
-
-    @property
-    def complete(self) -> bool:
-        return self.failures == 0 and not self.truncated
-
-
 # --- the closed kind vocabulary ---------------------------------------------
 # in/out are port TYPE names; None means the kind is a root (no input) or a sink
 # (no output). `stateful` records which kinds may touch a store, which is what
@@ -158,9 +140,6 @@ KINDS: dict[str, Kind] = {k.name: k for k in (
          "Stages parquet and writes the ledger delta. Terminal, and a fan-in point."),
 )}
 
-ROOTS = tuple(k.name for k in KINDS.values() if k.inp is None)
-SINKS = tuple(k.name for k in KINDS.values() if k.out is None)
-
 # Port types, published to clients so a graph editor can validate a connection
 # without hardcoding the lattice. Deliberately NOMINAL and flat: `extends` exists
 # for future widening, but nothing uses it yet, and "any" is not a member — an
@@ -179,19 +158,6 @@ PORT_TYPES: dict[str, dict] = {
                      "fields": ["ref", "suffix", "url", "title", "text",
                                 "published_at", "lang", "fields", "payload"]},
 }
-
-
-def can_connect(from_kind: str, to_kind: str) -> bool:
-    """Whether an edge between two kinds type-checks.
-
-    One table lookup, because each kind has exactly one port per direction. This
-    is the function the Swift editor reimplements in ~10 lines from `PORT_TYPES`
-    and the kind table it is served.
-    """
-    a, b = KINDS.get(from_kind), KINDS.get(to_kind)
-    if a is None or b is None or a.out is None or b.inp is None:
-        return False
-    return a.out == b.inp
 
 
 def describe_kinds() -> list[dict]:

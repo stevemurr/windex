@@ -159,17 +159,6 @@ class GuardedFetcher:
         return body, final, ""
 
 
-def build_client(policy: CrawlPolicy) -> httpx.Client:
-    """The crawl's HTTP client. ``follow_redirects=False`` is load-bearing — see
-    GuardedFetcher."""
-    return httpx.Client(
-        timeout=httpx.Timeout(
-            policy.limits.request_timeout, read=policy.limits.request_timeout),
-        follow_redirects=False,
-        headers={"User-Agent": USER_AGENT},
-    )
-
-
 def build_fetcher(
     client: httpx.Client, settings: Settings, policy: CrawlPolicy,
 ) -> GuardedFetcher:

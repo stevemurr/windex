@@ -277,14 +277,3 @@ def run_dedup(
         conn.rollback()
         raise
     return stats
-
-
-def prune_bands(conn: psycopg.Connection, window_days: int) -> int:
-    with conn.cursor() as cur:
-        cur.execute(
-            "DELETE FROM minhash_bands WHERE day < (SELECT max(day) FROM minhash_bands) - %s",
-            (window_days,),
-        )
-        deleted = cur.rowcount
-    conn.commit()
-    return deleted

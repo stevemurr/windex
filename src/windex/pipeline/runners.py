@@ -114,13 +114,3 @@ RUNNERS: dict[str, Callable[..., Runner]] = {
     "store.repos": store_repos,
     "ledger.stage": ledger_stage,
 }
-
-
-def register(name: str):
-    """Decorator used by module implementations as they land."""
-    def wrap(fn):
-        if name in RUNNERS:
-            raise RuntimeError(f"module {name!r} already has an implementation")
-        RUNNERS[name] = fn
-        return fn
-    return wrap

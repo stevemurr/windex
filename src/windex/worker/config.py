@@ -114,9 +114,6 @@ class PoolConfig:
         if not math.isfinite(self.stop_grace_seconds) or self.stop_grace_seconds < 0:
             raise ValueError("stop_grace_seconds must be zero or greater")
 
-    def cap_for(self, lane: str) -> int:
-        return self.lane_caps.get(lane, self.default_lane_cap)
-
     @property
     def control_path(self) -> Path:
         return self.state_dir / "pool.json"

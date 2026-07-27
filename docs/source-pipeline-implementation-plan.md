@@ -149,7 +149,7 @@ Primary backend touchpoints:
   run store, runners, and wire codec into the Pipeline domain.
 - `src/windex/api/app.py`, `models.py`, `service.py`, and `logs.py`: canonical
   APIs, projections, streaming, and removal of Recipe/Marketplace routes.
-- `src/windex/db/schema.sql`: clean canonical schema and reset/bootstrap support.
+- `src/windex/db/canonical.sql`: clean canonical schema and reset/bootstrap support.
 - `src/windex/scheduler/` and `src/windex/worker/`: Source-aware triggers,
   freezes, task context, state, and execution.
 - `src/windex/modules/`, `src/windex/embed/`, and `src/windex/index/`: Source
@@ -216,7 +216,7 @@ Primary backend touchpoints:
 #### Persistence
 
 Replace the old control-plane schema with canonical, idempotently bootstrapped
-tables in `src/windex/db/schema.sql`:
+tables in `src/windex/db/canonical.sql`:
 
 ```text
 pipelines

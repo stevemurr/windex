@@ -161,15 +161,13 @@ class SliceControl:
 
     def should_yield(self) -> bool:
         """True when the slice must end. Cheap: no I/O, no lock."""
-        if self.drain.is_set() or self.lease_lost:
-            return True
-        if self.signals.should_stop:
-            return True
-        if time.monotonic() >= self.deadline:
-            return True
-        if self.cfg.slice_units and self.units_done >= self.cfg.slice_units:
-            return True
-        return False
+        return (
+            self.drain.is_set()
+            or self.lease_lost
+            or self.signals.should_stop
+            or time.monotonic() >= self.deadline
+            or bool(self.cfg.slice_units and self.units_done >= self.cfg.slice_units)
+        )
 
     def heartbeat(self, units_done: int, units_failed: int = 0,
                   stats: Any = None) -> None:

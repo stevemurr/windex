@@ -15,8 +15,6 @@ from windex.modules.common import (
     require_type,
 )
 from windex.pipeline.ports import ExtractedDoc
-from windex.sanitize import strip_smuggled
-from windex.textguard import is_empty_text
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 _INPUT_BATCH = 20
@@ -274,21 +272,6 @@ def filter_lang(ctx: TaskContext) -> SliceResult:
                 keep, language = detected[id(doc)]
                 if keep:
                     outputs.append(replace(doc, lang=language or "en"))
-        return outputs
-
-    return _run(ctx, transform)
-
-
-def sanitize_documents(ctx: TaskContext) -> SliceResult:
-    """Mandatory last transform, callable even when a Pipeline does not name it."""
-
-    def transform(docs: list[ExtractedDoc]) -> list[ExtractedDoc]:
-        outputs = []
-        for doc in docs:
-            title = strip_smuggled(doc.title)
-            text = strip_smuggled(doc.text)
-            if doc.deleted or not is_empty_text(title + "\n\n" + text):
-                outputs.append(replace(doc, title=title, text=text))
         return outputs
 
     return _run(ctx, transform)

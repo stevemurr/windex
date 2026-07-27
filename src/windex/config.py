@@ -296,10 +296,6 @@ class Settings(BaseSettings):
         return self.staging_dir / "repos"
 
     @property
-    def wiki_downloads_dir(self) -> Path:
-        return self.downloads_dir / "wiki"
-
-    @property
     def wiki_staging_dir(self) -> Path:
         return self.staging_dir / "wiki"
 
@@ -343,24 +339,6 @@ class Settings(BaseSettings):
         # custom/<name>/<batch-uuid>.parquet (upsert, not full-replace).
         return self.staging_dir / "custom"
 
-    def all_dirs(self) -> list[Path]:
-        return [
-            self.ccnews_downloads_dir,
-            self.gharchive_downloads_dir,
-            self.news_staging_dir,
-            self.repos_staging_dir,
-            self.wiki_staging_dir,
-            self.arxiv_staging_dir,
-            self.smallweb_staging_dir,
-            self.docs_downloads_dir,
-            self.docs_staging_dir,
-            self.hn_downloads_dir,
-            self.hn_staging_dir,
-            self.hf_staging_dir,
-            self.memory_staging_dir,
-            self.custom_staging_dir,
-        ]
-
     def github_token_list(self) -> list[str]:
         return [t.strip() for t in self.github_tokens.split(",") if t.strip()]
 
@@ -371,24 +349,13 @@ class Settings(BaseSettings):
         """Configured HF doc roots; [] means "every root the sitemap lists"."""
         return [s.strip() for s in self.hf_roots.split(",") if s.strip()]
 
-# The source this process is working on, if it is a single-source job. Set once
-# at CLI-group entry (`windex hf …` → "hf"), so every `get_settings()` inside
-# that process resolves that source's overrides without threading a scope
-# argument through dozens of call sites. A refresh chain runs one source per
-# process, so a module-level value is exactly the right granularity.
-_active_scope: str | None = None
-
-
-def use_scope(scope: str | None) -> None:
-    global _active_scope
-    _active_scope = scope
-
-
 def get_settings() -> Settings:
-    """Settings for this process: env, plus any runtime overrides for the global
-    scope and (if bound) the active source. Cheap — the override map is TTL
-    cached and a cache hit adds only a dict merge."""
-    return effective_settings(_active_scope)
+    """Settings for this process, including global runtime overrides.
+
+    Source-specific execution values are frozen into Pipeline configuration;
+    process-wide callers therefore never carry an implicit active Source.
+    """
+    return effective_settings()
 
 
 # --- runtime-editable settings ----------------------------------------------

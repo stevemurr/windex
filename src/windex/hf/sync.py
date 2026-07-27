@@ -45,8 +45,6 @@ import psycopg
 
 from windex.hf import BASE_URL, USER_AGENT, license_for
 
-SITEMAP_URL = f"{BASE_URL}/sitemap.xml"
-
 # The only two shards that can enumerate anything. See the module docstring:
 # this allowlist IS the scope decision, so widening it is a deliberate act.
 WANTED_SHARDS = ("sitemap-doc.xml", "sitemap-blog.xml")

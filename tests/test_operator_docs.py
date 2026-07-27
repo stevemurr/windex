@@ -86,6 +86,20 @@ def test_documented_commands_and_routes_exist_in_current_sources():
         assert service in compose
 
 
+def test_unattended_model_boot_set_includes_qwen():
+    drop_in = (
+        ROOT / "ops" / "reboot" / "windex-models.service.d" / "10-model-stack.conf"
+    ).read_text()
+    installer = (ROOT / "ops" / "reboot" / "install.sh").read_text()
+
+    exec_start = next(
+        line for line in drop_in.splitlines() if line.startswith("ExecStart=/")
+    )
+    assert " qwen3.6 " in exec_start
+    assert "10-model-stack.conf" in installer
+    assert "10-embeddings-only.conf" in installer  # removes obsolete installations
+
+
 def test_run_and_publication_examples_are_scoped_and_unambiguous():
     operations = (ROOT / "docs" / "operations.md").read_text()
     assert "/log-events/stream?run_id=$run" in operations

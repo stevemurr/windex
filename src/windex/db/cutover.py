@@ -424,8 +424,7 @@ def quarantine_previous(
         old = Path(old_value).resolve()
         if (
             generations not in old.parents
-            or old == current
-            or old == generations
+            or old in (current, generations)
             or target.exists()
         ):
             raise UnsafeCutover("prior generation quarantine target is unsafe")

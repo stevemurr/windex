@@ -33,13 +33,6 @@ from windex.pipeline.contracts import REGISTRY_CONTRACT
 
 REGISTRY_VERSION = "3"
 
-# Capability flags a module may declare. These are advisory to the operator and
-# load-bearing to the compiler: `network.outbound` is what makes the SSRF guard
-# mandatory, and `stateful` is what stops a module being parallelised across
-# batches when it keeps cross-batch state (dedup windows, boilerplate counters).
-CAPABILITIES = ("network.outbound", "gpu", "stateful", "destructive")
-
-
 @dataclass(frozen=True)
 class Module:
     """One registered behaviour. `impl` is wired in Phase 7; the declaration is

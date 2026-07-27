@@ -16,9 +16,9 @@ Read-only inspection under full five-source ingest load. Headline findings:
   loses ≤1s of commits on crash, never corrupts — `fsync`/`full_page_writes` untouched),
   work_mem=16MB, maintenance_work_mem=256MB, autovacuum_work_mem=128MB, jit=off.
   shared_buffers=1GB staged (applies at next PG restart).
-- Per-table autovacuum on minhash_bands + documents (also codified in schema.sql).
+- Per-table autovacuum on minhash_bands + documents (also codified in canonical.sql).
 - Partial index `documents_embed_backlog_idx (source, created_at) WHERE status='deduped'`
-  (in schema.sql; built CONCURRENTLY in prod).
+  (in canonical.sql; built CONCURRENTLY in prod).
 - bgwriter stats reset for before/after measurement.
 - search.py: quantization `rescore=false` + explicit `hnsw_ef=96` in query params.
 - service.py: stats cache split — full-scan aggregates (source/status group-by,

@@ -112,7 +112,8 @@ def in_scope(url: str, policy, seed: str) -> tuple[bool, str]:
     for pattern in policy.scope.exclude_re:
         if pattern.search(target):
             return False, "exclude"
-    if policy.scope.include_re:
-        if not any(p.search(target) for p in policy.scope.include_re):
-            return False, "include"
+    if policy.scope.include_re and not any(
+        pattern.search(target) for pattern in policy.scope.include_re
+    ):
+        return False, "include"
     return True, ""

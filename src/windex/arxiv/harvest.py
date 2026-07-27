@@ -158,27 +158,6 @@ def parse_records(xml_bytes: bytes) -> tuple[list[dict], str | None]:
     return records, token
 
 
-# --- window watermark ------------------------------------------------------
-
-def earliest_datestamp(settings: Settings) -> str | None:
-    """arXiv's OAI `Identify` earliestDatestamp (2005-09-16 as of 2026-07).
-
-    A window starting before it is rejected outright — `badArgument: ... Reason:
-    start date too early` — so the whole year fails and stays failed forever.
-    Asked rather than hardcoded: it's a property of the repository, and it moves.
-    Returns None if Identify can't be reached; callers then plan unclamped, which
-    is the pre-existing behaviour.
-    """
-    try:
-        r = httpx.get(f"{settings.arxiv_oai_endpoint}?verb=Identify",
-                      headers={"User-Agent": USER_AGENT}, timeout=30)
-        r.raise_for_status()
-        el = ET.fromstring(r.text).find(".//{http://www.openarchives.org/OAI/2.0/}earliestDatestamp")
-        return el.text.strip() if el is not None and el.text else None
-    except Exception:
-        return None
-
-
 def reclaim_stale(conn: psycopg.Connection, older_than_minutes: int = 60) -> int:
     """Return long-'processing' windows to 'pending'.
 

@@ -12,10 +12,11 @@ from __future__ import annotations
 import logging
 import os
 import stat
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 
 import psycopg
 

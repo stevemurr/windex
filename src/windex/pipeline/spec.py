@@ -314,7 +314,7 @@ def _endpoint(raw: Any, path: str) -> Endpoint:
 
 
 def _toposort(nodes: dict[str, Node], edges: tuple[Edge, ...], path: str) -> tuple[str, ...]:
-    incoming = {node_id: 0 for node_id in nodes}
+    incoming = dict.fromkeys(nodes, 0)
     outgoing: dict[str, list[str]] = {node_id: [] for node_id in nodes}
     for edge in edges:
         if edge.source.kind == "node" and edge.target.kind == "node":

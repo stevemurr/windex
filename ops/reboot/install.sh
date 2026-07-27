@@ -49,7 +49,12 @@ if [[ -f ${STALE_MOUNT_GUARD} ]]; then
     echo "    removed stale mount guard (corpus is on local NVMe now)"
 fi
 
-install -m 0644 "${HERE}/windex-models.service.d/10-embeddings-only.conf" \
+STALE_MODEL_DROPIN="${HOME}/.config/systemd/user/windex-models.service.d/10-embeddings-only.conf"
+if [[ -f ${STALE_MODEL_DROPIN} ]]; then
+    rm -f "${STALE_MODEL_DROPIN}"
+    echo "    removed stale embeddings-only model drop-in"
+fi
+install -m 0644 "${HERE}/windex-models.service.d/10-model-stack.conf" \
     "${HOME}/.config/systemd/user/windex-models.service.d/"
 systemctl --user daemon-reload
 
@@ -59,9 +64,12 @@ systemctl is-enabled nvidia-cdi-downconvert.service nvidia-cdi-downconvert.path
 echo -n "cdiVersion now: "; grep '^cdiVersion' /etc/cdi/nvidia.yaml
 echo -n "readiness stamp: "; cat /run/windex-cdi-ready 2>/dev/null || echo "MISSING"
 echo
-echo "effective boot set for windex-models (must NOT contain qwen3.6):"
+echo "effective boot set for windex-models (must contain qwen3.6):"
 systemctl --user show windex-models.service -p ExecStart --value \
-    | grep -o 'up -d[^"]*' || echo "  (could not read ExecStart)"
+    | grep -o 'up -d[^"]*' | grep 'qwen3\\.6' || {
+        echo "  ERROR: qwen3.6 is absent from the effective boot set" >&2
+        exit 1
+    }
 echo
 echo "Done. Neither drop-in restarts anything now — they take effect on next boot"
 echo "(or on an explicit: systemctl --user restart windex-data windex-models)."
