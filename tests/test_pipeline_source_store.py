@@ -40,6 +40,7 @@ from windex.source.store import (
     patch_settings,
     patch_operator_settings,
     settings_projection,
+    status,
     module_statuses,
     update_trigger,
     upgrade,
@@ -615,6 +616,143 @@ def test_source_run_freezes_binding_and_index_continuation(canonical_conn):
     assert run["pipeline_name"] == "hn"
     assert run["tasks"][-1]["node"] == "__index__"
     assert run["tasks"][-1]["depends_on"]
+
+
+def test_source_status_selects_newest_active_run_across_flows(
+    canonical_conn,
+):
+    running = submit_source(
+        canonical_conn, "docs", flow="sync", dedupe=False)
+    blocked = submit_source(
+        canonical_conn, "docs", flow="ingest", dedupe=False)
+    queued = submit_source(
+        canonical_conn, "docs", flow="sync", dedupe=False)
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """UPDATE runs
+                  SET state = CASE id
+                        WHEN %s THEN 'running'
+                        WHEN %s THEN 'blocked'
+                        ELSE 'queued'
+                      END,
+                      cancel_requested = (id = %s),
+                      started_at = CASE WHEN id = %s THEN now() ELSE NULL END,
+                      updated_at = now()
+                WHERE id = ANY(%s)""",
+            (running, blocked, blocked, running, [running, blocked, queued]),
+        )
+    canonical_conn.commit()
+
+    projection = status(canonical_conn, "docs")
+    assert projection["latest_run"]["id"] == queued
+    assert projection["current_run"]["id"] == queued
+    assert projection["current_run"]["state"] == "queued"
+    assert projection["current_run"]["cancel_requested"] is False
+
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """UPDATE runs
+                  SET state = 'succeeded', started_at = now(),
+                      finished_at = now(), updated_at = now()
+                WHERE id = %s""",
+            (queued,),
+        )
+    canonical_conn.commit()
+    projection = status(canonical_conn, "docs")
+    assert projection["latest_run"]["id"] == queued
+    assert projection["latest_run"]["state"] == "succeeded"
+    assert projection["current_run"]["id"] == blocked
+    assert projection["current_run"]["state"] == "blocked"
+    assert projection["current_run"]["cancel_requested"] is True
+    assert projection["last_success"] == projection["latest_run"]["finished_at"]
+
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """UPDATE runs
+                  SET state = 'cancelled', finished_at = now(), updated_at = now()
+                WHERE id = %s""",
+            (blocked,),
+        )
+    canonical_conn.commit()
+    projection = status(canonical_conn, "docs")
+    assert projection["current_run"]["id"] == running
+    assert projection["current_run"]["state"] == "running"
+
+
+def test_source_status_api_keeps_older_active_run_visible(
+    canonical_conn,
+    monkeypatch,
+):
+    from windex.api import app as app_module
+    from windex.api import canonical
+
+    running = submit_source(
+        canonical_conn, "docs", flow="sync", dedupe=False)
+    failed = submit_source(
+        canonical_conn, "docs", flow="ingest", dedupe=False)
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """UPDATE runs
+                  SET state = 'running', started_at = now(), updated_at = now()
+                WHERE id = %s""",
+            (running,),
+        )
+        cur.execute(
+            """UPDATE runs
+                  SET state = 'failed', started_at = now(),
+                      finished_at = now(), error = 'ingest failed',
+                      updated_at = now()
+                WHERE id = %s""",
+            (failed,),
+        )
+    canonical_conn.commit()
+
+    dsn = (
+        Settings().pg_dsn.rsplit("/", 1)[0]
+        + "/"
+        + canonical_conn.info.dbname
+    )
+    settings = Settings(
+        _env_file=None,
+        pg_dsn=dsn,
+        write_token="",
+        serve_host="127.0.0.1",
+    )
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(canonical, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        canonical.db,
+        "pooled",
+        lambda _dsn: nullcontext(canonical_conn),
+    )
+    client = TestClient(admin)
+
+    response = client.get("/v1/sources/docs/status")
+    assert response.status_code == 200
+    projection = response.json()
+    assert projection["latest_run"]["id"] == failed
+    assert projection["latest_run"]["state"] == "failed"
+    assert projection["current_run"]["id"] == running
+    assert projection["current_run"]["state"] == "running"
+    assert projection["recent_error"] == "ingest failed"
+    assert projection["last_failure"] == projection["latest_run"]["finished_at"]
+
+    with canonical_conn.cursor() as cur:
+        cur.execute(
+            """UPDATE runs
+                  SET state = 'cancelled', cancel_requested = true,
+                      finished_at = now(), updated_at = now()
+                WHERE id = %s""",
+            (running,),
+        )
+    canonical_conn.commit()
+
+    response = client.get("/v1/sources/docs/status")
+    assert response.status_code == 200
+    projection = response.json()
+    assert projection["latest_run"]["id"] == failed
+    assert projection["current_run"] is None
+    assert projection["recent_error"] == "ingest failed"
 
 
 def test_source_status_surfaces_unavailable_module_lock(

@@ -1115,11 +1115,29 @@ def status(conn: psycopg.Connection, name: str) -> dict[str, Any]:
             for row in cur.fetchall()
         }
         cur.execute(
-            """SELECT id, state, queued_at, started_at, finished_at, progress, error
-                 FROM runs WHERE source_id = %s ORDER BY id DESC LIMIT 1""",
-            (source["id"],),
+            """WITH latest AS (
+                   SELECT id, state, cancel_requested, queued_at, started_at,
+                          finished_at, progress, error
+                     FROM runs
+                    WHERE source_id = %s
+                    ORDER BY id DESC
+                    LIMIT 1
+               ),
+               current AS (
+                   SELECT id, state, cancel_requested, queued_at, started_at,
+                          finished_at, progress, error
+                     FROM runs
+                    WHERE source_id = %s
+                      AND state IN ('queued', 'running', 'blocked')
+                    ORDER BY id DESC
+                    LIMIT 1
+               )
+               SELECT latest.*, 'latest' AS selection FROM latest
+               UNION ALL
+               SELECT current.*, 'current' AS selection FROM current""",
+            (source["id"], source["id"]),
         )
-        latest = cur.fetchone()
+        selected = {row[-1]: row[:-1] for row in cur.fetchall()}
         cur.execute(
             """SELECT max(finished_at) FILTER (WHERE state = 'succeeded'),
                       max(finished_at) FILTER (WHERE state = 'failed')
@@ -1127,25 +1145,33 @@ def status(conn: psycopg.Connection, name: str) -> dict[str, Any]:
             (source["id"],),
         )
         success, failure = cur.fetchone()
-    latest_run = None
-    if latest:
-        latest_run = {
-            "id": latest[0], "state": latest[1],
-            "queued_at": latest[2].isoformat() if latest[2] else None,
-            "started_at": latest[3].isoformat() if latest[3] else None,
-            "finished_at": latest[4].isoformat() if latest[4] else None,
-            "progress": run_progress(conn, [latest[0]]).get(latest[0], latest[5]),
-            "error": latest[6],
+    progress = run_progress(
+        conn,
+        list({row[0] for row in selected.values()}),
+    )
+
+    def run_projection(row: tuple[Any, ...] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        return {
+            "id": row[0],
+            "state": row[1],
+            "cancel_requested": row[2],
+            "queued_at": row[3].isoformat() if row[3] else None,
+            "started_at": row[4].isoformat() if row[4] else None,
+            "finished_at": row[5].isoformat() if row[5] else None,
+            "progress": progress.get(row[0], row[6]),
+            "error": row[7],
         }
+
+    latest = selected.get("latest")
+    latest_run = run_projection(latest)
     return {
         "source": name,
         "enabled": source["enabled"],
         "paused": source["paused"],
         "latest_run": latest_run,
-        "current_run": (
-            latest_run if latest_run and latest_run["state"] in
-            ("queued", "running", "blocked") else None
-        ),
+        "current_run": run_projection(selected.get("current")),
         "documents": {
             "staged": documents.get("staged", {"count": 0, "as_of": None}),
             "embedding": documents.get("embedding", {"count": 0, "as_of": None}),
@@ -1154,7 +1180,7 @@ def status(conn: psycopg.Connection, name: str) -> dict[str, Any]:
         },
         "last_success": success.isoformat() if success else None,
         "last_failure": failure.isoformat() if failure else None,
-        "recent_error": latest[6] if latest and latest[1] == "failed" else None,
+        "recent_error": latest[7] if latest and latest[1] == "failed" else None,
     }
 
 
