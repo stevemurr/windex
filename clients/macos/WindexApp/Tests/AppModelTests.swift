@@ -1,3 +1,4 @@
+import Dispatch
 import Foundation
 import Testing
 import WindexKit
@@ -1014,11 +1015,236 @@ struct AppModelTests {
         #expect(session.pipelines.pipelines.first?.deploymentCount == 1)
     }
 
+    @Test("an invalidation arriving during a pass is drained by a second pass")
+    func reconciliationDrainsEventsArrivingDuringPass() async throws {
+        let host = "reconciliation-rerun.windex.test"
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            blocking: ["/admin/v1/overview": 1]
+        )
+        defer { ControlReconciliationURLProtocol.reset(host: host) }
+        let session = try Self.controlSession(host: host)
+        Self.seedDocsSource(in: session)
+        let event = Self.runtimeEvent(sequence: 1)
+
+        session.scheduleReconciliation(for: event)
+        #expect(await ControlReconciliationURLProtocol.waitForRequest(
+            host: host,
+            path: "/admin/v1/sources/docs/status"
+        ))
+        #expect(await ControlReconciliationURLProtocol.waitForRequest(
+            host: host,
+            path: "/admin/v1/overview"
+        ))
+
+        // The Source scope is already loaded, but the first pass has not ended.
+        session.scheduleReconciliation(for: Self.runtimeEvent(sequence: 2))
+        ControlReconciliationURLProtocol.release(
+            host: host,
+            path: "/admin/v1/overview"
+        )
+        await session.waitForScheduledReconciliation()
+
+        let counts = Dictionary(
+            grouping: ControlReconciliationURLProtocol.requests(host: host).map(\.path),
+            by: { $0 }
+        ).mapValues(\.count)
+        #expect(counts["/admin/v1/runs/42"] == 2)
+        #expect(counts["/admin/v1/sources/docs/status"] == 2)
+        #expect(counts["/admin/v1/overview"] == 2)
+        #expect(session.runs.runs.first?.id == 42)
+        #expect(session.sources.sources.first?.status.currentRun?.id == 42)
+        #expect(session.overview.snapshot?.revision == 7)
+    }
+
+    @Test("concurrent full refresh requests coalesce before one pass")
+    func concurrentFullRefreshesCoalesce() async throws {
+        let host = "reconciliation-full-coalesce.windex.test"
+        ControlReconciliationURLProtocol.configure(host: host)
+        defer { ControlReconciliationURLProtocol.reset(host: host) }
+        let session = try Self.controlSession(host: host)
+
+        async let first: Void = session.refreshAll()
+        async let second: Void = session.refreshAll()
+        _ = await (first, second)
+
+        let counts = Dictionary(
+            grouping: ControlReconciliationURLProtocol.requests(host: host).map(\.path),
+            by: { $0 }
+        ).mapValues(\.count)
+        for path in [
+            "/admin/v1/runs",
+            "/admin/v1/sources",
+            "/admin/v1/pipelines",
+            "/admin/v1/module-health",
+            "/admin/v1/log-events",
+            "/admin/v1/log-events/facets",
+            "/admin/v1/overview",
+        ] {
+            #expect(counts[path] == 1)
+        }
+        #expect(session.runs.runs.isEmpty)
+        #expect(session.sources.sources.isEmpty)
+        #expect(session.overview.snapshot?.revision == 7)
+    }
+
+    @Test("a full refresh dominates targeted work in the same batch")
+    func fullRefreshDominatesTargetedReconciliation() async throws {
+        let host = "reconciliation-full-dominates.windex.test"
+        ControlReconciliationURLProtocol.configure(host: host)
+        defer { ControlReconciliationURLProtocol.reset(host: host) }
+        let session = try Self.controlSession(host: host)
+        Self.seedDocsSource(in: session)
+
+        session.scheduleReconciliation(for: Self.runtimeEvent(sequence: 1))
+        await session.refreshAll()
+
+        let paths = ControlReconciliationURLProtocol.requests(host: host).map(\.path)
+        #expect(paths.filter { $0 == "/admin/v1/runs" }.count == 1)
+        #expect(paths.filter { $0 == "/admin/v1/sources" }.count == 1)
+        #expect(!paths.contains("/admin/v1/runs/42"))
+        #expect(!paths.contains("/admin/v1/sources/docs/status"))
+        #expect(session.sources.sources.isEmpty)
+    }
+
+    @Test("an event storm queues one bounded follow-up pass")
+    func reconciliationStormDrainsToStableState() async throws {
+        let host = "reconciliation-storm.windex.test"
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            blocking: ["/admin/v1/overview": 1]
+        )
+        defer { ControlReconciliationURLProtocol.reset(host: host) }
+        let session = try Self.controlSession(host: host)
+        Self.seedDocsSource(in: session)
+
+        session.scheduleReconciliation(for: Self.runtimeEvent(sequence: 1))
+        #expect(await ControlReconciliationURLProtocol.waitForRequest(
+            host: host,
+            path: "/admin/v1/overview"
+        ))
+        for sequence in 2...101 {
+            session.scheduleReconciliation(
+                for: Self.runtimeEvent(sequence: sequence)
+            )
+        }
+        ControlReconciliationURLProtocol.release(
+            host: host,
+            path: "/admin/v1/overview"
+        )
+        await session.waitForScheduledReconciliation()
+
+        let counts = Dictionary(
+            grouping: ControlReconciliationURLProtocol.requests(host: host).map(\.path),
+            by: { $0 }
+        ).mapValues(\.count)
+        #expect(counts["/admin/v1/runs/42"] == 2)
+        #expect(counts["/admin/v1/sources/docs/status"] == 2)
+        #expect(counts["/admin/v1/overview"] == 2)
+        #expect(ControlReconciliationURLProtocol.requests(host: host).count == 6)
+        #expect(session.sources.sources.first?.status.activity == .running)
+    }
+
+    @Test("stopping cancels stale reconciliation without clearing restarted work")
+    func stopCancelsReconciliationGeneration() async throws {
+        let host = "reconciliation-stop.windex.test"
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            blocking: ["/admin/v1/runs/42": 1]
+        )
+        defer { ControlReconciliationURLProtocol.reset(host: host) }
+        let session = try Self.controlSession(host: host)
+        Self.seedDocsSource(in: session)
+
+        session.scheduleReconciliation(for: Self.runtimeEvent(sequence: 1))
+        #expect(await ControlReconciliationURLProtocol.waitForRequest(
+            host: host,
+            path: "/admin/v1/runs/42"
+        ))
+        session.stop()
+        ControlReconciliationURLProtocol.release(
+            host: host,
+            path: "/admin/v1/runs/42"
+        )
+
+        // A fresh generation must not be cleared by the cancelled driver's
+        // eventual return, even when the transport ignores cancellation.
+        session.scheduleReconciliation(for: Self.runtimeEvent(sequence: 2))
+        await session.waitForScheduledReconciliation()
+
+        let paths = ControlReconciliationURLProtocol.requests(host: host).map(\.path)
+        #expect(paths.filter { $0 == "/admin/v1/runs/42" }.count == 2)
+        #expect(paths.filter { $0 == "/admin/v1/sources/docs/status" }.count == 1)
+        #expect(paths.filter { $0 == "/admin/v1/overview" }.count == 1)
+        #expect(session.runs.runs.first?.id == 42)
+        #expect(session.sources.sources.first?.status.currentRun?.id == 42)
+    }
+
     private static let evidence = PairingEvidence(
         version: "0.1.0",
         uptimeSeconds: 128,
         authRequired: true,
         scopes: ["admin"])
+
+    private static func controlSession(host: String) throws -> BackendSession {
+        let profile = try ConnectionProfile("http://\(host)")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ControlReconciliationURLProtocol.self]
+        let client = WindexClient(
+            configuration: .init(baseURL: profile.baseURL),
+            token: "token",
+            session: URLSession(configuration: configuration)
+        )
+        return BackendSession(
+            client: client,
+            backend: ConnectedBackend(
+                profile: profile,
+                evidence: evidence,
+                hasStoredToken: true
+            ),
+            reconciliationDelay: .milliseconds(10)
+        )
+    }
+
+    private static func seedDocsSource(in session: BackendSession) {
+        session.runs.replace([])
+        session.sources.replace([
+            SourceDeployment(
+                name: "docs",
+                title: "Docs",
+                origin: "push",
+                pipeline: .init(
+                    pipeline: "crawl",
+                    version: 2,
+                    specHash: "hash-2"
+                ),
+                search: .init(
+                    searchName: "docs",
+                    idPrefix: "docs:",
+                    collectionKey: "docs",
+                    searchProfile: "generic",
+                    includeInAll: true
+                ),
+                stateNamespace: "docs"
+            ),
+        ])
+    }
+
+    private static func runtimeEvent(sequence: Int) -> OperationalEvent {
+        OperationalEvent(
+            sequence: sequence,
+            timestamp: .now,
+            level: .info,
+            component: "worker",
+            sourceName: "docs",
+            pipelineName: "crawl",
+            pipelineVersion: 3,
+            runID: 42,
+            taskID: 7,
+            event: "task.leased",
+            message: ""
+        )
+    }
 
     private static let transformModule = PipelineModuleDescriptor(
         id: "test.transform",
@@ -1204,17 +1430,55 @@ private final class ControlReconciliationURLProtocol:
 {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var recorded: [RecordedControlRequest] = []
+    nonisolated(unsafe) private static var gates:
+        [String: [String: [DispatchSemaphore]]] = [:]
 
     static func requests(host: String) -> [RecordedControlRequest] {
         lock.withLock { recorded.filter { $0.host == host } }
     }
 
-    static func configure(host: String) {
-        lock.withLock { recorded.removeAll { $0.host == host } }
+    static func configure(
+        host: String,
+        blocking: [String: Int] = [:]
+    ) {
+        lock.withLock {
+            recorded.removeAll { $0.host == host }
+            gates[host] = blocking.mapValues { count in
+                (0..<count).map { _ in DispatchSemaphore(value: 0) }
+            }
+        }
     }
 
     static func reset(host: String) {
-        lock.withLock { recorded.removeAll { $0.host == host } }
+        let pending = lock.withLock { () -> [DispatchSemaphore] in
+            recorded.removeAll { $0.host == host }
+            return gates.removeValue(forKey: host)?
+                .values.flatMap { $0 } ?? []
+        }
+        pending.forEach { $0.signal() }
+    }
+
+    static func waitForRequest(
+        host: String,
+        path: String,
+        count: Int = 1
+    ) async -> Bool {
+        for _ in 0..<2_000 {
+            if requests(host: host).filter({ $0.path == path }).count >= count {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return false
+    }
+
+    static func release(host: String, path: String, index: Int = 0) {
+        let semaphore = lock.withLock { () -> DispatchSemaphore? in
+            guard let values = gates[host]?[path],
+                  values.indices.contains(index) else { return nil }
+            return values[index]
+        }
+        semaphore?.signal()
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -1227,13 +1491,23 @@ private final class ControlReconciliationURLProtocol:
 
     override func startLoading() {
         let path = request.url?.path ?? ""
-        Self.lock.withLock {
+        let gate = Self.lock.withLock { () -> DispatchSemaphore? in
+            let host = request.url?.host ?? ""
+            let ordinal = Self.recorded.filter {
+                $0.host == host && $0.path == path
+            }.count
             Self.recorded.append(.init(
-                host: request.url?.host ?? "",
+                host: host,
                 method: request.httpMethod ?? "GET",
                 path: path
             ))
+            let values = Self.gates[host]?[path]
+            let gate = values?.indices.contains(ordinal) == true
+                ? values?[ordinal]
+                : nil
+            return gate
         }
+        gate?.wait()
         let body = Self.responseBody(path: path)
         let status = body == nil ? 404 : 200
         guard let url = request.url,
@@ -1262,6 +1536,25 @@ private final class ControlReconciliationURLProtocol:
     private static func responseBody(path: String) -> Data? {
         let body: String
         switch path {
+        case "/admin/v1/runs":
+            body = #"{"runs":[]}"#
+        case "/admin/v1/sources":
+            body = #"{"sources":[]}"#
+        case "/admin/v1/pipelines":
+            body = #"{"pipelines":[]}"#
+        case "/admin/v1/log-events":
+            body = #"{"events":[],"next_cursor":0}"#
+        case "/admin/v1/log-events/facets":
+            body = """
+            {
+              "levels": [],
+              "components": [],
+              "sources": [],
+              "pipelines": [],
+              "nodes": [],
+              "modules": []
+            }
+            """
         case "/admin/v1/runs/42":
             body = """
             {
