@@ -83,8 +83,49 @@ final class PipelineStore {
         }
         state = .loaded
     }
+    func apply(_ pipeline: PipelineSummary) {
+        if let index = pipelines.firstIndex(where: { $0.name == pipeline.name }) {
+            pipelines[index] = pipeline
+        } else {
+            pipelines.append(pipeline)
+        }
+        pipelines.sort {
+            $0.displayTitle.localizedStandardCompare($1.displayTitle) == .orderedAscending
+        }
+        state = .loaded
+    }
+    func reconcileDeploymentCounts(_ deployments: [SourceDeployment]) {
+        let counts = Dictionary(grouping: deployments, by: {
+            $0.pipeline.pipeline
+        }).mapValues(\.count)
+        pipelines = pipelines.map { pipeline in
+            PipelineSummary(
+                name: pipeline.name,
+                title: pipeline.title,
+                description: pipeline.description,
+                headVersion: pipeline.headVersion,
+                headHash: pipeline.headHash,
+                builtin: pipeline.builtin,
+                archived: pipeline.archived,
+                deploymentCount: counts[pipeline.name] ?? 0
+            )
+        }
+    }
     func replaceRevisions(_ values: [PipelineRevision], for pipeline: String) {
         revisions[pipeline] = values.sorted { $0.reference.version > $1.reference.version }
+    }
+    func apply(_ revision: PipelineRevision) {
+        var values = revisions[revision.reference.pipeline] ?? []
+        if let index = values.firstIndex(where: {
+            $0.reference.version == revision.reference.version
+        }) {
+            values[index] = revision
+        } else {
+            values.append(revision)
+        }
+        revisions[revision.reference.pipeline] = values.sorted {
+            $0.reference.version > $1.reference.version
+        }
     }
     func apply(_ layout: PipelineFlowLayout) {
         layouts[Self.layoutKey(pipeline: layout.pipeline, version: layout.version,
@@ -142,6 +183,14 @@ final class SourceStore {
         moduleStatuses = Dictionary(
             uniqueKeysWithValues: statuses.map { ($0.source, $0) }
         )
+        moduleDiagnosticsState = .loaded
+    }
+    func applyModuleDiagnostics(
+        health: ModuleHealthWire,
+        status: SourceModuleStatusWire
+    ) {
+        moduleHealth = health
+        moduleStatuses[status.source] = status
         moduleDiagnosticsState = .loaded
     }
     func moduleStatus(for source: String) -> SourceModuleStatusWire? {
@@ -359,6 +408,128 @@ final class LiveEventHub {
     func stop() { connection = .idle }
 }
 
+/// The smallest set of canonical projections invalidated by a burst of
+/// control-plane events. Sets make reconciliation cost depend on the unique
+/// affected resources, rather than on the number of journal rows in the burst.
+struct ControlReconciliationPlan: Equatable, Sendable {
+    struct PipelineTarget: Hashable, Sendable {
+        let name: String
+        let version: Int?
+    }
+
+    var refreshAll = false
+    var refreshRegistry = false
+    var refreshModuleDiagnostics = false
+    var refreshOverview = false
+    var pipelines: Set<PipelineTarget> = []
+    var sourceDetails: Set<String> = []
+    var sourceStatuses: Set<String> = []
+    var sourceTriggers: Set<String> = []
+    var runs: Set<Int> = []
+
+    static let full = Self(refreshAll: true)
+
+    init(
+        refreshAll: Bool = false,
+        refreshRegistry: Bool = false,
+        refreshModuleDiagnostics: Bool = false,
+        refreshOverview: Bool = false,
+        pipelines: Set<PipelineTarget> = [],
+        sourceDetails: Set<String> = [],
+        sourceStatuses: Set<String> = [],
+        sourceTriggers: Set<String> = [],
+        runs: Set<Int> = []
+    ) {
+        self.refreshAll = refreshAll
+        self.refreshRegistry = refreshRegistry
+        self.refreshModuleDiagnostics = refreshModuleDiagnostics
+        self.refreshOverview = refreshOverview
+        self.pipelines = pipelines
+        self.sourceDetails = sourceDetails
+        self.sourceStatuses = sourceStatuses
+        self.sourceTriggers = sourceTriggers
+        self.runs = runs
+    }
+
+    init(event: OperationalEvent) {
+        self.init(refreshOverview: true)
+        var recognizedScope = false
+
+        if let runID = event.runID {
+            runs.insert(runID)
+            recognizedScope = true
+        }
+        if let source = event.sourceName {
+            sourceStatuses.insert(source)
+        }
+
+        if event.component == "pipeline" || event.event.hasPrefix("pipeline.") {
+            if let pipeline = event.pipelineName {
+                pipelines.insert(.init(
+                    name: pipeline,
+                    version: event.pipelineVersion
+                ))
+                recognizedScope = true
+            } else {
+                refreshAll = true
+            }
+        }
+        if event.component == "source" || event.event.hasPrefix("source.") {
+            if let source = event.sourceName {
+                sourceDetails.insert(source)
+                recognizedScope = true
+            } else {
+                refreshAll = true
+            }
+        }
+        if event.component == "scheduler" || event.event.hasPrefix("trigger.") {
+            if let source = event.sourceName {
+                sourceTriggers.insert(source)
+                recognizedScope = true
+            } else {
+                refreshAll = true
+            }
+        }
+        if event.component == "module_admin" || event.event.hasPrefix("module.") {
+            refreshRegistry = true
+            refreshModuleDiagnostics = true
+            recognizedScope = true
+        }
+        if event.component == "maintenance"
+            || event.event.hasPrefix("storage.gc.") {
+            recognizedScope = true
+        }
+
+        // A scheduled Run changes last-fired/next-fire state in the same
+        // transaction as run.queued, without a separate trigger event.
+        if let trigger = event.data["trigger"]?.stringValue,
+           trigger == "schedule" || trigger == "event",
+           let source = event.sourceName {
+            sourceTriggers.insert(source)
+        }
+
+        // Unknown global event domains must not be acknowledged by refreshing
+        // Overview alone: a newer backend may be invalidating a store this
+        // client does not yet know how to classify.
+        if !recognizedScope {
+            refreshAll = true
+        }
+    }
+
+    mutating func formUnion(_ other: Self) {
+        refreshAll = refreshAll || other.refreshAll
+        refreshRegistry = refreshRegistry || other.refreshRegistry
+        refreshModuleDiagnostics =
+            refreshModuleDiagnostics || other.refreshModuleDiagnostics
+        refreshOverview = refreshOverview || other.refreshOverview
+        pipelines.formUnion(other.pipelines)
+        sourceDetails.formUnion(other.sourceDetails)
+        sourceStatuses.formUnion(other.sourceStatuses)
+        sourceTriggers.formUnion(other.sourceTriggers)
+        runs.formUnion(other.runs)
+    }
+}
+
 /// Connection-scoped owner of the authoritative epoch-2 projections.
 @MainActor
 @Observable
@@ -381,10 +552,17 @@ final class BackendSession {
     private var logTask: Task<Void, Never>?
     private var reconciliationTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
+    private var pendingReconciliation = ControlReconciliationPlan()
+    private let reconciliationDelay: Duration
 
-    init(client: WindexClient, backend: ConnectedBackend) {
+    init(
+        client: WindexClient,
+        backend: ConnectedBackend,
+        reconciliationDelay: Duration = .milliseconds(250)
+    ) {
         self.client = client
         self.backend = backend
+        self.reconciliationDelay = reconciliationDelay
         registry = RegistryStore(client: client)
     }
 
@@ -423,6 +601,7 @@ final class BackendSession {
         logTask = nil
         reconciliationTask = nil
         pollingTask = nil
+        pendingReconciliation = .init()
         events.stop()
         logs.setConnection(.idle)
         hasStarted = false
@@ -466,12 +645,63 @@ final class BackendSession {
         }
     }
 
+    /// Refresh one Pipeline head and, when the event identifies it, one exact
+    /// immutable revision. This deliberately never walks historical revisions.
+    private func loadPipeline(_ target: ControlReconciliationPlan.PipelineTarget) async {
+        do {
+            let wire = try await client.pipeline(target.name)
+            let deploymentCount = sources.sources.lazy.filter {
+                $0.pipeline.pipeline == target.name
+            }.count
+            let summary = wire.summary(deploymentCount: deploymentCount)
+            pipelines.apply(summary)
+
+            guard let version = target.version ?? wire.version else { return }
+            let revisionWire = try await client.pipelineRevision(
+                target.name,
+                version: version
+            )
+            let revision = try revisionWire.revision(
+                title: summary.title,
+                description: summary.description
+            )
+            pipelines.apply(revision)
+            for flow in revision.spec.flows {
+                if let layoutWire = try? await client.pipelineLayout(
+                    target.name,
+                    version: version,
+                    flow: flow.name
+                ),
+                   let layout = try? layoutWire.flowLayout(
+                    pipeline: target.name,
+                    version: version
+                   ) {
+                    pipelines.apply(layout)
+                }
+            }
+        } catch {
+            pipelines.fail(error)
+        }
+    }
+
     private func loadRuns() async {
         runs.loading()
         do {
             runs.replace(try await client.runs(limit: 200).runs.map {
                 try $0.summary()
             })
+        } catch {
+            runs.fail(error)
+        }
+    }
+
+    private func loadRun(_ id: Int) async {
+        if runs.details[id] != nil {
+            await loadRunDetail(id)
+            return
+        }
+        do {
+            runs.apply(try await client.run(id).summary())
         } catch {
             runs.fail(error)
         }
@@ -533,6 +763,141 @@ final class BackendSession {
             }
             sources.replace(values)
             sourceSettingsDrafts.removeMissingSources(Set(values.map(\.name)))
+        } catch {
+            sources.fail(error)
+        }
+    }
+
+    private func loadSourceTriggers(_ name: String) async {
+        do {
+            sources.setTriggers(
+                try await client.sourceTriggers(name).triggers,
+                for: name
+            )
+        } catch {
+            sources.fail(error)
+        }
+    }
+
+    /// Refresh every projection belonging to one Source. Unlike loadSources(),
+    /// this cost is bounded to the named deployment and its 200-Run history.
+    /// Lifecycle events use it because revision and settings may change
+    /// together, and because the Source may not have existed in this session.
+    @discardableResult
+    private func loadSource(_ name: String) async -> SourceDeployment? {
+        do {
+            async let detailRequest = client.source(name)
+            async let historyRequest = client.sourceRuns(name, limit: 200)
+            async let settingsRequest = client.sourceSettings(name)
+            async let triggersRequest = client.sourceTriggers(name)
+            async let statusRequest = client.sourceStatus(name)
+            async let healthRequest = client.moduleHealth()
+            async let moduleStatusRequest = client.sourceModuleStatus(name)
+            let (
+                detail,
+                history,
+                settings,
+                triggerResponse,
+                statusWire
+            ) = try await (
+                detailRequest,
+                historyRequest,
+                settingsRequest,
+                triggersRequest,
+                statusRequest
+            )
+            runs.mergeSourceHistory(
+                try history.runs.map { try $0.summary() },
+                source: name,
+                replacing: true
+            )
+            sources.setSettingsETag(settings.etag, for: name)
+            sources.setTriggers(triggerResponse.triggers, for: name)
+            let nextTrigger = triggerResponse.triggers
+                .filter(\.enabled)
+                .compactMap(\.nextFireAt)
+                .sorted()
+                .first
+            let status = try statusWire.status(
+                runs: runs.runs,
+                nextTrigger: nextTrigger
+            )
+            let scope = try settings.settingsScope()
+            sourceSettingsDrafts.reconcile(scope)
+            let base = try detail.deployment(status: status)
+            let effective = try settings.values.additionalProperties
+                .decode([String: JSONValue].self)
+            let deployment = base.withConfiguration(.init(
+                fields: scope.fields.map(\.param),
+                configuredValues: base.configuration.configuredValues,
+                effectiveValues: effective,
+                origins: Dictionary(
+                    uniqueKeysWithValues: scope.fields.compactMap { field in
+                        field.origin.map { origin in
+                            (field.key, origin.rawValue)
+                        }
+                    }
+                ),
+                missingRequired: scope.fields.compactMap {
+                    $0.param.required && effective[$0.key] == nil ? $0.key : nil
+                },
+                valuesHash: settings.etag
+            ))
+            sources.apply(deployment)
+            do {
+                let diagnostics = try await (
+                    healthRequest,
+                    moduleStatusRequest
+                )
+                sources.applyModuleDiagnostics(
+                    health: diagnostics.0,
+                    status: diagnostics.1
+                )
+            } catch {
+                // Runtime status/configuration remains useful when the
+                // diagnostic projection is temporarily unavailable.
+                sources.failModuleDiagnostics(error)
+            }
+            pipelines.reconcileDeploymentCounts(sources.sources)
+            if !pipelines.pipelines.contains(where: {
+                $0.name == deployment.pipeline.pipeline
+            }) {
+                await loadPipeline(.init(
+                    name: deployment.pipeline.pipeline,
+                    version: deployment.pipeline.version
+                ))
+            }
+            return deployment
+        } catch {
+            sources.fail(error)
+            return nil
+        }
+    }
+
+    /// Run/Task events only invalidate runtime status. If the Source is new to
+    /// this session, promote the refresh to the complete single-Source path.
+    private func loadSourceStatus(_ name: String) async {
+        guard sources.sources.contains(where: { $0.name == name }) else {
+            await loadSource(name)
+            return
+        }
+        do {
+            let wire = try await client.sourceStatus(name)
+            let nextTrigger = sources.triggers[name]?
+                .filter(\.enabled)
+                .compactMap(\.nextFireAt)
+                .sorted()
+                .first
+            guard let current = sources.sources.first(where: {
+                $0.name == name
+            }) else {
+                await loadSource(name)
+                return
+            }
+            sources.apply(current.withStatus(try wire.status(
+                runs: runs.runs,
+                nextTrigger: nextTrigger
+            )))
         } catch {
             sources.fail(error)
         }
@@ -626,7 +991,15 @@ final class BackendSession {
                 for try await event in stream {
                     guard !Task.isCancelled else { return }
                     events.advance(event.id)
-                    scheduleReconciliation()
+                    if let wire = try? event.decode(OperationalEventWire.self),
+                       let decoded = try? wire.operationalEvent() {
+                        scheduleReconciliation(for: decoded)
+                    } else {
+                        // A forward contract can add event fields before this
+                        // client knows how to scope them. Never acknowledge
+                        // that invalidation with only a partial projection.
+                        scheduleReconciliation(.full)
+                    }
                 }
                 events.setConnection(.degraded("Control stream ended; using REST reconciliation."))
                 updatePollingState()
@@ -642,13 +1015,67 @@ final class BackendSession {
         }
     }
 
-    private func scheduleReconciliation() {
+    func scheduleReconciliation(for event: OperationalEvent) {
+        scheduleReconciliation(.init(event: event))
+    }
+
+    private func scheduleReconciliation(_ plan: ControlReconciliationPlan) {
+        pendingReconciliation.formUnion(plan)
         guard reconciliationTask == nil else { return }
         reconciliationTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled, let self else { return }
-            await self.refreshAll()
+            guard let self else { return }
+            try? await Task.sleep(for: self.reconciliationDelay)
+            guard !Task.isCancelled else { return }
+            let plan = self.pendingReconciliation
+            self.pendingReconciliation = .init()
+            await self.reconcile(plan)
             self.reconciliationTask = nil
+        }
+    }
+
+    /// Await the currently coalescing batch. Kept internal so deterministic
+    /// app-model tests can assert request cardinality without timing guesses.
+    func waitForScheduledReconciliation() async {
+        await reconciliationTask?.value
+    }
+
+    private func reconcile(_ plan: ControlReconciliationPlan) async {
+        if plan.refreshAll {
+            await refreshAll()
+            return
+        }
+        if plan.refreshRegistry {
+            await registry.load()
+        }
+        for runID in plan.runs.sorted() {
+            await loadRun(runID)
+        }
+        for source in plan.sourceDetails.sorted() {
+            await loadSource(source)
+        }
+        for source in plan.sourceTriggers
+            .subtracting(plan.sourceDetails)
+            .sorted() {
+            await loadSourceTriggers(source)
+        }
+        for source in plan.sourceStatuses
+            .subtracting(plan.sourceDetails)
+            .sorted() {
+            await loadSourceStatus(source)
+        }
+        for target in plan.pipelines.sorted(by: {
+            if $0.name == $1.name {
+                return ($0.version ?? -1) < ($1.version ?? -1)
+            }
+            return $0.name < $1.name
+        }) {
+            await loadPipeline(target)
+        }
+        if plan.refreshModuleDiagnostics {
+            await loadModuleDiagnostics()
+        }
+        if plan.refreshOverview {
+            await loadOverview()
         }
     }
 
@@ -947,6 +1374,7 @@ final class BackendSession {
             async let events = client.runEvents(id, limit: 1_000)
             async let outputs = client.runOutputs(id)
             let values = try await (detail, events, outputs)
+            runs.apply(try values.0.summary())
             runs.applyDetail(
                 values.0,
                 events: try values.1.events.map { try $0.operationalEvent() },
@@ -1009,6 +1437,17 @@ final class BackendSession {
 
 private extension SourceDeployment {
     func withConfiguration(_ configuration: SourceConfiguration) -> SourceDeployment {
+        SourceDeployment(
+            name: name, title: title, description: description, origin: origin,
+            originValues: originValues,
+            pipeline: pipeline, search: search, stateNamespace: stateNamespace,
+            enabled: enabled, paused: paused, archived: archived, generation: generation,
+            ingress: ingress,
+            configuration: configuration, status: status
+        )
+    }
+
+    func withStatus(_ status: SourceStatus) -> SourceDeployment {
         SourceDeployment(
             name: name, title: title, description: description, origin: origin,
             originValues: originValues,
