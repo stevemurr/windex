@@ -16,7 +16,7 @@ from windex.config import Settings, invalidate_overrides
 from windex.pipeline.compile import resolve_parameters
 from windex.pipeline.contracts import SEARCH_SOURCE_CONTRACT
 from windex.pipeline.events import lock_journal
-from windex.pipeline.spec import parse
+from windex.pipeline.spec import Pipeline, parse
 from windex.pipeline.store import get_revision
 from windex.pipeline.validation import validate_deployment
 from windex.source.trigger_validation import (
@@ -271,6 +271,23 @@ def settings_projection(
     }
 
 
+def _normalize_configured_parameters(
+    pipeline: Pipeline,
+    settings: Settings,
+    values: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Resolve configured values without materializing an unset optional key."""
+    normalized = resolve_parameters(pipeline, settings, values)
+    for declaration in pipeline.parameters:
+        if (
+            declaration.key not in values
+            and declaration.default is None
+            and not declaration.required
+        ):
+            normalized.pop(declaration.key, None)
+    return normalized
+
+
 def patch_settings(
     conn: psycopg.Connection,
     name: str,
@@ -286,14 +303,37 @@ def patch_settings(
         raise StaleSourceError("Source settings ETag is stale")
     pipeline = parse(source["spec"], settings)
     candidate = {**source["values"], **dict(changes)}
-    normalized = resolve_parameters(pipeline, settings or Settings(), candidate)
-    digest = values_hash(normalized)
+    normalized = _normalize_configured_parameters(
+        pipeline, settings or Settings(), candidate)
+    return _replace_settings(
+        conn,
+        name,
+        source,
+        normalized,
+        if_match=if_match,
+        settings=settings,
+    )
+
+
+def _replace_settings(
+    conn: psycopg.Connection,
+    name: str,
+    source: Mapping[str, Any],
+    values: Mapping[str, Any],
+    *,
+    if_match: str,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Store one exact, normalized Source configuration behind its ETag."""
+    if source["values_hash"] != if_match:
+        raise StaleSourceError("Source settings ETag is stale")
+    digest = values_hash(values)
     with conn.cursor() as cur:
         cur.execute(
             """UPDATE source_config
                   SET values = %s, values_hash = %s, updated_at = now()
                 WHERE source_id = %s AND values_hash = %s RETURNING source_id""",
-            (Jsonb(normalized), digest, source["id"], if_match),
+            (Jsonb(dict(values)), digest, source["id"], if_match),
         )
         if cur.fetchone() is None:
             conn.rollback()
@@ -314,15 +354,23 @@ def delete_setting(
     if source is None:
         raise KeyError(name)
     values = dict(source["values"])
-    values.pop(key, None)
     pipeline = parse(source["spec"], settings)
     declaration = next((p for p in pipeline.parameters if p.key == key), None)
     if declaration is None:
-        raise KeyError(key)
+        raise ValueError(f"unknown Pipeline parameter {key!r}")
+    values.pop(key, None)
     if declaration.default is not None:
         values[key] = declaration.default
-    return patch_settings(
-        conn, name, values, if_match=if_match, settings=settings)
+    normalized = _normalize_configured_parameters(
+        pipeline, settings or Settings(), values)
+    return _replace_settings(
+        conn,
+        name,
+        source,
+        normalized,
+        if_match=if_match,
+        settings=settings,
+    )
 
 
 def set_paused(

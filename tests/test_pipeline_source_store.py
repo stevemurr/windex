@@ -4,10 +4,13 @@ import copy
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 
 import psycopg
 import pytest
+from fastapi.testclient import TestClient
 
+from windex.api.app import admin
 from windex.config import Settings, effective_settings, invalidate_overrides
 from windex.api.canonical import UpgradePreviewResponse
 from windex.db.canonical import init_canonical_db
@@ -27,7 +30,9 @@ from windex.pipeline.store import (
 from windex.source.store import (
     SourceConflictError,
     StaleSourceError,
+    create_source,
     create_trigger,
+    delete_setting,
     get_source,
     get_operator_settings,
     delete_operator_setting,
@@ -64,6 +69,58 @@ def canonical_conn():
                 "WHERE datname = %s", (name,))
             cur.execute(f'DROP DATABASE "{name}"')
         admin.close()
+
+
+def _create_settings_source(canonical_conn) -> str:
+    suffix = uuid.uuid4().hex[:10]
+    name = f"settings_{suffix}"
+    template = get_pipeline(canonical_conn, "hn")
+    spec = copy.deepcopy(template["spec"])
+    spec["parameters"].extend([
+        {
+            "key": "optional_label",
+            "kind": "str",
+        },
+        {
+            "key": "resettable_limit",
+            "kind": "int",
+            "lo": 1,
+            "hi": 10,
+            "default": 4,
+        },
+        {
+            "key": "preserved_label",
+            "kind": "str",
+        },
+        {
+            "key": "private_label",
+            "kind": "str",
+            "secret": True,
+        },
+    ])
+    create_pipeline(
+        canonical_conn,
+        name=name,
+        spec=spec,
+        title="Source settings deletion fixture",
+    )
+    create_source(canonical_conn, {
+        "name": name,
+        "pipeline_name": name,
+        "pipeline_version": 1,
+        "search_name": name,
+        "id_prefix": f"{name}:",
+        "collection_key": name,
+        "search_profile": "hn",
+        "state_namespace": name,
+        "values": {
+            "optional_label": "  remove me  ",
+            "resettable_limit": 9,
+            "preserved_label": "  keep me  ",
+            "private_label": "  hidden value  ",
+        },
+    })
+    return name
 
 
 def test_bootstrap_and_layout_are_deterministic(canonical_conn):
@@ -109,6 +166,141 @@ def test_noop_publish_and_stale_settings(canonical_conn):
     with pytest.raises(StaleSourceError):
         patch_settings(
             canonical_conn, "hn", {"incremental_days": 4}, if_match=settings["etag"])
+
+
+def test_delete_setting_exactly_removes_or_resets_without_losing_values(
+    canonical_conn,
+):
+    name = _create_settings_source(canonical_conn)
+    original = settings_projection(canonical_conn, name)
+    assert original["values"]["optional_label"] == "remove me"
+    assert original["values"]["preserved_label"] == "keep me"
+    assert "private_label" not in original["values"]
+
+    removed = delete_setting(
+        canonical_conn,
+        name,
+        "optional_label",
+        if_match=original["etag"],
+    )
+
+    assert removed["etag"] != original["etag"]
+    assert "optional_label" not in removed["values"]
+    optional = next(
+        field for field in removed["fields"]
+        if field["key"] == "optional_label"
+    )
+    assert optional["origin"] == "unset"
+    assert optional["value"] is None
+    stored = get_source(canonical_conn, name)
+    assert "optional_label" not in stored["values"]
+    assert stored["values"]["preserved_label"] == "keep me"
+    assert stored["values"]["private_label"] == "hidden value"
+
+    reset = delete_setting(
+        canonical_conn,
+        name,
+        "resettable_limit",
+        if_match=removed["etag"],
+    )
+
+    assert reset["values"]["resettable_limit"] == 4
+    assert reset["values"]["preserved_label"] == "keep me"
+    assert "optional_label" not in reset["values"]
+    stored = get_source(canonical_conn, name)
+    assert "optional_label" not in stored["values"]
+    assert stored["values"]["private_label"] == "hidden value"
+    private = next(
+        field for field in reset["fields"]
+        if field["key"] == "private_label"
+    )
+    assert private["value"] is None
+    assert private["secret_set"] is True
+
+    with pytest.raises(StaleSourceError):
+        delete_setting(
+            canonical_conn,
+            name,
+            "preserved_label",
+            if_match=original["etag"],
+        )
+    assert get_source(canonical_conn, name)["values"]["preserved_label"] == "keep me"
+
+    with pytest.raises(ValueError, match="unknown Pipeline parameter"):
+        delete_setting(
+            canonical_conn,
+            name,
+            "not_declared",
+            if_match=reset["etag"],
+        )
+
+
+def test_source_setting_delete_api_uses_etag_and_exact_replacement(
+    canonical_conn,
+    monkeypatch,
+):
+    from windex.api import app as app_module
+    from windex.api import canonical
+
+    name = _create_settings_source(canonical_conn)
+    dsn = (
+        Settings().pg_dsn.rsplit("/", 1)[0]
+        + "/"
+        + canonical_conn.info.dbname
+    )
+    settings = Settings(
+        _env_file=None,
+        pg_dsn=dsn,
+        write_token="",
+        serve_host="127.0.0.1",
+    )
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(canonical, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        canonical.db,
+        "pooled",
+        lambda _dsn: nullcontext(canonical_conn),
+    )
+    client = TestClient(admin)
+
+    original = client.get(f"/v1/sources/{name}/settings").json()
+    response = client.delete(
+        f"/v1/sources/{name}/settings/optional_label",
+        headers={"If-Match": f'"{original["etag"]}"'},
+    )
+    assert response.status_code == 200
+    removed = response.json()
+    assert "optional_label" not in removed["values"]
+    assert removed["values"]["preserved_label"] == "keep me"
+
+    stale = client.delete(
+        f"/v1/sources/{name}/settings/preserved_label",
+        headers={"If-Match": f'"{original["etag"]}"'},
+    )
+    assert stale.status_code == 412
+    assert stale.json()["detail"] == "Source settings ETag is stale"
+
+    response = client.delete(
+        f"/v1/sources/{name}/settings/resettable_limit",
+        headers={"If-Match": f'"{removed["etag"]}"'},
+    )
+    assert response.status_code == 200
+    reset = response.json()
+    assert reset["values"]["resettable_limit"] == 4
+    assert reset["values"]["preserved_label"] == "keep me"
+    assert "optional_label" not in reset["values"]
+
+    unknown = client.delete(
+        f"/v1/sources/{name}/settings/not_declared",
+        headers={"If-Match": f'"{reset["etag"]}"'},
+    )
+    assert unknown.status_code == 422
+    assert unknown.json()["detail"] == (
+        "unknown Pipeline parameter 'not_declared'"
+    )
+    stored = get_source(canonical_conn, name)
+    assert stored["values"]["preserved_label"] == "keep me"
+    assert stored["values"]["private_label"] == "hidden value"
 
 
 def test_initial_pipeline_publication_needs_no_parent_guard(canonical_conn):
