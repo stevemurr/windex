@@ -82,6 +82,12 @@ struct SourcesView: View {
     @State private var creationRevision: PipelineRevisionReference?
     @Environment(\.windexTheme) private var theme
 
+    private var loadDiagnostics: [SourceLoadDiagnostic] {
+        session.sources.loadDiagnostics.values.sorted {
+            $0.source.localizedStandardCompare($1.source) == .orderedAscending
+        }
+    }
+
     var body: some View {
         HSplitView {
             catalogue
@@ -144,13 +150,40 @@ struct SourcesView: View {
             .padding(.md)
             Hairline()
 
+            if !loadDiagnostics.isEmpty {
+                VStack(alignment: .leading, spacing: .xs) {
+                    HStack {
+                        Text(
+                            "\(loadDiagnostics.count) Source"
+                                + (loadDiagnostics.count == 1 ? "" : "s")
+                                + " need attention"
+                        )
+                        .windexStyle(Typography.label)
+                        Spacer(minLength: 0)
+                        Button("Retry") {
+                            Task { await session.refreshAll() }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    ForEach(loadDiagnostics, id: \.source) { diagnostic in
+                        Text("\(diagnostic.source): \(diagnostic.message)")
+                            .windexStyle(Typography.dataSM)
+                            .foregroundStyle(theme.palette.rust)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.sm)
+                Hairline()
+            }
+
             if session.sources.sources.isEmpty {
                 emptyCatalogue
             } else {
                 List(session.sources.sources, selection: $selectedName) { source in
                     SourceDeploymentRow(
                         source: source,
-                        moduleStatus: session.sources.moduleStatus(for: source.name)
+                        moduleStatus: session.sources.moduleStatus(for: source.name),
+                        loadDiagnostic: session.sources.diagnostic(for: source.name)
                     )
                         .tag(source.name)
                 }
@@ -521,6 +554,7 @@ private enum SourceFormError: LocalizedError {
 private struct SourceDeploymentRow: View {
     let source: SourceDeployment
     let moduleStatus: SourceModuleStatusWire?
+    let loadDiagnostic: SourceLoadDiagnostic?
     @Environment(\.windexTheme) private var theme
 
     var body: some View {
@@ -529,7 +563,9 @@ private struct SourceDeploymentRow: View {
                 Text(source.displayTitle)
                     .windexStyle(Typography.label)
                 Spacer(minLength: 0)
-                if moduleStatus?.available == false {
+                if loadDiagnostic != nil {
+                    StatusBadge(.attention, word: "refresh issue")
+                } else if moduleStatus?.available == false {
                     StatusBadge(.fault, word: "upgrade required")
                 } else {
                     StatusBadge(

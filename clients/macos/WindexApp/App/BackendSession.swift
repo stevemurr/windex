@@ -33,6 +33,41 @@ struct SourceModuleUnavailableError: LocalizedError, Equatable, Sendable {
     }
 }
 
+/// A Source refresh is assembled from several independently served
+/// projections. Keep their failures attached to the affected Source instead of
+/// collapsing the complete Source catalogue into a failed state.
+struct SourceLoadDiagnostic: Equatable, Sendable {
+    enum Projection: String, CaseIterable, Hashable, Sendable {
+        case detail
+        case history
+        case settings
+        case triggers
+        case status
+
+        var title: String { rawValue.capitalized }
+    }
+
+    let source: String
+    let failures: [Projection: String]
+    let usingLastKnownGood: Bool
+    let snapshotAvailable: Bool
+
+    var message: String {
+        let details = Projection.allCases.compactMap { projection in
+            failures[projection].map { "\(projection.title): \($0)" }
+        }.joined(separator: " ")
+        let disposition: String
+        if usingLastKnownGood {
+            disposition = "Showing the last complete Source snapshot."
+        } else if snapshotAvailable {
+            disposition = "The remaining Source data is still available."
+        } else {
+            disposition = "The Source will appear after a complete snapshot loads."
+        }
+        return "\(details) \(disposition) Retry the refresh."
+    }
+}
+
 @MainActor
 @Observable
 final class RegistryStore {
@@ -153,6 +188,7 @@ final class SourceStore {
     private(set) var sources: [SourceDeployment] = []
     private(set) var settingsETags: [String: String] = [:]
     private(set) var triggers: [String: [SourceTriggerWire]] = [:]
+    private(set) var loadDiagnostics: [String: SourceLoadDiagnostic] = [:]
     private(set) var configuredSecrets: [String] = []
     private(set) var moduleHealth: ModuleHealthWire?
     private(set) var moduleStatuses: [String: SourceModuleStatusWire] = [:]
@@ -166,13 +202,65 @@ final class SourceStore {
         }
         state = .loaded
     }
+    /// Atomically installs the per-Source projections assembled by a complete
+    /// refresh. Callers preserve the previous values for any Source whose new
+    /// projection could not be assembled, so an ETag or trigger set can never
+    /// move ahead of its deployment/configuration snapshot.
+    func replaceSnapshots(
+        _ values: [SourceDeployment],
+        settingsETags: [String: String],
+        triggers: [String: [SourceTriggerWire]],
+        diagnostics: [String: SourceLoadDiagnostic]
+    ) {
+        sources = values.sorted {
+            $0.displayTitle.localizedStandardCompare($1.displayTitle) == .orderedAscending
+        }
+        self.settingsETags = settingsETags
+        self.triggers = triggers.mapValues { Self.sortedTriggers($0) }
+        loadDiagnostics = diagnostics
+        state = .loaded
+    }
+    func applySnapshot(
+        _ source: SourceDeployment,
+        settingsETag: String,
+        triggers: [SourceTriggerWire],
+        diagnostic: SourceLoadDiagnostic?
+    ) {
+        apply(source)
+        settingsETags[source.name] = settingsETag
+        self.triggers[source.name] = Self.sortedTriggers(triggers)
+        loadDiagnostics[source.name] = diagnostic
+        state = .loaded
+    }
+    func setLoadDiagnostic(_ diagnostic: SourceLoadDiagnostic) {
+        loadDiagnostics[diagnostic.source] = diagnostic
+    }
+    func resolveLoadDiagnostic(
+        for source: String,
+        projection: SourceLoadDiagnostic.Projection
+    ) {
+        guard let current = loadDiagnostics[source] else { return }
+        var failures = current.failures
+        failures.removeValue(forKey: projection)
+        guard !failures.isEmpty else {
+            loadDiagnostics.removeValue(forKey: source)
+            return
+        }
+        loadDiagnostics[source] = .init(
+            source: source,
+            failures: failures,
+            usingLastKnownGood: current.usingLastKnownGood,
+            snapshotAvailable: current.snapshotAvailable
+        )
+    }
+    func diagnostic(for source: String) -> SourceLoadDiagnostic? {
+        loadDiagnostics[source]
+    }
     func setSettingsETag(_ etag: String, for source: String) {
         settingsETags[source] = etag
     }
     func setTriggers(_ values: [SourceTriggerWire], for source: String) {
-        triggers[source] = values.sorted {
-            ($0.nextFireAt ?? "\u{10ffff}") < ($1.nextFireAt ?? "\u{10ffff}")
-        }
+        triggers[source] = Self.sortedTriggers(values)
     }
     func setConfiguredSecrets(_ values: [String]) {
         configuredSecrets = values.sorted()
@@ -212,6 +300,13 @@ final class SourceStore {
         }
         sources.sort {
             $0.displayTitle.localizedStandardCompare($1.displayTitle) == .orderedAscending
+        }
+    }
+    private static func sortedTriggers(
+        _ values: [SourceTriggerWire]
+    ) -> [SourceTriggerWire] {
+        values.sorted {
+            ($0.nextFireAt ?? "\u{10ffff}") < ($1.nextFireAt ?? "\u{10ffff}")
         }
     }
 }
@@ -550,6 +645,19 @@ struct ControlReconciliationPlan: Equatable, Sendable {
     }
 }
 
+private struct LoadedSourceProjection {
+    let deployment: SourceDeployment
+    let settingsETag: String
+    let settingsScope: SettingsScope
+    let triggers: [SourceTriggerWire]
+    let history: [SourceRunSummary]?
+}
+
+private struct SourceProjectionAttempt {
+    let projection: LoadedSourceProjection?
+    let failures: [SourceLoadDiagnostic.Projection: String]
+}
+
 /// Connection-scoped owner of the authoritative epoch-2 projections.
 @MainActor
 @Observable
@@ -773,69 +881,212 @@ final class BackendSession {
         do {
             let response = try await client.sources()
             guard reconciliationIsCurrent(epoch) else { return }
-            if let secretResponse = try? await client.secrets() {
-                guard reconciliationIsCurrent(epoch) else { return }
-                sources.setConfiguredSecrets(
-                    secretResponse.secrets.filter(\.configured).map(\.name)
-                )
-            }
-            var values: [SourceDeployment] = []
+            let configuredSecrets = try? await client.secrets()
+            guard reconciliationIsCurrent(epoch) else { return }
+
+            let listedNames = Set(response.sources.map(\.name))
+            let previousDeployments = Dictionary(
+                uniqueKeysWithValues: sources.sources.map { ($0.name, $0) }
+            )
+            let previousETags = sources.settingsETags
+            let previousTriggers = sources.triggers
+            var deployments: [SourceDeployment] = []
+            var settingsETags: [String: String] = [:]
+            var triggers: [String: [SourceTriggerWire]] = [:]
+            var diagnostics: [String: SourceLoadDiagnostic] = [:]
+            var loaded: [LoadedSourceProjection] = []
+
             for wire in response.sources {
-                guard reconciliationIsCurrent(epoch) else { return }
-                if let history = try? await client.sourceRuns(
-                    wire.name,
-                    limit: 200
-                ) {
-                    guard reconciliationIsCurrent(epoch) else { return }
-                    runs.mergeSourceHistory(
-                        try history.runs.map { try $0.summary() },
+                guard let attempt = await loadSourceProjection(
+                    from: wire,
+                    refreshDetail: true,
+                    epoch: epoch
+                ) else {
+                    return
+                }
+                let previous = previousDeployments[wire.name]
+                if let projection = attempt.projection {
+                    deployments.append(projection.deployment)
+                    settingsETags[wire.name] = projection.settingsETag
+                    triggers[wire.name] = projection.triggers
+                    loaded.append(projection)
+                } else if let previous {
+                    // Keep the whole last-known-good projection. Never advance
+                    // its ETag or triggers independently of the deployment.
+                    deployments.append(previous)
+                    if let etag = previousETags[wire.name] {
+                        settingsETags[wire.name] = etag
+                    }
+                    if let values = previousTriggers[wire.name] {
+                        triggers[wire.name] = values
+                    }
+                }
+                if !attempt.failures.isEmpty {
+                    diagnostics[wire.name] = .init(
                         source: wire.name,
+                        failures: attempt.failures,
+                        usingLastKnownGood:
+                            attempt.projection == nil && previous != nil,
+                        snapshotAvailable:
+                            attempt.projection != nil || previous != nil
+                    )
+                }
+            }
+            guard reconciliationIsCurrent(epoch) else { return }
+
+            // These mutations deliberately contain no suspension point. The UI
+            // observes either the prior snapshot or this complete transaction,
+            // never new ancillary state paired with an old deployment.
+            for projection in loaded {
+                if let history = projection.history {
+                    runs.mergeSourceHistory(
+                        history,
+                        source: projection.deployment.name,
                         replacing: true
                     )
                 }
-                let detailedWire = (try? await client.source(wire.name)) ?? wire
-                guard reconciliationIsCurrent(epoch) else { return }
-                let settings = try await client.sourceSettings(wire.name)
-                guard reconciliationIsCurrent(epoch) else { return }
-                sources.setSettingsETag(settings.etag, for: wire.name)
-                let triggerResponse = try await client.sourceTriggers(wire.name)
-                guard reconciliationIsCurrent(epoch) else { return }
-                sources.setTriggers(triggerResponse.triggers, for: wire.name)
-                let nextTrigger = triggerResponse.triggers
-                    .filter(\.enabled)
-                    .compactMap(\.nextFireAt)
-                    .sorted()
-                    .first
-                let statusWire = try await client.sourceStatus(wire.name)
-                guard reconciliationIsCurrent(epoch) else { return }
-                let status = try statusWire.status(
-                    runs: runs.runs,
-                    nextTrigger: nextTrigger
-                )
-                let base = try detailedWire.deployment(status: status)
-                let scope = try settings.settingsScope()
-                sourceSettingsDrafts.reconcile(scope)
-                let effective = try settings.values.additionalProperties
-                    .decode([String: JSONValue].self)
-                values.append(base.withConfiguration(.init(
-                    fields: scope.fields.map(\.param),
-                    configuredValues: base.configuration.configuredValues,
-                    effectiveValues: effective,
-                    origins: Dictionary(uniqueKeysWithValues: scope.fields.compactMap { field in
-                        field.origin.map { origin in (field.key, origin.rawValue) }
-                    }),
-                    missingRequired: scope.fields.compactMap {
-                        $0.param.required && effective[$0.key] == nil ? $0.key : nil
-                    },
-                    valuesHash: settings.etag
-                )))
+                sourceSettingsDrafts.reconcile(projection.settingsScope)
             }
-            sources.replace(values)
-            sourceSettingsDrafts.removeMissingSources(Set(values.map(\.name)))
+            sourceSettingsDrafts.removeMissingSources(listedNames)
+            sources.replaceSnapshots(
+                deployments,
+                settingsETags: settingsETags,
+                triggers: triggers,
+                diagnostics: diagnostics
+            )
+            if let configuredSecrets {
+                sources.setConfiguredSecrets(
+                    configuredSecrets.secrets.filter(\.configured).map(\.name)
+                )
+            }
         } catch {
             guard reconciliationIsCurrent(epoch) else { return }
             sources.fail(error)
         }
+    }
+
+    /// Fetches and decodes every projection needed to update one Source, but
+    /// performs no store mutation. Settings, triggers, and status form the
+    /// consistency boundary. Detail and history can fall back independently,
+    /// with their failures retained as Source-specific diagnostics.
+    private func loadSourceProjection(
+        from summary: SourceWire,
+        refreshDetail: Bool,
+        epoch: UInt64
+    ) async -> SourceProjectionAttempt? {
+        var failures: [SourceLoadDiagnostic.Projection: String] = [:]
+        var detail = summary
+        if refreshDetail {
+            do {
+                detail = try await client.source(summary.name)
+            } catch {
+                failures[.detail] = error.localizedDescription
+            }
+            guard reconciliationIsCurrent(epoch) else { return nil }
+        }
+
+        var history: [SourceRunSummary]?
+        do {
+            let response = try await client.sourceRuns(summary.name, limit: 200)
+            history = try response.runs.map { try $0.summary() }
+        } catch {
+            failures[.history] = error.localizedDescription
+        }
+        guard reconciliationIsCurrent(epoch) else { return nil }
+
+        var settings:
+            (etag: String, scope: SettingsScope, effective: [String: JSONValue])?
+        do {
+            let response = try await client.sourceSettings(summary.name)
+            settings = (
+                response.etag,
+                try response.settingsScope(),
+                try response.values.additionalProperties.decode(
+                    [String: JSONValue].self
+                )
+            )
+        } catch {
+            failures[.settings] = error.localizedDescription
+        }
+        guard reconciliationIsCurrent(epoch) else { return nil }
+
+        var triggerValues: [SourceTriggerWire]?
+        do {
+            let response = try await client.sourceTriggers(summary.name)
+            triggerValues = response.triggers
+        } catch {
+            failures[.triggers] = error.localizedDescription
+        }
+        guard reconciliationIsCurrent(epoch) else { return nil }
+
+        var statusWire: SourceStatusWire?
+        do {
+            statusWire = try await client.sourceStatus(summary.name)
+        } catch {
+            failures[.status] = error.localizedDescription
+        }
+        guard reconciliationIsCurrent(epoch) else { return nil }
+
+        guard let settings, let triggerValues, let statusWire else {
+            return .init(projection: nil, failures: failures)
+        }
+
+        let nextTrigger = triggerValues
+            .filter(\.enabled)
+            .compactMap(\.nextFireAt)
+            .sorted()
+            .first
+        var statusRuns = runs.runs
+        if let history {
+            statusRuns.removeAll { $0.sourceName == summary.name }
+            statusRuns.append(contentsOf: history)
+        }
+        let status: SourceStatus
+        do {
+            status = try statusWire.status(
+                runs: statusRuns,
+                nextTrigger: nextTrigger
+            )
+        } catch {
+            failures[.status] = error.localizedDescription
+            return .init(projection: nil, failures: failures)
+        }
+
+        let base: SourceDeployment
+        do {
+            base = try detail.deployment(status: status)
+        } catch {
+            failures[.detail] = error.localizedDescription
+            return .init(projection: nil, failures: failures)
+        }
+        let deployment = base.withConfiguration(.init(
+            fields: settings.scope.fields.map(\.param),
+            configuredValues: base.configuration.configuredValues,
+            effectiveValues: settings.effective,
+            origins: Dictionary(
+                uniqueKeysWithValues: settings.scope.fields.compactMap { field in
+                    field.origin.map { origin in
+                        (field.key, origin.rawValue)
+                    }
+                }
+            ),
+            missingRequired: settings.scope.fields.compactMap {
+                $0.param.required && settings.effective[$0.key] == nil
+                    ? $0.key
+                    : nil
+            },
+            valuesHash: settings.etag
+        ))
+        return .init(
+            projection: .init(
+                deployment: deployment,
+                settingsETag: settings.etag,
+                settingsScope: settings.scope,
+                triggers: triggerValues,
+                history: history
+            ),
+            failures: failures
+        )
     }
 
     private func loadSourceTriggers(_ name: String, epoch: UInt64) async {
@@ -843,9 +1094,26 @@ final class BackendSession {
             let response = try await client.sourceTriggers(name)
             guard reconciliationIsCurrent(epoch) else { return }
             sources.setTriggers(response.triggers, for: name)
+            if let current = sources.sources.first(where: {
+                $0.name == name
+            }) {
+                let nextTrigger = response.triggers
+                    .filter(\.enabled)
+                    .compactMap(\.nextFireAt)
+                    .sorted()
+                    .first
+                sources.apply(current.withStatus(
+                    current.status.withNextTrigger(nextTrigger)
+                ))
+            }
+            sources.resolveLoadDiagnostic(for: name, projection: .triggers)
         } catch {
             guard reconciliationIsCurrent(epoch) else { return }
-            sources.fail(error)
+            recordSourceLoadFailure(
+                name,
+                projection: .triggers,
+                error: error
+            )
         }
     }
 
@@ -858,97 +1126,87 @@ final class BackendSession {
         _ name: String,
         epoch: UInt64
     ) async -> SourceDeployment? {
+        let detail: SourceWire
         do {
-            async let detailRequest = client.source(name)
-            async let historyRequest = client.sourceRuns(name, limit: 200)
-            async let settingsRequest = client.sourceSettings(name)
-            async let triggersRequest = client.sourceTriggers(name)
-            async let statusRequest = client.sourceStatus(name)
-            async let healthRequest = client.moduleHealth()
-            async let moduleStatusRequest = client.sourceModuleStatus(name)
-            let (
-                detail,
-                history,
-                settings,
-                triggerResponse,
-                statusWire
-            ) = try await (
-                detailRequest,
-                historyRequest,
-                settingsRequest,
-                triggersRequest,
-                statusRequest
-            )
+            detail = try await client.source(name)
             guard reconciliationIsCurrent(epoch) else { return nil }
+        } catch {
+            guard reconciliationIsCurrent(epoch) else { return nil }
+            recordSourceLoadFailure(
+                name,
+                projection: .detail,
+                error: error
+            )
+            return sources.sources.first { $0.name == name }
+        }
+
+        guard let attempt = await loadSourceProjection(
+            from: detail,
+            refreshDetail: false,
+            epoch: epoch
+        ) else {
+            return nil
+        }
+        guard let projection = attempt.projection else {
+            applySourceLoadDiagnostic(
+                name: name,
+                failures: attempt.failures,
+                usingLastKnownGood: sources.sources.contains {
+                    $0.name == name
+                }
+            )
+            return sources.sources.first { $0.name == name }
+        }
+        guard reconciliationIsCurrent(epoch) else { return nil }
+
+        if let history = projection.history {
             runs.mergeSourceHistory(
-                try history.runs.map { try $0.summary() },
+                history,
                 source: name,
                 replacing: true
             )
-            sources.setSettingsETag(settings.etag, for: name)
-            sources.setTriggers(triggerResponse.triggers, for: name)
-            let nextTrigger = triggerResponse.triggers
-                .filter(\.enabled)
-                .compactMap(\.nextFireAt)
-                .sorted()
-                .first
-            let status = try statusWire.status(
-                runs: runs.runs,
-                nextTrigger: nextTrigger
+        }
+        sourceSettingsDrafts.reconcile(projection.settingsScope)
+        let diagnostic = sourceLoadDiagnostic(
+            name: name,
+            failures: attempt.failures,
+            usingLastKnownGood: false,
+            snapshotAvailable: true
+        )
+        sources.applySnapshot(
+            projection.deployment,
+            settingsETag: projection.settingsETag,
+            triggers: projection.triggers,
+            diagnostic: diagnostic
+        )
+        do {
+            async let healthRequest = client.moduleHealth()
+            async let moduleStatusRequest = client.sourceModuleStatus(name)
+            let diagnostics = try await (
+                healthRequest,
+                moduleStatusRequest
             )
-            let scope = try settings.settingsScope()
-            sourceSettingsDrafts.reconcile(scope)
-            let base = try detail.deployment(status: status)
-            let effective = try settings.values.additionalProperties
-                .decode([String: JSONValue].self)
-            let deployment = base.withConfiguration(.init(
-                fields: scope.fields.map(\.param),
-                configuredValues: base.configuration.configuredValues,
-                effectiveValues: effective,
-                origins: Dictionary(
-                    uniqueKeysWithValues: scope.fields.compactMap { field in
-                        field.origin.map { origin in
-                            (field.key, origin.rawValue)
-                        }
-                    }
-                ),
-                missingRequired: scope.fields.compactMap {
-                    $0.param.required && effective[$0.key] == nil ? $0.key : nil
-                },
-                valuesHash: settings.etag
-            ))
-            sources.apply(deployment)
-            do {
-                let diagnostics = try await (
-                    healthRequest,
-                    moduleStatusRequest
-                )
-                guard reconciliationIsCurrent(epoch) else { return nil }
-                sources.applyModuleDiagnostics(
-                    health: diagnostics.0,
-                    status: diagnostics.1
-                )
-            } catch {
-                guard reconciliationIsCurrent(epoch) else { return nil }
-                // Runtime status/configuration remains useful when the
-                // diagnostic projection is temporarily unavailable.
-                sources.failModuleDiagnostics(error)
-            }
-            pipelines.reconcileDeploymentCounts(sources.sources)
-            if !pipelines.pipelines.contains(where: {
-                $0.name == deployment.pipeline.pipeline
-            }) {
-                await loadPipeline(.init(
-                    name: deployment.pipeline.pipeline,
-                    version: deployment.pipeline.version
-                ), epoch: epoch)
-            }
-            return deployment
+            guard reconciliationIsCurrent(epoch) else { return nil }
+            sources.applyModuleDiagnostics(
+                health: diagnostics.0,
+                status: diagnostics.1
+            )
         } catch {
             guard reconciliationIsCurrent(epoch) else { return nil }
-            sources.fail(error)
-            return nil
+            // Runtime status/configuration remains useful when the diagnostic
+            // projection is temporarily unavailable.
+            sources.failModuleDiagnostics(error)
         }
+        pipelines.reconcileDeploymentCounts(sources.sources)
+        if !pipelines.pipelines.contains(where: {
+            $0.name == projection.deployment.pipeline.pipeline
+        }) {
+            await loadPipeline(.init(
+                name: projection.deployment.pipeline.pipeline,
+                version: projection.deployment.pipeline.version
+            ), epoch: epoch)
+        }
+        return projection.deployment
     }
 
     /// Run/Task events only invalidate runtime status. If the Source is new to
@@ -976,10 +1234,58 @@ final class BackendSession {
                 runs: runs.runs,
                 nextTrigger: nextTrigger
             )))
+            sources.resolveLoadDiagnostic(for: name, projection: .status)
         } catch {
             guard reconciliationIsCurrent(epoch) else { return }
-            sources.fail(error)
+            recordSourceLoadFailure(
+                name,
+                projection: .status,
+                error: error
+            )
         }
+    }
+
+    private func recordSourceLoadFailure(
+        _ name: String,
+        projection: SourceLoadDiagnostic.Projection,
+        error: Error
+    ) {
+        var failures = sources.diagnostic(for: name)?.failures ?? [:]
+        failures[projection] = error.localizedDescription
+        applySourceLoadDiagnostic(
+            name: name,
+            failures: failures,
+            usingLastKnownGood: sources.sources.contains { $0.name == name }
+        )
+    }
+
+    private func applySourceLoadDiagnostic(
+        name: String,
+        failures: [SourceLoadDiagnostic.Projection: String],
+        usingLastKnownGood: Bool
+    ) {
+        guard let diagnostic = sourceLoadDiagnostic(
+            name: name,
+            failures: failures,
+            usingLastKnownGood: usingLastKnownGood,
+            snapshotAvailable: sources.sources.contains { $0.name == name }
+        ) else { return }
+        sources.setLoadDiagnostic(diagnostic)
+    }
+
+    private func sourceLoadDiagnostic(
+        name: String,
+        failures: [SourceLoadDiagnostic.Projection: String],
+        usingLastKnownGood: Bool,
+        snapshotAvailable: Bool
+    ) -> SourceLoadDiagnostic? {
+        guard !failures.isEmpty else { return nil }
+        return .init(
+            source: name,
+            failures: failures,
+            usingLastKnownGood: usingLastKnownGood,
+            snapshotAvailable: snapshotAvailable
+        )
     }
 
     private func loadLogs(epoch: UInt64) async {
@@ -1623,6 +1929,19 @@ private extension SourceDeployment {
             enabled: enabled, paused: paused, archived: archived, generation: generation,
             ingress: ingress,
             configuration: configuration, status: status
+        )
+    }
+}
+
+private extension SourceStatus {
+    func withNextTrigger(_ nextTrigger: String?) -> SourceStatus {
+        SourceStatus(
+            activity: activity,
+            counts: counts,
+            currentRun: currentRun,
+            latestRun: latestRun,
+            nextTrigger: nextTrigger,
+            recentError: recentError
         )
     }
 }

@@ -1015,6 +1015,166 @@ struct AppModelTests {
         #expect(session.pipelines.pipelines.first?.deploymentCount == 1)
     }
 
+    @Test("a broken Source does not poison healthy Source projections")
+    func sourceRefreshIsolatesProjectionFailures() async throws {
+        let host = "source-isolation.windex.test"
+        var responses = Self.sourceIsolationResponses(
+            memorySettingsStatus: 503
+        )
+        responses["/admin/v1/sources/docs"] = .json(
+            503,
+            #"{"detail":"docs detail temporarily unavailable"}"#
+        )
+        responses["/admin/v1/sources/docs/runs"] = .json(
+            503,
+            #"{"detail":"docs history temporarily unavailable"}"#
+        )
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: responses
+        )
+        defer { ControlReconciliationURLProtocol.reset(host: host) }
+        let session = try Self.controlSession(host: host)
+
+        await session.refreshAll()
+
+        #expect(session.sources.state == .loaded)
+        #expect(session.sources.sources.map(\.name) == ["docs"])
+        #expect(session.sources.settingsETags == [
+            "docs": "docs-settings-v2",
+        ])
+        #expect(session.sources.triggers["docs"]?.map(\.id) == [22])
+        #expect(session.sourceSettingsDrafts.form(for: "docs")?
+            .value(forKey: "batch") == .int(16))
+        #expect(session.sourceSettingsDrafts.form(for: "memory") == nil)
+        let docsDiagnostic = try #require(
+            session.sources.diagnostic(for: "docs")
+        )
+        #expect(Set(docsDiagnostic.failures.keys) == [.detail, .history])
+        #expect(!docsDiagnostic.usingLastKnownGood)
+        #expect(docsDiagnostic.snapshotAvailable)
+        let diagnostic = try #require(
+            session.sources.diagnostic(for: "memory")
+        )
+        #expect(Set(diagnostic.failures.keys) == [.settings])
+        #expect(!diagnostic.usingLastKnownGood)
+        #expect(!diagnostic.snapshotAvailable)
+        #expect(diagnostic.message.contains("Retry the refresh"))
+
+        let paths = ControlReconciliationURLProtocol.requests(host: host)
+            .map(\.path)
+        for source in ["docs", "memory"] {
+            #expect(paths.filter {
+                $0 == "/admin/v1/sources/\(source)/settings"
+            }.count == 1)
+            #expect(paths.filter {
+                $0 == "/admin/v1/sources/\(source)/triggers"
+            }.count == 1)
+            #expect(paths.filter {
+                $0 == "/admin/v1/sources/\(source)/status"
+            }.count == 1)
+        }
+    }
+
+    @Test("a broken Source retains and then replaces one coherent snapshot")
+    func sourceRefreshRetainsAndRecoversCoherentSnapshot() async throws {
+        let host = "source-recovery.windex.test"
+        var failedResponses = Self.sourceIsolationResponses(
+            memorySettingsStatus: 503
+        )
+        failedResponses["/admin/v1/sources/memory/triggers"] = .json(
+            503,
+            #"{"detail":"memory triggers temporarily unavailable"}"#
+        )
+        failedResponses["/admin/v1/sources/memory/status"] = .json(
+            503,
+            #"{"detail":"memory status temporarily unavailable"}"#
+        )
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: failedResponses
+        )
+        defer { ControlReconciliationURLProtocol.reset(host: host) }
+        let session = try Self.controlSession(host: host)
+        let oldTrigger = try Self.sourceTrigger(id: 11, hour: 9)
+        let oldMemory = SourceDeployment(
+            name: "memory",
+            title: "Memory v1",
+            origin: "push",
+            pipeline: .init(
+                pipeline: "memory",
+                version: 1,
+                specHash: "memory-hash-1"
+            ),
+            search: .init(
+                searchName: "memory",
+                idPrefix: "memory:",
+                collectionKey: "memory",
+                searchProfile: "memory",
+                includeInAll: true
+            ),
+            stateNamespace: "memory",
+            generation: 1,
+            configuration: .init(
+                configuredValues: ["batch": .int(10)],
+                effectiveValues: ["batch": .int(10)],
+                valuesHash: "memory-settings-v1"
+            )
+        )
+        session.sources.replace([oldMemory])
+        session.sources.setSettingsETag(
+            "memory-settings-v1",
+            for: "memory"
+        )
+        session.sources.setTriggers([oldTrigger], for: "memory")
+        session.sourceSettingsDrafts.reconcile(
+            try Self.sourceSettingsScope(source: "memory", value: 10)
+        )
+
+        await session.refreshAll()
+
+        let retained = try #require(
+            session.sources.sources.first { $0.name == "memory" }
+        )
+        #expect(retained.generation == 1)
+        #expect(retained.title == "Memory v1")
+        #expect(retained.configuration.valuesHash == "memory-settings-v1")
+        #expect(session.sources.settingsETags["memory"]
+            == "memory-settings-v1")
+        #expect(session.sources.triggers["memory"]?.map(\.id) == [11])
+        #expect(session.sourceSettingsDrafts.form(for: "memory")?
+            .value(forKey: "batch") == .int(10))
+        let retainedDiagnostic = try #require(
+            session.sources.diagnostic(for: "memory")
+        )
+        #expect(Set(retainedDiagnostic.failures.keys)
+            == [.settings, .triggers, .status])
+        #expect(retainedDiagnostic.usingLastKnownGood)
+
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: Self.sourceIsolationResponses(
+                memorySettingsStatus: 200
+            )
+        )
+        await session.refreshAll()
+
+        let recovered = try #require(
+            session.sources.sources.first { $0.name == "memory" }
+        )
+        #expect(recovered.generation == 2)
+        #expect(recovered.title == "Memory")
+        #expect(recovered.configuration.effectiveValues["batch"] == .int(20))
+        #expect(recovered.configuration.valuesHash == "memory-settings-v2")
+        #expect(session.sources.settingsETags["memory"]
+            == "memory-settings-v2")
+        #expect(session.sources.triggers["memory"]?.map(\.id) == [22])
+        #expect(session.sourceSettingsDrafts.form(for: "memory")?
+            .value(forKey: "batch") == .int(20))
+        #expect(session.sources.diagnostic(for: "memory") == nil)
+        #expect(session.sources.state == .loaded)
+    }
+
     @Test("an invalidation arriving during a pass is drained by a second pass")
     func reconciliationDrainsEventsArrivingDuringPass() async throws {
         let host = "reconciliation-rerun.windex.test"
@@ -1289,6 +1449,201 @@ struct AppModelTests {
         )
     }
 
+    private static func sourceSettingsScope(
+        source: String,
+        value: Int
+    ) throws -> SettingsScope {
+        try JSONDecoder().decode(
+            SettingsScope.self,
+            from: Data(
+                """
+                {
+                  "scope": "\(source)",
+                  "fields": [{
+                    "key": "batch",
+                    "kind": "int",
+                    "title": "Batch",
+                    "value": \(value),
+                    "origin": "source"
+                  }]
+                }
+                """.utf8
+            )
+        )
+    }
+
+    private static func sourceTrigger(
+        id: Int,
+        hour: Int
+    ) throws -> SourceTriggerWire {
+        try JSONDecoder().decode(
+            SourceTriggerWire.self,
+            from: Data(
+                """
+                {
+                  "enabled": true,
+                  "flow_name": "harvest",
+                  "id": \(id),
+                  "last_fired_at": null,
+                  "last_run_id": null,
+                  "next_fire_at": "2026-07-27T\(hour):00:00Z",
+                  "trigger_spec": {"cron": "0 \(hour) * * *"},
+                  "trigger_type": "schedule"
+                }
+                """.utf8
+            )
+        )
+    }
+
+    private static func sourceIsolationResponses(
+        memorySettingsStatus: Int
+    ) -> [String: StubbedControlResponse] {
+        let docs = sourceWire(
+            name: "docs",
+            title: "Docs",
+            pipeline: "crawl",
+            batch: 16
+        )
+        let memory = sourceWire(
+            name: "memory",
+            title: "Memory",
+            pipeline: "memory",
+            batch: 20
+        )
+        var responses: [String: StubbedControlResponse] = [
+            "/admin/v1/sources": .json(
+                200,
+                #"{"sources":[\#(docs),\#(memory)]}"#
+            ),
+        ]
+        for (name, wire, batch) in [
+            ("docs", docs, 16),
+            ("memory", memory, 20),
+        ] {
+            responses["/admin/v1/sources/\(name)"] = .json(200, wire)
+            responses["/admin/v1/sources/\(name)/runs"] = .json(
+                200,
+                #"{"runs":[]}"#
+            )
+            responses["/admin/v1/sources/\(name)/settings"] = .json(
+                name == "memory" ? memorySettingsStatus : 200,
+                name == "memory" && memorySettingsStatus != 200
+                    ? #"{"detail":"memory settings temporarily unavailable"}"#
+                    : sourceSettingsWire(
+                        source: name,
+                        pipeline: name == "docs" ? "crawl" : "memory",
+                        batch: batch
+                    )
+            )
+            responses["/admin/v1/sources/\(name)/triggers"] = .json(
+                200,
+                sourceTriggersWire()
+            )
+            responses["/admin/v1/sources/\(name)/status"] = .json(
+                200,
+                sourceStatusWire(source: name)
+            )
+        }
+        return responses
+    }
+
+    private static func sourceWire(
+        name: String,
+        title: String,
+        pipeline: String,
+        batch: Int
+    ) -> String {
+        """
+        {
+          "id": \(name == "docs" ? 1 : 2),
+          "name": "\(name)",
+          "title": "\(title)",
+          "description": "",
+          "origin": {"ingress": "push"},
+          "pipeline_revision_id": 2,
+          "pipeline_name": "\(pipeline)",
+          "pipeline_version": 2,
+          "pipeline_hash": "\(pipeline)-hash-2",
+          "search_contract_version": "1",
+          "search_name": "\(name)",
+          "id_prefix": "\(name):",
+          "collection_key": "\(name)",
+          "search_profile": "\(name)",
+          "include_in_all": true,
+          "state_namespace": "\(name)",
+          "enabled": true,
+          "generation": 2,
+          "archived_at": null,
+          "created_at": "2026-07-26T10:00:00Z",
+          "updated_at": "2026-07-26T10:00:01Z",
+          "values": {"batch": \(batch)},
+          "values_hash": "\(name)-settings-v2",
+          "paused": false,
+          "pause_reason": "",
+          "paused_at": null,
+          "etag": "\(name)-source-v2",
+          "ready": true,
+          "ingress": null
+        }
+        """
+    }
+
+    private static func sourceSettingsWire(
+        source: String,
+        pipeline: String,
+        batch: Int
+    ) -> String {
+        """
+        {
+          "etag": "\(source)-settings-v2",
+          "fields": [{
+            "key": "batch",
+            "kind": "int",
+            "title": "Batch",
+            "value": \(batch),
+            "origin": "source"
+          }],
+          "pipeline": "\(pipeline)",
+          "pipeline_version": 2,
+          "source": "\(source)",
+          "values": {"batch": \(batch)}
+        }
+        """
+    }
+
+    private static func sourceTriggersWire() -> String {
+        """
+        {
+          "triggers": [{
+            "enabled": true,
+            "flow_name": "harvest",
+            "id": 22,
+            "last_fired_at": null,
+            "last_run_id": null,
+            "next_fire_at": "2026-07-27T12:00:00Z",
+            "trigger_spec": {"cron": "0 12 * * *"},
+            "trigger_type": "schedule"
+          }]
+        }
+        """
+    }
+
+    private static func sourceStatusWire(source: String) -> String {
+        """
+        {
+          "current_run": null,
+          "documents": {},
+          "enabled": true,
+          "last_failure": null,
+          "last_success": null,
+          "latest_run": null,
+          "paused": false,
+          "recent_error": null,
+          "source": "\(source)"
+        }
+        """
+    }
+
     private static func searchResponse(
         query: String,
         id: String,
@@ -1424,6 +1779,18 @@ private struct RecordedControlRequest: Sendable {
     let path: String
 }
 
+private struct StubbedControlResponse: Sendable {
+    let statusCode: Int
+    let body: Data
+
+    static func json(
+        _ statusCode: Int,
+        _ body: String
+    ) -> StubbedControlResponse {
+        .init(statusCode: statusCode, body: Data(body.utf8))
+    }
+}
+
 private final class ControlReconciliationURLProtocol:
     URLProtocol,
     @unchecked Sendable
@@ -1432,6 +1799,8 @@ private final class ControlReconciliationURLProtocol:
     nonisolated(unsafe) private static var recorded: [RecordedControlRequest] = []
     nonisolated(unsafe) private static var gates:
         [String: [String: [DispatchSemaphore]]] = [:]
+    nonisolated(unsafe) private static var responses:
+        [String: [String: StubbedControlResponse]] = [:]
 
     static func requests(host: String) -> [RecordedControlRequest] {
         lock.withLock { recorded.filter { $0.host == host } }
@@ -1439,19 +1808,22 @@ private final class ControlReconciliationURLProtocol:
 
     static func configure(
         host: String,
-        blocking: [String: Int] = [:]
+        blocking: [String: Int] = [:],
+        responses: [String: StubbedControlResponse] = [:]
     ) {
         lock.withLock {
             recorded.removeAll { $0.host == host }
             gates[host] = blocking.mapValues { count in
                 (0..<count).map { _ in DispatchSemaphore(value: 0) }
             }
+            Self.responses[host] = responses
         }
     }
 
     static func reset(host: String) {
         let pending = lock.withLock { () -> [DispatchSemaphore] in
             recorded.removeAll { $0.host == host }
+            responses.removeValue(forKey: host)
             return gates.removeValue(forKey: host)?
                 .values.flatMap { $0 } ?? []
         }
@@ -1491,7 +1863,8 @@ private final class ControlReconciliationURLProtocol:
 
     override func startLoading() {
         let path = request.url?.path ?? ""
-        let gate = Self.lock.withLock { () -> DispatchSemaphore? in
+        let configured = Self.lock.withLock {
+            () -> (DispatchSemaphore?, StubbedControlResponse?) in
             let host = request.url?.host ?? ""
             let ordinal = Self.recorded.filter {
                 $0.host == host && $0.path == path
@@ -1505,11 +1878,19 @@ private final class ControlReconciliationURLProtocol:
             let gate = values?.indices.contains(ordinal) == true
                 ? values?[ordinal]
                 : nil
-            return gate
+            return (gate, Self.responses[host]?[path])
         }
-        gate?.wait()
-        let body = Self.responseBody(path: path)
-        let status = body == nil ? 404 : 200
+        configured.0?.wait()
+        let defaultBody = Self.responseBody(path: path)
+        let body: Data?
+        let status: Int
+        if let response = configured.1 {
+            body = response.body
+            status = response.statusCode
+        } else {
+            body = defaultBody
+            status = defaultBody == nil ? 404 : 200
+        }
         guard let url = request.url,
               let response = HTTPURLResponse(
                 url: url,
