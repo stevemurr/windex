@@ -298,11 +298,21 @@ CREATE TABLE IF NOT EXISTS hf_roots (          -- mirrors `docsets` exactly
 );
 ```
 
+In the epoch-2 runtime, queue the Source Flows in order:
+
+```sh
+B=http://127.0.0.1:8100
+TOKEN="${WINDEX_WRITE_TOKEN:?export WINDEX_WRITE_TOKEN first}"
+AUTH="Authorization: Bearer $TOKEN"
+curl -fsS -X POST "$B/admin/v1/sources/hf/runs" \
+  -H "$AUTH" -H 'Content-Type: application/json' -d '{"flow":"sync"}'
+# Wait for that Run to succeed, then:
+curl -fsS -X POST "$B/admin/v1/sources/hf/runs" \
+  -H "$AUTH" -H 'Content-Type: application/json' -d '{"flow":"crawl"}'
 ```
-uv run windex hf sync     # sitemap → 52 roots + blog cursor
-uv run windex hf crawl    # llms.txt hash-gated .md pull + blog delta (~3.3h cold, ~minutes warm)
-uv run windex hf embed    # embed staged pages into hfdocs / hfblog
-```
+
+The worker adds `platform.index` automatically after each successful
+Source-bound Flow; no separate embedding process or command is required.
 
 Which roots to index is config (`WINDEX_HF_ROOTS`), like `WINDEX_DOCS_SLUGS` — all 52 is
 only 3,175 pages, so the default can simply be "all".
