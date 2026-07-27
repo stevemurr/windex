@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import uuid
 
 import psycopg
@@ -11,7 +12,8 @@ from windex.module_sandbox.app import app
 from windex.modules import admin
 from windex.pipeline import registry
 from windex.pipeline.run_store import RunConflictError, rerun, submit_pipeline
-from windex.pipeline.store import create_pipeline
+from windex.pipeline.store import create_pipeline, get_pipeline
+from windex.source.store import create_source, get_source, list_sources
 
 
 def test_sandbox_executes_bounded_jsonl_transform():
@@ -128,6 +130,91 @@ def test_approved_version_is_immutable_and_revocation_removes_it(canonical_conn)
         canonical_conn, "local.upper", created["version"], by="pytest")
     assert revoked["approval_state"] == "revoked"
     assert registry.get("local.upper") is None
+
+
+def test_revoked_sandbox_module_marks_source_not_ready(canonical_conn):
+    created = admin.create_version(
+        canonical_conn,
+        name="local.source_ready",
+        title="Source readiness fixture",
+        description="fixture",
+        runtime="python",
+        kind="transform",
+        port_spec={"input": "ExtractedDoc", "output": "ExtractedDoc"},
+        parameter_schema=[],
+        source=(
+            "def transform(record, config):\n"
+            "    return record\n"
+        ),
+    )
+    admin.mark_tested(
+        canonical_conn,
+        "local.source_ready",
+        created["version"],
+        {"ok": True},
+    )
+    admin.approve(
+        canonical_conn,
+        "local.source_ready",
+        created["version"],
+        approved_by="pytest",
+    )
+
+    memory = get_pipeline(canonical_conn, "memory")
+    assert memory
+    spec = copy.deepcopy(memory["spec"])
+    flow = spec["flows"]["receive"]
+    flow["nodes"]["custom"] = {
+        "kind": "transform",
+        "uses": "local.source_ready",
+        "with": {},
+    }
+    flow["edges"] = [
+        {
+            "from": {"input": "documents"},
+            "to": {"node": "push"},
+        },
+        {
+            "from": {"node": "push"},
+            "to": {"node": "custom"},
+        },
+        {
+            "from": {"node": "custom"},
+            "to": {"node": "stage"},
+        },
+    ]
+    create_pipeline(
+        canonical_conn,
+        name="custom_ready",
+        title="Custom readiness",
+        spec=spec,
+    )
+    created_source = create_source(canonical_conn, {
+        "name": "custom_ready",
+        "pipeline_name": "custom_ready",
+        "pipeline_version": 1,
+        "origin": {"ingress": "push"},
+        "search_name": "custom_ready",
+        "id_prefix": "custom_ready:",
+        "collection_key": "custom_ready",
+        "search_profile": "memory",
+        "state_namespace": "custom_ready",
+        "values": {},
+    })
+    assert created_source["ready"] is True
+
+    admin.revoke(
+        canonical_conn,
+        "local.source_ready",
+        created["version"],
+        by="pytest",
+    )
+
+    assert get_source(canonical_conn, "custom_ready")["ready"] is False
+    assert next(
+        item for item in list_sources(canonical_conn)
+        if item["name"] == "custom_ready"
+    )["ready"] is False
 
 
 def test_revocation_blocks_exact_historic_rerun(canonical_conn):

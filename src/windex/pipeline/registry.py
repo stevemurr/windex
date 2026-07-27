@@ -21,7 +21,7 @@ import dataclasses
 import hashlib
 import inspect
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -689,38 +689,91 @@ def unavailable_modules(
     the availability test in one place so Run submission, Source status and
     health all agree about whether a pinned revision is runnable.
     """
+    return unavailable_modules_many(conn, [locks])[0]
+
+
+def unavailable_modules_many(
+    conn: psycopg.Connection,
+    lock_sets: Sequence[Mapping[str, Mapping[str, object]]],
+) -> list[list[str]]:
+    """Evaluate several frozen revisions with one custom-Module lookup.
+
+    Source lists can contain many deployments pinned to the same or different
+    revisions.  Keeping this batched avoids turning ``GET /sources`` into one
+    registry query per Source while preserving the exact checks used at Run
+    submission.
+    """
+    if not lock_sets:
+        return []
+
     load_custom(conn)
-    unavailable: list[str] = []
-    for name, lock in sorted(locks.items()):
-        executor = str(lock.get("executor") or "")
-        if executor == "sandbox":
+
+    sandbox_refs: set[tuple[str, int]] = set()
+    for locks in lock_sets:
+        for name, lock in locks.items():
+            if str(lock.get("executor") or "") != "sandbox":
+                continue
             try:
                 version = int(str(lock.get("version") or ""))
             except ValueError:
-                unavailable.append(name)
                 continue
-            with conn.cursor() as cur:
-                cur.execute(
-                    """SELECT v.source_digest, v.approval_state
-                         FROM module_versions v
-                         JOIN module_definitions d ON d.id = v.module_id
-                        WHERE d.name = %s AND v.version = %s""",
-                    (name, version),
+            sandbox_refs.add((name, version))
+
+    sandbox_versions: dict[tuple[str, int], tuple[object, object]] = {}
+    if sandbox_refs:
+        names = [item[0] for item in sorted(sandbox_refs)]
+        versions = [item[1] for item in sorted(sandbox_refs)]
+        with conn.cursor() as cur:
+            cur.execute(
+                """WITH wanted(name, version) AS (
+                       SELECT * FROM unnest(%s::text[], %s::integer[])
+                   )
+                   SELECT d.name, v.version, v.source_digest, v.approval_state
+                     FROM wanted w
+                     JOIN module_definitions d ON d.name = w.name
+                     JOIN module_versions v
+                       ON v.module_id = d.id AND v.version = w.version""",
+                (names, versions),
+            )
+            sandbox_versions = {
+                (str(row[0]), int(row[1])): (row[2], row[3])
+                for row in cur.fetchall()
+            }
+
+    builtin_available: dict[tuple[str, str], bool] = {}
+    result: list[list[str]] = []
+    for locks in lock_sets:
+        unavailable: list[str] = []
+        for name, lock in sorted(locks.items()):
+            executor = str(lock.get("executor") or "")
+            if executor == "sandbox":
+                try:
+                    version = int(str(lock.get("version") or ""))
+                except ValueError:
+                    unavailable.append(name)
+                    continue
+                row = sandbox_versions.get((name, version))
+                available = (
+                    row is not None
+                    and row[1] == "available"
+                    and row[0] == lock.get("digest")
                 )
-                row = cur.fetchone()
-            available = (
-                row is not None
-                and row[1] == "available"
-                and row[0] == lock.get("digest")
-            )
-        else:
-            available = (
-                implemented(name)
-                and implementation_digest(name) == lock.get("digest")
-            )
-        if not available:
-            unavailable.append(name)
-    return unavailable
+            else:
+                expected_digest = lock.get("digest")
+                if not isinstance(expected_digest, str):
+                    available = False
+                else:
+                    cache_key = (name, expected_digest)
+                    if cache_key not in builtin_available:
+                        builtin_available[cache_key] = (
+                            implemented(name)
+                            and implementation_digest(name) == expected_digest
+                        )
+                    available = builtin_available[cache_key]
+            if not available:
+                unavailable.append(name)
+        result.append(unavailable)
+    return result
 
 
 def registry_digest() -> str:
