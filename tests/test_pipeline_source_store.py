@@ -36,6 +36,7 @@ from windex.source.store import (
     get_source,
     get_operator_settings,
     delete_operator_setting,
+    list_sources,
     list_triggers,
     patch_settings,
     patch_operator_settings,
@@ -783,6 +784,126 @@ def test_source_status_surfaces_unavailable_module_lock(
     assert degraded["available"] is False
     assert degraded["upgrade_required"] is True
     assert degraded["unavailable_modules"] == ["push.docs"]
+
+
+def test_source_ready_tracks_builtin_digest_relock(
+    canonical_conn, monkeypatch,
+):
+    from windex.pipeline import registry
+
+    pipeline = get_pipeline(canonical_conn, "memory")
+    source = get_source(canonical_conn, "memory")
+    assert pipeline and source
+    assert source["ready"] is True
+    assert next(
+        item for item in list_sources(canonical_conn)
+        if item["name"] == "memory"
+    )["ready"] is True
+
+    implementation_digest = registry.implementation_digest
+    monkeypatch.setattr(
+        registry,
+        "implementation_digest",
+        lambda name: (
+            "sha256:replacement-push-docs"
+            if name == "push.docs"
+            else implementation_digest(name)
+        ),
+    )
+
+    assert get_source(canonical_conn, "memory")["ready"] is False
+    assert next(
+        item for item in list_sources(canonical_conn)
+        if item["name"] == "memory"
+    )["ready"] is False
+    assert next(
+        item for item in module_statuses(canonical_conn)
+        if item["source"] == "memory"
+    )["available"] is False
+
+    publication = publish_revision(
+        canonical_conn,
+        "memory",
+        pipeline["spec"],
+        expected_version=pipeline["version"],
+        expected_hash=pipeline["spec_hash"],
+    )
+    assert publication.action == "created"
+    assert publication.revision["version"] == 2
+    preview = upgrade_preview(canonical_conn, "memory", 2)
+    upgraded = upgrade(
+        canonical_conn,
+        "memory",
+        2,
+        preview["candidate"],
+        preview["confirmation_token"],
+    )
+
+    assert upgraded["ready"] is True
+    assert get_source(canonical_conn, "memory")["ready"] is True
+    assert next(
+        item for item in module_statuses(canonical_conn)
+        if item["source"] == "memory"
+    )["available"] is True
+
+
+def test_source_api_ready_matches_get_list_and_archived_projection(
+    canonical_conn, monkeypatch,
+):
+    from windex.api import app as app_module
+    from windex.api import canonical
+    from windex.pipeline import registry
+    from windex.source.store import archive
+
+    implementation_digest = registry.implementation_digest
+    monkeypatch.setattr(
+        registry,
+        "implementation_digest",
+        lambda name: (
+            "sha256:replacement-push-docs"
+            if name == "push.docs"
+            else implementation_digest(name)
+        ),
+    )
+    dsn = (
+        Settings().pg_dsn.rsplit("/", 1)[0]
+        + "/"
+        + canonical_conn.info.dbname
+    )
+    settings = Settings(
+        _env_file=None,
+        pg_dsn=dsn,
+        write_token="",
+        serve_host="127.0.0.1",
+    )
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(canonical, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        canonical.db,
+        "pooled",
+        lambda _dsn: nullcontext(canonical_conn),
+    )
+    client = TestClient(admin)
+
+    detail = client.get("/v1/sources/memory")
+    listing = client.get("/v1/sources")
+    assert detail.status_code == 200
+    assert listing.status_code == 200
+    assert detail.json()["ready"] is False
+    assert next(
+        item for item in listing.json()["sources"]
+        if item["name"] == "memory"
+    )["ready"] is False
+
+    assert archive(canonical_conn, "memory") is True
+    active = client.get("/v1/sources").json()["sources"]
+    archived = client.get(
+        "/v1/sources", params={"include_archived": True},
+    ).json()["sources"]
+    assert all(item["name"] != "memory" for item in active)
+    assert next(
+        item for item in archived if item["name"] == "memory"
+    )["ready"] is False
 
 
 def test_multiflow_source_run_selects_only_its_flow_locks(canonical_conn):
