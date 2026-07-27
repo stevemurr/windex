@@ -51,17 +51,25 @@ final class RegistryStore {
     }
     #endif
 
-    func load() async {
+    func load(
+        when shouldApply: @escaping @MainActor () -> Bool = { true }
+    ) async {
         if registry == nil, let cached = await cache.cached() {
+            guard shouldApply() else { return }
             registry = try? cached.pipelineRegistry()
             isStale = registry != nil
         }
+        guard shouldApply() else { return }
         state = .loading
         do {
-            registry = try await cache.load().pipelineRegistry()
-            isStale = await cache.wasStale
+            let loaded = try await cache.load().pipelineRegistry()
+            let stale = await cache.wasStale
+            guard shouldApply() else { return }
+            registry = loaded
+            isStale = stale
             state = .loaded
         } catch {
+            guard shouldApply() else { return }
             state = .failed(error.localizedDescription)
         }
     }
@@ -429,6 +437,18 @@ struct ControlReconciliationPlan: Equatable, Sendable {
 
     static let full = Self(refreshAll: true)
 
+    var isEmpty: Bool {
+        !refreshAll
+            && !refreshRegistry
+            && !refreshModuleDiagnostics
+            && !refreshOverview
+            && pipelines.isEmpty
+            && sourceDetails.isEmpty
+            && sourceStatuses.isEmpty
+            && sourceTriggers.isEmpty
+            && runs.isEmpty
+    }
+
     init(
         refreshAll: Bool = false,
         refreshRegistry: Bool = false,
@@ -547,12 +567,16 @@ final class BackendSession {
     let backend: ConnectedBackend
 
     private(set) var hasStarted = false
-    private var isRefreshing = false
     private var controlTask: Task<Void, Never>?
     private var logTask: Task<Void, Never>?
     private var reconciliationTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     private var pendingReconciliation = ControlReconciliationPlan()
+    private var reconciliationRevision: UInt64 = 0
+    private var completedReconciliationRevision: UInt64 = 0
+    private var reconciliationWaiters:
+        [(revision: UInt64, continuation: CheckedContinuation<Void, Never>)] = []
+    private var lifecycleEpoch: UInt64 = 0
     private let reconciliationDelay: Duration
 
     init(
@@ -568,31 +592,28 @@ final class BackendSession {
 
     func start() async {
         guard !hasStarted else { return }
+        let epoch = lifecycleEpoch
         hasStarted = true
         await refreshAll()
+        guard hasStarted, lifecycleEpoch == epoch else { return }
         startStreams()
     }
 
     func foreground() async {
         guard hasStarted else { await start(); return }
+        let epoch = lifecycleEpoch
         await refreshAll()
+        guard hasStarted, lifecycleEpoch == epoch else { return }
         if controlTask == nil || logTask == nil { startStreams() }
     }
 
     func refreshAll() async {
-        guard !isRefreshing else { return }
-        isRefreshing = true
-        defer { isRefreshing = false }
-        await registry.load()
-        await loadRuns()
-        await loadSources()
-        await loadPipelines()
-        await loadModuleDiagnostics()
-        await loadLogs()
-        await loadOverview()
+        let revision = enqueueReconciliation(.full)
+        await waitForReconciliation(revision)
     }
 
     func stop() {
+        lifecycleEpoch &+= 1
         controlTask?.cancel()
         logTask?.cancel()
         reconciliationTask?.cancel()
@@ -602,15 +623,37 @@ final class BackendSession {
         reconciliationTask = nil
         pollingTask = nil
         pendingReconciliation = .init()
+        completedReconciliationRevision = reconciliationRevision
+        resumeReconciliationWaiters()
         events.stop()
         logs.setConnection(.idle)
         hasStarted = false
     }
 
-    private func loadPipelines() async {
+    private func performFullRefresh(epoch: UInt64) async {
+        await registry.load(when: { [weak self] in
+            self?.reconciliationIsCurrent(epoch) == true
+        })
+        guard reconciliationIsCurrent(epoch) else { return }
+        await loadRuns(epoch: epoch)
+        guard reconciliationIsCurrent(epoch) else { return }
+        await loadSources(epoch: epoch)
+        guard reconciliationIsCurrent(epoch) else { return }
+        await loadPipelines(epoch: epoch)
+        guard reconciliationIsCurrent(epoch) else { return }
+        await loadModuleDiagnostics(epoch: epoch)
+        guard reconciliationIsCurrent(epoch) else { return }
+        await loadLogs(epoch: epoch)
+        guard reconciliationIsCurrent(epoch) else { return }
+        await loadOverview(epoch: epoch)
+    }
+
+    private func loadPipelines(epoch: UInt64) async {
+        guard reconciliationIsCurrent(epoch) else { return }
         pipelines.loading()
         do {
             let response = try await client.pipelines()
+            guard reconciliationIsCurrent(epoch) else { return }
             let deploymentCounts = Dictionary(grouping: sources.sources,
                                               by: { $0.pipeline.pipeline })
                 .mapValues(\.count)
@@ -620,6 +663,7 @@ final class BackendSession {
             pipelines.replace(summaries)
             for summary in summaries {
                 let response = try await client.pipelineRevisions(summary.name)
+                guard reconciliationIsCurrent(epoch) else { return }
                 let revisions = try response.revisions.map {
                     try $0.revision(title: summary.title, description: summary.description)
                 }
@@ -634,22 +678,28 @@ final class BackendSession {
                            let layout = try? wire.flowLayout(
                             pipeline: summary.name,
                             version: revision.reference.version
-                           ) {
+                           ),
+                           reconciliationIsCurrent(epoch) {
                             pipelines.apply(layout)
                         }
                     }
                 }
             }
         } catch {
+            guard reconciliationIsCurrent(epoch) else { return }
             pipelines.fail(error)
         }
     }
 
     /// Refresh one Pipeline head and, when the event identifies it, one exact
     /// immutable revision. This deliberately never walks historical revisions.
-    private func loadPipeline(_ target: ControlReconciliationPlan.PipelineTarget) async {
+    private func loadPipeline(
+        _ target: ControlReconciliationPlan.PipelineTarget,
+        epoch: UInt64
+    ) async {
         do {
             let wire = try await client.pipeline(target.name)
+            guard reconciliationIsCurrent(epoch) else { return }
             let deploymentCount = sources.sources.lazy.filter {
                 $0.pipeline.pipeline == target.name
             }.count
@@ -661,6 +711,7 @@ final class BackendSession {
                 target.name,
                 version: version
             )
+            guard reconciliationIsCurrent(epoch) else { return }
             let revision = try revisionWire.revision(
                 title: summary.title,
                 description: summary.description
@@ -675,53 +726,67 @@ final class BackendSession {
                    let layout = try? layoutWire.flowLayout(
                     pipeline: target.name,
                     version: version
-                   ) {
+                   ),
+                   reconciliationIsCurrent(epoch) {
                     pipelines.apply(layout)
                 }
             }
         } catch {
+            guard reconciliationIsCurrent(epoch) else { return }
             pipelines.fail(error)
         }
     }
 
-    private func loadRuns() async {
+    private func loadRuns(epoch: UInt64) async {
+        guard reconciliationIsCurrent(epoch) else { return }
         runs.loading()
         do {
-            runs.replace(try await client.runs(limit: 200).runs.map {
+            let response = try await client.runs(limit: 200)
+            guard reconciliationIsCurrent(epoch) else { return }
+            runs.replace(try response.runs.map {
                 try $0.summary()
             })
         } catch {
+            guard reconciliationIsCurrent(epoch) else { return }
             runs.fail(error)
         }
     }
 
-    private func loadRun(_ id: Int) async {
+    private func loadRun(_ id: Int, epoch: UInt64) async {
         if runs.details[id] != nil {
-            await loadRunDetail(id)
+            await loadRunDetail(id, epoch: epoch)
             return
         }
         do {
-            runs.apply(try await client.run(id).summary())
+            let response = try await client.run(id)
+            guard reconciliationIsCurrent(epoch) else { return }
+            runs.apply(try response.summary())
         } catch {
+            guard reconciliationIsCurrent(epoch) else { return }
             runs.fail(error)
         }
     }
 
-    private func loadSources() async {
+    private func loadSources(epoch: UInt64) async {
+        guard reconciliationIsCurrent(epoch) else { return }
         sources.loading()
         do {
             let response = try await client.sources()
+            guard reconciliationIsCurrent(epoch) else { return }
             if let secretResponse = try? await client.secrets() {
+                guard reconciliationIsCurrent(epoch) else { return }
                 sources.setConfiguredSecrets(
                     secretResponse.secrets.filter(\.configured).map(\.name)
                 )
             }
             var values: [SourceDeployment] = []
             for wire in response.sources {
+                guard reconciliationIsCurrent(epoch) else { return }
                 if let history = try? await client.sourceRuns(
                     wire.name,
                     limit: 200
                 ) {
+                    guard reconciliationIsCurrent(epoch) else { return }
                     runs.mergeSourceHistory(
                         try history.runs.map { try $0.summary() },
                         source: wire.name,
@@ -729,9 +794,12 @@ final class BackendSession {
                     )
                 }
                 let detailedWire = (try? await client.source(wire.name)) ?? wire
+                guard reconciliationIsCurrent(epoch) else { return }
                 let settings = try await client.sourceSettings(wire.name)
+                guard reconciliationIsCurrent(epoch) else { return }
                 sources.setSettingsETag(settings.etag, for: wire.name)
                 let triggerResponse = try await client.sourceTriggers(wire.name)
+                guard reconciliationIsCurrent(epoch) else { return }
                 sources.setTriggers(triggerResponse.triggers, for: wire.name)
                 let nextTrigger = triggerResponse.triggers
                     .filter(\.enabled)
@@ -739,6 +807,7 @@ final class BackendSession {
                     .sorted()
                     .first
                 let statusWire = try await client.sourceStatus(wire.name)
+                guard reconciliationIsCurrent(epoch) else { return }
                 let status = try statusWire.status(
                     runs: runs.runs,
                     nextTrigger: nextTrigger
@@ -764,17 +833,18 @@ final class BackendSession {
             sources.replace(values)
             sourceSettingsDrafts.removeMissingSources(Set(values.map(\.name)))
         } catch {
+            guard reconciliationIsCurrent(epoch) else { return }
             sources.fail(error)
         }
     }
 
-    private func loadSourceTriggers(_ name: String) async {
+    private func loadSourceTriggers(_ name: String, epoch: UInt64) async {
         do {
-            sources.setTriggers(
-                try await client.sourceTriggers(name).triggers,
-                for: name
-            )
+            let response = try await client.sourceTriggers(name)
+            guard reconciliationIsCurrent(epoch) else { return }
+            sources.setTriggers(response.triggers, for: name)
         } catch {
+            guard reconciliationIsCurrent(epoch) else { return }
             sources.fail(error)
         }
     }
@@ -784,7 +854,10 @@ final class BackendSession {
     /// Lifecycle events use it because revision and settings may change
     /// together, and because the Source may not have existed in this session.
     @discardableResult
-    private func loadSource(_ name: String) async -> SourceDeployment? {
+    private func loadSource(
+        _ name: String,
+        epoch: UInt64
+    ) async -> SourceDeployment? {
         do {
             async let detailRequest = client.source(name)
             async let historyRequest = client.sourceRuns(name, limit: 200)
@@ -806,6 +879,7 @@ final class BackendSession {
                 triggersRequest,
                 statusRequest
             )
+            guard reconciliationIsCurrent(epoch) else { return nil }
             runs.mergeSourceHistory(
                 try history.runs.map { try $0.summary() },
                 source: name,
@@ -849,11 +923,13 @@ final class BackendSession {
                     healthRequest,
                     moduleStatusRequest
                 )
+                guard reconciliationIsCurrent(epoch) else { return nil }
                 sources.applyModuleDiagnostics(
                     health: diagnostics.0,
                     status: diagnostics.1
                 )
             } catch {
+                guard reconciliationIsCurrent(epoch) else { return nil }
                 // Runtime status/configuration remains useful when the
                 // diagnostic projection is temporarily unavailable.
                 sources.failModuleDiagnostics(error)
@@ -865,10 +941,11 @@ final class BackendSession {
                 await loadPipeline(.init(
                     name: deployment.pipeline.pipeline,
                     version: deployment.pipeline.version
-                ))
+                ), epoch: epoch)
             }
             return deployment
         } catch {
+            guard reconciliationIsCurrent(epoch) else { return nil }
             sources.fail(error)
             return nil
         }
@@ -876,13 +953,14 @@ final class BackendSession {
 
     /// Run/Task events only invalidate runtime status. If the Source is new to
     /// this session, promote the refresh to the complete single-Source path.
-    private func loadSourceStatus(_ name: String) async {
+    private func loadSourceStatus(_ name: String, epoch: UInt64) async {
         guard sources.sources.contains(where: { $0.name == name }) else {
-            await loadSource(name)
+            await loadSource(name, epoch: epoch)
             return
         }
         do {
             let wire = try await client.sourceStatus(name)
+            guard reconciliationIsCurrent(epoch) else { return }
             let nextTrigger = sources.triggers[name]?
                 .filter(\.enabled)
                 .compactMap(\.nextFireAt)
@@ -891,7 +969,7 @@ final class BackendSession {
             guard let current = sources.sources.first(where: {
                 $0.name == name
             }) else {
-                await loadSource(name)
+                await loadSource(name, epoch: epoch)
                 return
             }
             sources.apply(current.withStatus(try wire.status(
@@ -899,39 +977,46 @@ final class BackendSession {
                 nextTrigger: nextTrigger
             )))
         } catch {
+            guard reconciliationIsCurrent(epoch) else { return }
             sources.fail(error)
         }
     }
 
-    private func loadLogs() async {
+    private func loadLogs(epoch: UInt64) async {
         do {
             async let eventResponse = client.logEvents(
                 .init(after: logs.newestCursor.flatMap(Int.init), limit: 500)
             )
             async let facetResponse = client.logFacets()
             let (response, facets) = try await (eventResponse, facetResponse)
+            guard reconciliationIsCurrent(epoch) else { return }
             logs.append(try response.events.map { try $0.operationalEvent() })
             logs.setFacets(facets.facets())
         } catch {
+            guard reconciliationIsCurrent(epoch) else { return }
             logs.setConnection(.degraded(error.localizedDescription))
         }
     }
 
-    private func loadModuleDiagnostics() async {
+    private func loadModuleDiagnostics(epoch: UInt64) async {
+        guard reconciliationIsCurrent(epoch) else { return }
         sources.loadingModuleDiagnostics()
         do {
             let health = try await client.moduleHealth()
+            guard reconciliationIsCurrent(epoch) else { return }
             var statuses: [SourceModuleStatusWire] = []
             for source in sources.sources {
                 statuses.append(
                     try await client.sourceModuleStatus(source.name)
                 )
+                guard reconciliationIsCurrent(epoch) else { return }
             }
             sources.replaceModuleDiagnostics(
                 health: health,
                 statuses: statuses
             )
         } catch {
+            guard reconciliationIsCurrent(epoch) else { return }
             sources.failModuleDiagnostics(error)
         }
     }
@@ -954,10 +1039,12 @@ final class BackendSession {
         }
     }
 
-    private func loadOverview() async {
+    private func loadOverview(epoch: UInt64) async {
+        guard reconciliationIsCurrent(epoch) else { return }
         overview.loading()
         do {
             let response = try await client.overview()
+            guard reconciliationIsCurrent(epoch) else { return }
             let failures = logs.allEvents.filter {
                 $0.level == .error || $0.level == .critical
             }.suffix(20)
@@ -966,6 +1053,7 @@ final class BackendSession {
                 recentFailures: Array(failures)
             ))
         } catch {
+            guard reconciliationIsCurrent(epoch) else { return }
             overview.fail(error)
         }
     }
@@ -1020,48 +1108,118 @@ final class BackendSession {
     }
 
     private func scheduleReconciliation(_ plan: ControlReconciliationPlan) {
+        _ = enqueueReconciliation(plan)
+    }
+
+    /// One driver owns every projection refresh. Work queued before a pass is
+    /// coalesced; work queued after its snapshot remains pending for the next
+    /// pass. Revisions let callers await their invalidation without creating a
+    /// second refresh task, while the lifecycle epoch rejects late responses
+    /// from a session that has been stopped.
+    @discardableResult
+    private func enqueueReconciliation(
+        _ plan: ControlReconciliationPlan
+    ) -> UInt64 {
+        guard !plan.isEmpty else { return reconciliationRevision }
         pendingReconciliation.formUnion(plan)
-        guard reconciliationTask == nil else { return }
+        reconciliationRevision &+= 1
+        let revision = reconciliationRevision
+        guard reconciliationTask == nil else { return revision }
+        let epoch = lifecycleEpoch
         reconciliationTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: self.reconciliationDelay)
-            guard !Task.isCancelled else { return }
-            let plan = self.pendingReconciliation
-            self.pendingReconciliation = .init()
-            await self.reconcile(plan)
-            self.reconciliationTask = nil
+            guard self.reconciliationIsCurrent(epoch) else {
+                self.finishReconciliation(epoch: epoch)
+                return
+            }
+            await self.drainReconciliation(epoch: epoch)
+        }
+        return revision
+    }
+
+    private func drainReconciliation(epoch: UInt64) async {
+        while reconciliationIsCurrent(epoch), !pendingReconciliation.isEmpty {
+            let plan = pendingReconciliation
+            let revision = reconciliationRevision
+            pendingReconciliation = .init()
+            await reconcile(plan, epoch: epoch)
+            guard reconciliationIsCurrent(epoch) else { break }
+            completedReconciliationRevision = max(
+                completedReconciliationRevision,
+                revision
+            )
+            resumeReconciliationWaiters()
+        }
+        finishReconciliation(epoch: epoch)
+    }
+
+    private func finishReconciliation(epoch: UInt64) {
+        guard lifecycleEpoch == epoch else { return }
+        reconciliationTask = nil
+        resumeReconciliationWaiters()
+    }
+
+    private func reconciliationIsCurrent(_ epoch: UInt64) -> Bool {
+        lifecycleEpoch == epoch && !Task.isCancelled
+    }
+
+    private func waitForReconciliation(_ revision: UInt64) async {
+        guard completedReconciliationRevision < revision else { return }
+        await withCheckedContinuation { continuation in
+            reconciliationWaiters.append((revision, continuation))
         }
     }
 
-    /// Await the currently coalescing batch. Kept internal so deterministic
-    /// app-model tests can assert request cardinality without timing guesses.
-    func waitForScheduledReconciliation() async {
-        await reconciliationTask?.value
+    private func resumeReconciliationWaiters() {
+        var remaining:
+            [(revision: UInt64, continuation: CheckedContinuation<Void, Never>)] = []
+        for waiter in reconciliationWaiters {
+            if waiter.revision <= completedReconciliationRevision {
+                waiter.continuation.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        reconciliationWaiters = remaining
     }
 
-    private func reconcile(_ plan: ControlReconciliationPlan) async {
+    /// Await all work queued when this method is called. Kept internal so
+    /// deterministic app-model tests can assert request cardinality without
+    /// timing guesses.
+    func waitForScheduledReconciliation() async {
+        await waitForReconciliation(reconciliationRevision)
+    }
+
+    private func reconcile(
+        _ plan: ControlReconciliationPlan,
+        epoch: UInt64
+    ) async {
         if plan.refreshAll {
-            await refreshAll()
+            await performFullRefresh(epoch: epoch)
             return
         }
         if plan.refreshRegistry {
-            await registry.load()
+            await registry.load(when: { [weak self] in
+                self?.reconciliationIsCurrent(epoch) == true
+            })
         }
+        guard reconciliationIsCurrent(epoch) else { return }
         for runID in plan.runs.sorted() {
-            await loadRun(runID)
+            await loadRun(runID, epoch: epoch)
         }
         for source in plan.sourceDetails.sorted() {
-            await loadSource(source)
+            await loadSource(source, epoch: epoch)
         }
         for source in plan.sourceTriggers
             .subtracting(plan.sourceDetails)
             .sorted() {
-            await loadSourceTriggers(source)
+            await loadSourceTriggers(source, epoch: epoch)
         }
         for source in plan.sourceStatuses
             .subtracting(plan.sourceDetails)
             .sorted() {
-            await loadSourceStatus(source)
+            await loadSourceStatus(source, epoch: epoch)
         }
         for target in plan.pipelines.sorted(by: {
             if $0.name == $1.name {
@@ -1069,13 +1227,13 @@ final class BackendSession {
             }
             return $0.name < $1.name
         }) {
-            await loadPipeline(target)
+            await loadPipeline(target, epoch: epoch)
         }
         if plan.refreshModuleDiagnostics {
-            await loadModuleDiagnostics()
+            await loadModuleDiagnostics(epoch: epoch)
         }
         if plan.refreshOverview {
-            await loadOverview()
+            await loadOverview(epoch: epoch)
         }
     }
 
@@ -1369,11 +1527,18 @@ final class BackendSession {
     }
 
     func loadRunDetail(_ id: Int) async {
+        await loadRunDetail(id, epoch: nil)
+    }
+
+    private func loadRunDetail(_ id: Int, epoch: UInt64?) async {
         do {
             async let detail = client.run(id, includeSpec: true)
             async let events = client.runEvents(id, limit: 1_000)
             async let outputs = client.runOutputs(id)
             let values = try await (detail, events, outputs)
+            if let epoch {
+                guard reconciliationIsCurrent(epoch) else { return }
+            }
             runs.apply(try values.0.summary())
             runs.applyDetail(
                 values.0,
@@ -1381,6 +1546,9 @@ final class BackendSession {
                 outputs: values.2.outputs
             )
         } catch {
+            if let epoch {
+                guard reconciliationIsCurrent(epoch) else { return }
+            }
             runs.failDetail(id, error: error)
         }
     }
