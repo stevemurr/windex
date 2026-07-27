@@ -1720,6 +1720,10 @@ public enum Components {
             public var capabilities: Components.Schemas.Capabilities
             /// - Remark: Generated from `#/components/schemas/Health/contract_epoch`.
             public var contractEpoch: Swift.Int
+            /// Additive component readiness. Older epoch-2 clients may ignore it; dependency degradation never changes contract_epoch.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Health/readiness`.
+            public var readiness: Components.Schemas.HealthReadiness?
             /// - Remark: Generated from `#/components/schemas/Health/schema_generation`.
             public var schemaGeneration: Swift.Int
             /// - Remark: Generated from `#/components/schemas/Health/service`.
@@ -1740,6 +1744,7 @@ public enum Components {
             ///   - authRequired:
             ///   - capabilities:
             ///   - contractEpoch:
+            ///   - readiness: Additive component readiness. Older epoch-2 clients may ignore it; dependency degradation never changes contract_epoch.
             ///   - schemaGeneration:
             ///   - service:
             ///   - startedAt:
@@ -1751,6 +1756,7 @@ public enum Components {
                 authRequired: Swift.Bool,
                 capabilities: Components.Schemas.Capabilities,
                 contractEpoch: Swift.Int,
+                readiness: Components.Schemas.HealthReadiness? = nil,
                 schemaGeneration: Swift.Int,
                 service: Swift.String,
                 startedAt: Swift.Double,
@@ -1762,6 +1768,7 @@ public enum Components {
                 self.authRequired = authRequired
                 self.capabilities = capabilities
                 self.contractEpoch = contractEpoch
+                self.readiness = readiness
                 self.schemaGeneration = schemaGeneration
                 self.service = service
                 self.startedAt = startedAt
@@ -1774,6 +1781,7 @@ public enum Components {
                 case authRequired = "auth_required"
                 case capabilities
                 case contractEpoch = "contract_epoch"
+                case readiness
                 case schemaGeneration = "schema_generation"
                 case service
                 case startedAt = "started_at"
@@ -1795,6 +1803,10 @@ public enum Components {
                 self.contractEpoch = try container.decode(
                     Swift.Int.self,
                     forKey: .contractEpoch
+                )
+                self.readiness = try container.decodeIfPresent(
+                    Components.Schemas.HealthReadiness.self,
+                    forKey: .readiness
                 )
                 self.schemaGeneration = try container.decode(
                     Swift.Int.self,
@@ -1828,6 +1840,7 @@ public enum Components {
                     "auth_required",
                     "capabilities",
                     "contract_epoch",
+                    "readiness",
                     "schema_generation",
                     "service",
                     "started_at",
@@ -1835,6 +1848,102 @@ public enum Components {
                     "supported_contract_epochs",
                     "uptime_s",
                     "version"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/HealthReadiness`.
+        public struct HealthReadiness: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/HealthReadiness/cache_ttl_s`.
+            public var cacheTtlS: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/HealthReadiness/checked_at`.
+            public var checkedAt: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/HealthReadiness/components`.
+            public struct ComponentsPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: [String: Components.Schemas.ReadinessComponent]
+                /// Creates a new `ComponentsPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: [String: Components.Schemas.ReadinessComponent] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/HealthReadiness/components`.
+            public var components: Components.Schemas.HealthReadiness.ComponentsPayload
+            /// False only when at least one critical component is unhealthy.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HealthReadiness/ready`.
+            public var ready: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/HealthReadiness/status`.
+            @frozen public enum StatusPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case ok = "ok"
+                case degraded = "degraded"
+            }
+            /// - Remark: Generated from `#/components/schemas/HealthReadiness/status`.
+            public var status: Components.Schemas.HealthReadiness.StatusPayload
+            /// Creates a new `HealthReadiness`.
+            ///
+            /// - Parameters:
+            ///   - cacheTtlS:
+            ///   - checkedAt:
+            ///   - components:
+            ///   - ready: False only when at least one critical component is unhealthy.
+            ///   - status:
+            public init(
+                cacheTtlS: Swift.Double,
+                checkedAt: Swift.Double,
+                components: Components.Schemas.HealthReadiness.ComponentsPayload,
+                ready: Swift.Bool,
+                status: Components.Schemas.HealthReadiness.StatusPayload
+            ) {
+                self.cacheTtlS = cacheTtlS
+                self.checkedAt = checkedAt
+                self.components = components
+                self.ready = ready
+                self.status = status
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cacheTtlS = "cache_ttl_s"
+                case checkedAt = "checked_at"
+                case components
+                case ready
+                case status
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.cacheTtlS = try container.decode(
+                    Swift.Double.self,
+                    forKey: .cacheTtlS
+                )
+                self.checkedAt = try container.decode(
+                    Swift.Double.self,
+                    forKey: .checkedAt
+                )
+                self.components = try container.decode(
+                    Components.Schemas.HealthReadiness.ComponentsPayload.self,
+                    forKey: .components
+                )
+                self.ready = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .ready
+                )
+                self.status = try container.decode(
+                    Components.Schemas.HealthReadiness.StatusPayload.self,
+                    forKey: .status
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "cache_ttl_s",
+                    "checked_at",
+                    "components",
+                    "ready",
+                    "status"
                 ])
             }
         }
@@ -4399,6 +4508,99 @@ public enum Components {
                     "queued",
                     "rerun_of",
                     "run_id"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/ReadinessComponent`.
+        public struct ReadinessComponent: Codable, Hashable, Sendable {
+            /// True when this component is required for the serving plane to be ready; false for degradations with a useful fallback.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReadinessComponent/critical`.
+            public var critical: Swift.Bool
+            /// Bounded non-secret counts and booleans for this component.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReadinessComponent/observations`.
+            public struct ObservationsPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer
+                /// Creates a new `ObservationsPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: OpenAPIRuntime.OpenAPIObjectContainer = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// Bounded non-secret counts and booleans for this component.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReadinessComponent/observations`.
+            public var observations: Components.Schemas.ReadinessComponent.ObservationsPayload?
+            /// - Remark: Generated from `#/components/schemas/ReadinessComponent/status`.
+            @frozen public enum StatusPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case ok = "ok"
+                case degraded = "degraded"
+                case unavailable = "unavailable"
+                case unknown = "unknown"
+            }
+            /// - Remark: Generated from `#/components/schemas/ReadinessComponent/status`.
+            public var status: Components.Schemas.ReadinessComponent.StatusPayload
+            /// Redacted operator-safe explanation; never contains exception text.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReadinessComponent/summary`.
+            public var summary: Swift.String
+            /// Creates a new `ReadinessComponent`.
+            ///
+            /// - Parameters:
+            ///   - critical: True when this component is required for the serving plane to be ready; false for degradations with a useful fallback.
+            ///   - observations: Bounded non-secret counts and booleans for this component.
+            ///   - status:
+            ///   - summary: Redacted operator-safe explanation; never contains exception text.
+            public init(
+                critical: Swift.Bool,
+                observations: Components.Schemas.ReadinessComponent.ObservationsPayload? = nil,
+                status: Components.Schemas.ReadinessComponent.StatusPayload,
+                summary: Swift.String
+            ) {
+                self.critical = critical
+                self.observations = observations
+                self.status = status
+                self.summary = summary
+            }
+            public enum CodingKeys: String, CodingKey {
+                case critical
+                case observations
+                case status
+                case summary
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.critical = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .critical
+                )
+                self.observations = try container.decodeIfPresent(
+                    Components.Schemas.ReadinessComponent.ObservationsPayload.self,
+                    forKey: .observations
+                )
+                self.status = try container.decode(
+                    Components.Schemas.ReadinessComponent.StatusPayload.self,
+                    forKey: .status
+                )
+                self.summary = try container.decode(
+                    Swift.String.self,
+                    forKey: .summary
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "critical",
+                    "observations",
+                    "status",
+                    "summary"
                 ])
             }
         }
