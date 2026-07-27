@@ -780,6 +780,240 @@ struct AppModelTests {
         #expect(IngestRecordingURLProtocol.requests.isEmpty)
     }
 
+    @Test("control event classification preserves exact affected scopes")
+    func controlEventScopeClassification() {
+        let scheduled = OperationalEvent(
+            sequence: 1,
+            timestamp: .now,
+            level: .info,
+            component: "run",
+            sourceName: "docs",
+            pipelineName: "crawl",
+            pipelineVersion: 3,
+            runID: 42,
+            event: "run.queued",
+            message: "",
+            data: ["trigger": .string("schedule")]
+        )
+        let published = OperationalEvent(
+            sequence: 2,
+            timestamp: .now,
+            level: .info,
+            component: "pipeline",
+            pipelineName: "crawl",
+            pipelineVersion: 3,
+            event: "pipeline.revision_published",
+            message: ""
+        )
+        let module = OperationalEvent(
+            sequence: 3,
+            timestamp: .now,
+            level: .info,
+            component: "module_admin",
+            module: "custom.clean",
+            event: "module.approved",
+            message: ""
+        )
+
+        var plan = ControlReconciliationPlan(event: scheduled)
+        plan.formUnion(.init(event: published))
+        plan.formUnion(.init(event: module))
+
+        #expect(plan.refreshOverview)
+        #expect(!plan.refreshAll)
+        #expect(plan.refreshRegistry)
+        #expect(plan.refreshModuleDiagnostics)
+        #expect(plan.runs == [42])
+        #expect(plan.sourceStatuses == ["docs"])
+        #expect(plan.sourceTriggers == ["docs"])
+        #expect(plan.sourceDetails.isEmpty)
+        #expect(plan.pipelines == [
+            .init(name: "crawl", version: 3),
+        ])
+
+        let unknown = ControlReconciliationPlan(event: .init(
+            sequence: 4,
+            timestamp: .now,
+            level: .info,
+            component: "future_control_domain",
+            event: "future.changed",
+            message: ""
+        ))
+        #expect(unknown.refreshAll)
+    }
+
+    @Test("control event bursts reconcile unique resources without a full reload")
+    func targetedControlReconciliation() async throws {
+        let host = "reconciliation.windex.test"
+        ControlReconciliationURLProtocol.configure(host: host)
+        defer { ControlReconciliationURLProtocol.reset(host: host) }
+        let profile = try ConnectionProfile("http://\(host)")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ControlReconciliationURLProtocol.self]
+        let client = WindexClient(
+            configuration: .init(baseURL: profile.baseURL),
+            token: "token",
+            session: URLSession(configuration: configuration)
+        )
+        let session = BackendSession(
+            client: client,
+            backend: ConnectedBackend(
+                profile: profile,
+                evidence: Self.evidence,
+                hasStoredToken: true
+            ),
+            reconciliationDelay: .milliseconds(10)
+        )
+        session.runs.replace([])
+        session.sources.replace([
+            SourceDeployment(
+                name: "docs",
+                title: "Docs",
+                origin: "push",
+                pipeline: .init(
+                    pipeline: "crawl",
+                    version: 2,
+                    specHash: "hash-2"
+                ),
+                search: .init(
+                    searchName: "docs",
+                    idPrefix: "docs:",
+                    collectionKey: "docs",
+                    searchProfile: "generic",
+                    includeInAll: true
+                ),
+                stateNamespace: "docs"
+            ),
+        ])
+        let runEvent = OperationalEvent(
+            sequence: 1,
+            timestamp: .now,
+            level: .info,
+            component: "worker",
+            sourceName: "docs",
+            pipelineName: "crawl",
+            pipelineVersion: 3,
+            runID: 42,
+            taskID: 7,
+            event: "task.leased",
+            message: ""
+        )
+        let pipelineEvent = OperationalEvent(
+            sequence: 2,
+            timestamp: .now,
+            level: .info,
+            component: "pipeline",
+            pipelineName: "crawl",
+            pipelineVersion: 3,
+            event: "pipeline.revision_published",
+            message: ""
+        )
+
+        // A hundred journal rows collapse to one request per unique projection.
+        for _ in 0..<50 {
+            session.scheduleReconciliation(for: runEvent)
+            session.scheduleReconciliation(for: pipelineEvent)
+        }
+        await session.waitForScheduledReconciliation()
+
+        let paths = ControlReconciliationURLProtocol.requests(host: host).map(\.path)
+        #expect(paths.count == 5)
+        #expect(Dictionary(grouping: paths, by: { $0 }).mapValues(\.count) == [
+            "/admin/v1/overview": 1,
+            "/admin/v1/pipelines/crawl": 1,
+            "/admin/v1/pipelines/crawl/revisions/3": 1,
+            "/admin/v1/runs/42": 1,
+            "/admin/v1/sources/docs/status": 1,
+        ])
+        #expect(!paths.contains { path in
+            path.contains("/settings")
+                || path.contains("/triggers")
+                || path.contains("/log-events")
+                || path == "/admin/v1/runs"
+                || path == "/admin/v1/sources"
+                || path == "/admin/v1/pipelines"
+        })
+        #expect(session.runs.runs.first?.id == 42)
+        #expect(session.runs.runs.first?.state == .running)
+        #expect(session.sources.sources.first?.status.currentRun?.id == 42)
+        #expect(session.sources.sources.first?.status.activity == .running)
+        #expect(session.pipelines.pipelines.first?.headVersion == 3)
+        #expect(session.pipelines.revisions["crawl"]?.map(\.reference.version) == [3])
+        #expect(session.overview.snapshot?.revision == 7)
+    }
+
+    @Test("a Source lifecycle event adds its complete bounded projection")
+    func targetedNewSourceReconciliation() async throws {
+        let host = "source-reconciliation.windex.test"
+        ControlReconciliationURLProtocol.configure(host: host)
+        defer { ControlReconciliationURLProtocol.reset(host: host) }
+        let profile = try ConnectionProfile("http://\(host)")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ControlReconciliationURLProtocol.self]
+        let client = WindexClient(
+            configuration: .init(baseURL: profile.baseURL),
+            token: "token",
+            session: URLSession(configuration: configuration)
+        )
+        let session = BackendSession(
+            client: client,
+            backend: ConnectedBackend(
+                profile: profile,
+                evidence: Self.evidence,
+                hasStoredToken: true
+            ),
+            reconciliationDelay: .milliseconds(10)
+        )
+        session.runs.replace([])
+        session.sources.replace([])
+        session.pipelines.replace([
+            PipelineSummary(
+                name: "crawl",
+                title: "Crawl",
+                headVersion: 3,
+                headHash: "hash-3",
+                deploymentCount: 0
+            ),
+        ])
+        let event = OperationalEvent(
+            sequence: 9,
+            timestamp: .now,
+            level: .info,
+            component: "source",
+            sourceName: "newdocs",
+            pipelineName: "crawl",
+            pipelineVersion: 3,
+            event: "source.changed",
+            message: ""
+        )
+
+        session.scheduleReconciliation(for: event)
+        await session.waitForScheduledReconciliation()
+
+        let paths = ControlReconciliationURLProtocol.requests(host: host).map(\.path)
+        #expect(paths.count == 8)
+        #expect(Set(paths) == [
+            "/admin/v1/module-health",
+            "/admin/v1/overview",
+            "/admin/v1/sources/newdocs",
+            "/admin/v1/sources/newdocs/module-status",
+            "/admin/v1/sources/newdocs/runs",
+            "/admin/v1/sources/newdocs/settings",
+            "/admin/v1/sources/newdocs/status",
+            "/admin/v1/sources/newdocs/triggers",
+        ])
+        let source = try #require(session.sources.sources.first)
+        #expect(source.name == "newdocs")
+        #expect(source.pipeline.version == 3)
+        #expect(source.generation == 2)
+        #expect(source.configuration.effectiveValues["batch"] == .int(16))
+        #expect(source.configuration.valuesHash == "settings-v3")
+        #expect(session.sourceSettingsDrafts.form(for: "newdocs")?
+            .value(forKey: "batch") == .int(16))
+        #expect(session.sources.moduleStatus(for: "newdocs")?.available == true)
+        #expect(session.pipelines.pipelines.first?.deploymentCount == 1)
+    }
+
     private static let evidence = PairingEvidence(
         version: "0.1.0",
         uptimeSeconds: 128,
@@ -956,6 +1190,313 @@ private struct RecordedIngestRequest: Sendable {
     let method: String
     let path: String
     let body: Data
+}
+
+private struct RecordedControlRequest: Sendable {
+    let host: String
+    let method: String
+    let path: String
+}
+
+private final class ControlReconciliationURLProtocol:
+    URLProtocol,
+    @unchecked Sendable
+{
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var recorded: [RecordedControlRequest] = []
+
+    static func requests(host: String) -> [RecordedControlRequest] {
+        lock.withLock { recorded.filter { $0.host == host } }
+    }
+
+    static func configure(host: String) {
+        lock.withLock { recorded.removeAll { $0.host == host } }
+    }
+
+    static func reset(host: String) {
+        lock.withLock { recorded.removeAll { $0.host == host } }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(
+        for request: URLRequest
+    ) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        let path = request.url?.path ?? ""
+        Self.lock.withLock {
+            Self.recorded.append(.init(
+                host: request.url?.host ?? "",
+                method: request.httpMethod ?? "GET",
+                path: path
+            ))
+        }
+        let body = Self.responseBody(path: path)
+        let status = body == nil ? 404 : 200
+        guard let url = request.url,
+              let response = HTTPURLResponse(
+                url: url,
+                statusCode: status,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+              ) else {
+            client?.urlProtocol(
+                self,
+                didFailWithError: URLError(.badServerResponse)
+            )
+            return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(
+            self,
+            didLoad: body ?? Data(#"{"detail":"not configured"}"#.utf8)
+        )
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+
+    private static func responseBody(path: String) -> Data? {
+        let body: String
+        switch path {
+        case "/admin/v1/runs/42":
+            body = """
+            {
+              "cancel_requested": false,
+              "dedupe_key": null,
+              "effective_config": {},
+              "error": null,
+              "explicit_inputs": {},
+              "finished_at": null,
+              "flow_name": "harvest",
+              "id": 42,
+              "idempotency_key": null,
+              "mode": "normal",
+              "module_locks": {},
+              "pipeline_hash": "hash-3",
+              "pipeline_name": "crawl",
+              "pipeline_revision_id": 3,
+              "pipeline_version": 3,
+              "priority": 50,
+              "progress": {"fraction": 0.5},
+              "queued_at": "2026-07-26T10:00:00Z",
+              "source_id": 1,
+              "source_name": "docs",
+              "started_at": "2026-07-26T10:00:01Z",
+              "state": "running",
+              "stats": {},
+              "trigger_by": "worker",
+              "trigger_type": "manual",
+              "updated_at": "2026-07-26T10:00:02Z"
+            }
+            """
+        case "/admin/v1/sources/docs/status":
+            body = """
+            {
+              "current_run": {"id": 42},
+              "documents": {},
+              "enabled": true,
+              "last_failure": null,
+              "last_success": null,
+              "latest_run": {"id": 42},
+              "paused": false,
+              "recent_error": null,
+              "source": "docs"
+            }
+            """
+        case "/admin/v1/sources/newdocs":
+            body = """
+            {
+              "id": 2,
+              "name": "newdocs",
+              "title": "New Docs",
+              "description": "",
+              "origin": {"ingress": "push"},
+              "pipeline_revision_id": 3,
+              "pipeline_name": "crawl",
+              "pipeline_version": 3,
+              "pipeline_hash": "hash-3",
+              "search_contract_version": "1",
+              "search_name": "newdocs",
+              "id_prefix": "newdocs:",
+              "collection_key": "newdocs",
+              "search_profile": "generic",
+              "include_in_all": true,
+              "state_namespace": "newdocs",
+              "enabled": true,
+              "generation": 2,
+              "archived_at": null,
+              "created_at": "2026-07-26T10:00:00Z",
+              "updated_at": "2026-07-26T10:00:01Z",
+              "values": {"batch": 16},
+              "values_hash": "settings-v3",
+              "paused": false,
+              "pause_reason": "",
+              "paused_at": null,
+              "etag": "source-v3",
+              "ready": true,
+              "ingress": null
+            }
+            """
+        case "/admin/v1/sources/newdocs/runs":
+            body = #"{"runs":[]}"#
+        case "/admin/v1/sources/newdocs/settings":
+            body = """
+            {
+              "etag": "settings-v3",
+              "fields": [{
+                "key": "batch",
+                "kind": "int",
+                "title": "Batch",
+                "value": 16,
+                "origin": "source"
+              }],
+              "pipeline": "crawl",
+              "pipeline_version": 3,
+              "source": "newdocs",
+              "values": {"batch": 16}
+            }
+            """
+        case "/admin/v1/sources/newdocs/triggers":
+            body = #"{"triggers":[]}"#
+        case "/admin/v1/sources/newdocs/status":
+            body = """
+            {
+              "current_run": null,
+              "documents": {},
+              "enabled": true,
+              "last_failure": null,
+              "last_success": null,
+              "latest_run": null,
+              "paused": false,
+              "recent_error": null,
+              "source": "newdocs"
+            }
+            """
+        case "/admin/v1/sources/newdocs/module-status":
+            body = """
+            {
+              "available": true,
+              "latest_pipeline_version": 3,
+              "pipeline_revision_id": 3,
+              "pipeline_version": 3,
+              "source": "newdocs",
+              "unavailable_modules": [],
+              "upgrade_required": false
+            }
+            """
+        case "/admin/v1/module-health":
+            body = """
+            {
+              "sources": [{
+                "available": true,
+                "latest_pipeline_version": 3,
+                "pipeline_revision_id": 3,
+                "pipeline_version": 3,
+                "source": "newdocs",
+                "unavailable_modules": [],
+                "upgrade_required": false
+              }],
+              "status": "ok",
+              "stranded_sources": 0
+            }
+            """
+        case "/admin/v1/pipelines/crawl":
+            body = """
+            {
+              "id": 1,
+              "name": "crawl",
+              "title": "Crawl",
+              "description": "",
+              "builtin": true,
+              "archived_at": null,
+              "created_at": "2026-07-25T00:00:00Z",
+              "updated_at": "2026-07-26T10:00:00Z",
+              "head_revision_id": 3,
+              "version": 3,
+              "spec_hash": "hash-3"
+            }
+            """
+        case "/admin/v1/pipelines/crawl/revisions/3":
+            body = """
+            {
+              "author": "test",
+              "capability": {"capable": false, "issues": []},
+              "created_at": "2026-07-26T10:00:00Z",
+              "id": 3,
+              "module_locks": {},
+              "note": "",
+              "parent_revision_id": 2,
+              "pipeline_id": 1,
+              "pipeline_name": "crawl",
+              "registry_digest": "registry",
+              "registry_version": 1,
+              "spec": {
+                "schema": "windex.pipeline/1",
+                "parameters": [],
+                "state": {},
+                "flows": {},
+                "refresh": []
+              },
+              "spec_hash": "hash-3",
+              "version": 3
+            }
+            """
+        case "/admin/v1/overview":
+            body = """
+            {
+              "revision": 7,
+              "as_of": "2026-07-26T10:00:03Z",
+              "health": {
+                "service": "ok",
+                "postgres": "ok",
+                "vector": "ok",
+                "storage": "ok",
+                "module_locks": "ok",
+                "stranded_sources": [],
+                "degraded": false
+              },
+              "runs": {
+                "counts": {
+                  "queued": 0,
+                  "running": 1,
+                  "blocked": 0,
+                  "failed": 0,
+                  "succeeded": 0,
+                  "cancelled": 0
+                },
+                "active": [],
+                "recent": []
+              },
+              "workers": {"lanes": {}, "blocked_preconditions": []},
+              "sources": [{
+                "name": "docs",
+                "enabled": true,
+                "paused": false,
+                "documents": 0,
+                "searchable": 0,
+                "last_indexed_at": null,
+                "as_of": "2026-07-26T10:00:03Z"
+              }],
+              "schedules": [],
+              "recent_documents": [],
+              "totals": {
+                "documents": 0,
+                "searchable": 0,
+                "vectors": 0,
+                "indexed_last_hour": 0,
+                "as_of": "2026-07-26T10:00:03Z"
+              }
+            }
+            """
+        default:
+            return nil
+        }
+        return Data(body.utf8)
+    }
 }
 
 private final class IngestRecordingURLProtocol: URLProtocol, @unchecked Sendable {
