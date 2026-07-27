@@ -435,3 +435,100 @@ adopted the epoch-2 ingestion contract.
 Swift and Xcode were not available on the Spark host, so the macOS findings were
 validated through source inspection and live request traces rather than by
 rerunning the native test suites during this bash.
+
+## Remediation ledger
+
+Status: **27/27 original findings resolved in code.** Resolved means the focused
+fix and regression coverage are merged; live activation still requires the
+coordinated release below. Commit links identify the focused fix commits rather
+than their merge commits.
+
+The expanded backend suite passed **450/450** at backend integration head
+`9871fd4`. Ruff, both OpenAPI reproducibility checks, canonical/schema parity,
+Compose validation, operator-document checks, and tracked JSON/YAML parsing
+also passed. All later changes are macOS-only. Swift coverage is checked in, but
+package and native Xcode tests remain a release gate on a Mac.
+
+### High-priority findings
+
+| ID | Focused fix and result | Release and consumer impact |
+|---|---|---|
+| H01 | [`6f3997b`](https://github.com/stevemurr/windex/commit/6f3997b849424efe570727b2d499f26059e5ec4f) — Wiki extraction now commits bounded decoded-byte checkpoints and resumes through a persisted bzip2 block index. | Rebuild `indexed-bzip2`; run `init-db` and upgrade affected Sources because `extract.py` Module locks change. |
+| H02 | [`4e13b31`](https://github.com/stevemurr/windex/commit/4e13b3170bf254b8830b6d987d030ec31f2aae29) — finite hard deadlines terminate and recover non-cooperative slices, cancellation, and shutdown. | Rebuild and restart workers. No client contract change. |
+| H03 | [`8fd3470`](https://github.com/stevemurr/windex/commit/8fd34704545a3bd71f1dc412d89e4ebd007eb9f2) — restored `/metrics`, HTTP RED instrumentation, canonical-state collectors, dashboard, and alerts. | Rebuild the API and provision the current Prometheus/Grafana assets. |
+| H04 | [`1181166`](https://github.com/stevemurr/windex/commit/118116689fceb411f6a291f12e02e7d529b66bea) — tombstones retain a durable vector marker until Qdrant confirms deletion, so `platform.index` can retry. | `load.py` relock and Source upgrades required. A one-time audit may be useful for ghosts created by pre-fix failures. |
+| H05 | [`b587aa7`](https://github.com/stevemurr/windex/commit/b587aa76d703df16214b6d8ba48f2037622b9764) — unavailable explicit Sources and total fan-out failure are HTTP 503; partial `source=all` results are degraded. | macOS must surface degraded/unavailable search. Memory search consumers must treat HTTP 503 as retryable. |
+| H06 | [`aebba7f`](https://github.com/stevemurr/windex/commit/aebba7fed774e48fb73923fb27f5fb88f10431ab) — event triggers consume the journal through durable cursors with atomic submission, fairness, idempotency, and one-hop loop suppression. | Additive cursor-table migration. Quiesce old event writers and the scheduler during `init-db`; restart only the new image. |
+| H07 | [`0664f44`](https://github.com/stevemurr/windex/commit/0664f448160b7689d610e2c7de7d6d241c205c8e) — trigger writes validate type-specific values; invalid persisted rows are isolated and quarantined. | Rebuild API/scheduler. Clients can receive structured HTTP 422 for invalid trigger fields. |
+| H08 | [`21b0624`](https://github.com/stevemurr/windex/commit/21b062467d23949c604aa9edde5025978bfd1177) — Source capability requires a real ingress-to-staging path and rejects document-producing terminal branches. | Invalid Pipeline publication can now fail validation. No DTO change. |
+| H09 | [`c1360e9`](https://github.com/stevemurr/windex/commit/c1360e99158046c0ba5f8ea84e22441436cd5fda) — metadata fingerprints and acknowledgements drive payload-only Qdrant refresh without re-embedding unchanged text. | Additive schema plus `load.py` relock. Re-run or re-push documents whose earlier metadata corrections must be repaired. |
+| H10 | [`2ac8f0e`](https://github.com/stevemurr/windex/commit/2ac8f0e705e0c6f8546809a29ab2b035d4246353) — scheduler maintenance safely collects terminal staging, superseded batches, coverage files, and retained downloads under caps. | Rebuild scheduler/API and review the new GC environment defaults and metrics. |
+| H11 | [`b73d933`](https://github.com/stevemurr/windex/commit/b73d933128c6bf052de6aeed4821aa175e236027) — macOS classifies control events and reconciles only unique affected resources. | macOS rebuild and native tests required. No backend or memory-consumer change. |
+| H12 | [`03ecc26`](https://github.com/stevemurr/windex/commit/03ecc26638c19eb8ee718b884a26306b282f2fbd) — reconciliation drains mid-pass invalidations, coalesces storms, lets full refresh dominate, and rejects stale lifecycle work. | macOS rebuild and native tests required. No backend or memory-consumer change. |
+
+### Medium-priority findings
+
+| ID | Focused fix and result | Release and consumer impact |
+|---|---|---|
+| M01 | [`d717ea7`](https://github.com/stevemurr/windex/commit/d717ea77c995511ac6bef8502fde2065339505fb) — cadence edits and disable/re-enable transitions re-arm schedules transactionally. | Rebuild API/scheduler. macOS edits take effect immediately without a client update. |
+| M02 | [`5f27574`](https://github.com/stevemurr/windex/commit/5f27574287ac8eae088bc976170e2f5dac08c745) — Source upgrade preview/submission rejects target revisions that remove trigger-bound Flows. | Rebuild API. Existing macOS upgrade UI can surface the structured issue. |
+| M03 | [`d3086b1`](https://github.com/stevemurr/windex/commit/d3086b1f2e0eb64b75d385749197ef02e2d74d01) — optional Source setting deletion performs exact replacement instead of merging the key back. | Server-side behavior fix only. |
+| M04 | [`1be42f0`](https://github.com/stevemurr/windex/commit/1be42f05e332062498f14d2768f3b681cb3a5564) — Source status selects the newest active Run across Flows. | Server-side behavior fix; macOS status becomes truthful without a DTO update. |
+| M05 | [`d728da0`](https://github.com/stevemurr/windex/commit/d728da0cb48fd68ce7c54bdae469f157b1330911) — ingest preserves intentional HTTP statuses, including 413, and no longer disguises internal failures as validation errors. | Memory consumers must split or reduce batches on HTTP 413. |
+| M06 | [`16c74a3`](https://github.com/stevemurr/windex/commit/16c74a36f7da517ad1396e0a455e6b39c1728b0f) — health reports cached, redacted dependency readiness while retaining HTTP 200 and `contract_epoch=2`. | Pair by epoch first, then inspect optional readiness. The coordinated Swift DTO update below is mandatory. |
+| M07 | [`110d86f`](https://github.com/stevemurr/windex/commit/110d86f8ebfe430d1b2a0f38cda9c6ea2b8f763c) — Source projections batch-check frozen locks and report `ready: false` for unavailable implementations. | macOS may now truthfully show a Source as not ready; no client code change. |
+| M08 | [`0f02b12`](https://github.com/stevemurr/windex/commit/0f02b12eb6b21d61e6364ae2e884893c9f152e35) — registry GET honors strong/weak `If-None-Match` and returns an empty HTTP 304. | Existing macOS registry caching benefits automatically. |
+| M09 | [`2f343a6`](https://github.com/stevemurr/windex/commit/2f343a6469f08533ded91f467d514d4cdbd12cea) — publication of an existing Pipeline requires a parent guard and rejects stale or contradictory writers. | Pipeline clients must handle HTTP 428/412 and send parent version/hash or strong `If-Match`; current macOS already does. |
+| M10 | [`08b0fcc`](https://github.com/stevemurr/windex/commit/08b0fcc100b34219a31b9a7a5be82a95d16bea27) — publishing an existing semantic revision atomically moves the head; 201 means created and 200 means rollback/no-op. | Pipeline clients must accept both successful 200 and 201 responses. |
+| M11 | [`0ba93fd`](https://github.com/stevemurr/windex/commit/0ba93fdb077d8c85bd5d386496b53f567119af56) — macOS search ownership generations prevent stale responses or errors from replacing newer input. | macOS rebuild and native tests required. |
+| M12 | [`5ae848a`](https://github.com/stevemurr/windex/commit/5ae848a294be96020f5fdb947930ef9b439e93f5) — macOS assembles each Source projection atomically, preserves exact last-known-good state, and attaches scoped diagnostics. | macOS rebuild and native tests required. No backend, DTO, or memory-consumer change. |
+| M13 | [`179909e`](https://github.com/stevemurr/windex/commit/179909e3f2364edd9ea553567fe5566b92407f91) — macOS isolates Pipeline/revision/layout failures, validates response identity and membership, retains only complete exact snapshots, and recovers diagnostics per Flow. | macOS rebuild and native tests required. No backend, DTO, or memory-consumer change. |
+| M14 | [`afdcf49`](https://github.com/stevemurr/windex/commit/afdcf49a8e67227b0302eb03a9f1861a8c60258a) — memory `message_range` survives validation, parquet, Qdrant payload, search, and document detail. | Rebuild/relock and upgrade memory. Fully re-push historical conversations only if their old ranges must be populated. |
+| M15 | [`77a11f3`](https://github.com/stevemurr/windex/commit/77a11f33d0ea3d18b58662761bfbce949421574d) — primary operator, Source, cutover, and memory documentation describes only epoch 2. | Documentation-only; macOS and memory teams should use the updated handoffs. |
+
+### Post-bash release finding — strict Swift health decoding
+
+This is a release finding, not a 28th original bug-bash finding.
+
+[`4f52792`](https://github.com/stevemurr/windex/commit/4f5279204f5bc4ecf412ac3021ca4f9e940c4b47)
+regenerates the macOS admin DTOs for M06 readiness. The generated `Health`
+decoder enforces `additionalProperties: false`; a pre-M06 WindexKit build
+therefore rejects a readiness-bearing health response instead of ignoring it.
+The fix adds typed readiness structures and healthy/degraded pairing fixtures.
+Shipping the regenerated macOS DTO is a hard cutover gate. Any memory consumer
+with an equally strict health decoder must also accept optional `readiness`.
+
+## Coordinated activation
+
+- Rebuild from the final exact `main` SHA. Do not clear Postgres or Qdrant.
+- Stop automatic submissions, finish or cancel old Runs, and stop the old
+  worker before applying the new image's additive `windex init-db`.
+- Changed runner files affect frozen implementation digests. All nine deployed
+  Sources must be previewed and upgraded before the new worker and scheduler
+  start.
+- Start the new API and Module sandbox first, check epoch/readiness and Module
+  health, upgrade the Source fleet, then start the worker and scheduler.
+- Validate `/metrics`, readiness, Module locks, recent errors, a bounded Run and
+  search, and a synthetic memory push/search/delete cycle.
+- Requeue cancelled GitHub, Hacker News, and Wiki work after Source upgrades.
+  Let the CC-News interval trigger resume its work without a duplicate manual
+  submission.
+
+## Consumer notifications
+
+The macOS team must pull final `main`, regenerate the checked-in DTOs
+byte-for-byte, run WindexKit package tests and native Xcode tests, verify both
+OpenAPI artifacts, and perform the active-code legacy scan.
+
+Memory consumers must:
+
+- use only `POST /v1/sources/memory/ingest`;
+- provide `partition` for an empty full-set deletion;
+- poll the returned Run after HTTP 202;
+- split or reduce batches on HTTP 413 and retry search HTTP 503;
+- pair on `contract_epoch=2` before interpreting optional readiness; and
+- accept optional `message_range`, re-pushing history only when backfill is
+  required.
+
+The observed caller of removed `/v1/memory/conversations/{id}` remains an
+external consumer migration issue. No legacy endpoint should be restored.
