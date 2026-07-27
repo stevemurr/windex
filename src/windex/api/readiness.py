@@ -20,6 +20,7 @@ import copy
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from typing import Any
 
 import psycopg
@@ -301,10 +302,8 @@ def _probe_qdrant(settings: Settings) -> dict[str, Any]:
         )
     finally:
         if client is not None:
-            try:
+            with suppress(Exception):
                 client.close()
-            except Exception:  # noqa: BLE001 - probe result is already known
-                pass
     return _component(
         "ok",
         critical=True,

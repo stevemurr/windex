@@ -7,6 +7,8 @@ import shutil
 
 import pyarrow.parquet as pq
 
+from windex.ccnews.identity import canonical_url as news_canonical_url
+from windex.ccnews.pipeline import process_batch
 from windex.config import Settings
 from windex.dateparse import parse_and_clamp
 from windex.modules.common import (
@@ -27,8 +29,6 @@ def _published(value):
 
 
 def warc_datatrove(ctx: TaskContext) -> SliceResult:
-    from windex.ccnews.pipeline import process_batch
-
     language = str(ctx.config.get("language", "en"))
     workers = int(ctx.config.get("workers", 4))
     records_per_slice = int(
@@ -87,9 +87,7 @@ def warc_datatrove(ctx: TaskContext) -> SliceResult:
             text = str(row.get("text") or "")
             if not url or not text:
                 continue
-            canonical = __import__(
-                "windex.ccnews.dedup", fromlist=["canonical_url"]
-            ).canonical_url(url)
+            canonical = news_canonical_url(url)
             documents.append(ExtractedDoc(
                 ref=blob.ref,
                 suffix=hashlib.sha1(canonical.encode()).hexdigest()[:20],
@@ -143,3 +141,10 @@ def warc_datatrove(ctx: TaskContext) -> SliceResult:
             "warc_complete": complete,
         },
     )
+
+
+warc_datatrove.__windex_digest_dependencies__ = (
+    process_batch,
+    news_canonical_url,
+    parse_and_clamp,
+)

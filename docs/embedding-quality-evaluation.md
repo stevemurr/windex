@@ -41,7 +41,7 @@ Established by direct code inspection + live DB/Qdrant queries (2026-07-22).
 | Query prefix | `"Instruct: Given a web search query, retrieve relevant passages…\nQuery: "` — **applied to queries only, never documents** | `config.py`, `index/search.py:343` |
 | `memory` source gets a distinct recall-oriented prefix | — | `config.py:56` |
 | Composed text | `title + "\n\n" + body`, whole string capped at `embed_max_tokens*4 ≈ 8192 chars` | `embed/pipeline.py:114,292` |
-| Chunking | **one vector per doc**, no sub-doc chunking (except `memory`, client-pre-chunked) | `hf/embed_index.py:10-39` |
+| Chunking | **one vector per doc**, no sub-doc chunking (except `memory`, client-pre-chunked) | `modules/load.py`, `pipeline/indexing.py` |
 
 ### 1.2 Corpus (live snapshot, ~16.1M rows)
 | source | deduped (backlog) | embedded | duplicate | deleted | notes |
@@ -135,7 +135,7 @@ Ordered by *(how live/likely the risk is) × (how cheap the probe is with existi
 **Problem if:** a doc claims >0.5% of all neighbor slots, or hubs are boilerplate/empty-ish → tighten the `is_empty_text` gate (removes hub candidates at source), centering, or mutual-proximity re-ranking.
 
 ### Probe 8 — HN title-only collapse
-**Tests:** a natural-language query vs a 3–8 token bare headline is a granularity mismatch; "most HN stories are title-only" (per `hn/embed_index.py`).
+**Tests:** a natural-language query vs a 3–8 token bare headline is a granularity mismatch; most HN stories are title-only (see `hn/algolia.py` and `modules/load.py`).
 **Run:** split embedded `hn` by `story_text` empty vs non-empty; run known-item title-as-query NDCG/hit@k per bucket (one extra WHERE in `eval/harness.py::known_item_eval`).
 **Problem if:** title-only bucket materially underperforms → embed `title + domain(target_url)` or an HN-specific instruct; consider a title-aware reranker boost.
 

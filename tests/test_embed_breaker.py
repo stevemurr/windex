@@ -227,7 +227,7 @@ def seeded(qclient, fake_embedder, monkeypatch):
     from fastembed import SparseTextEmbedding
     from qdrant_client import models as qm
 
-    from windex.ccnews.embed_index import point_id
+    from windex.embed.pipeline import point_id
 
     # 'pytest-model' substring keeps the qclient fixture's session cleanup;
     # news_current already exists in every real deployment, so ensure_collection

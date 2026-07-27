@@ -1,10 +1,9 @@
 """Pure unit tests for the shared date parse+clamp helper (Defect C guard)."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from windex.dateparse import MIN_PUBLISHED, clamp_date, parse_and_clamp
 
-UTC = timezone.utc
 NOW = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
 
 

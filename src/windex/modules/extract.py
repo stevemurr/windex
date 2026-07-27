@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 from io import BytesIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -17,8 +16,28 @@ import feedparser
 import indexed_bzip2
 import pyarrow.parquet as pq
 
+from windex.arxiv.oai import (
+    abs_url as arxiv_abs_url,
+    parse_records as parse_arxiv_records,
+)
+from windex.ccnews.identity import canonical_url as news_canonical_url
 from windex.config import Settings
+from windex.crawl.extract import declared_canonical, extract_page
+from windex.crawl.ids import document_suffix
+from windex.crawl.scope import canonicalize, same_host
 from windex.dateparse import parse_and_clamp
+from windex.docs_source.canonical import canonical_url as devdocs_canonical_url
+from windex.docs_source.html import (
+    _ATTR_DIV,
+    framework_of,
+    html_to_text,
+    page_title,
+    strip_html,
+    upstream_url,
+)
+from windex.github.clean import clean_readme, compose_doc
+from windex.hn.algolia import story_from_hit
+from windex.hn.mirror import stories_from_table
 from windex.modules.common import (
     InputBatch,
     blob_bytes,
@@ -27,6 +46,15 @@ from windex.modules.common import (
     require_type,
 )
 from windex.pipeline.ports import ExtractedDoc, PartitionRef, RawBlob
+from windex.smallweb.extract import build_quality_filters, extract_html, extract_post
+from windex.smallweb.feed import (
+    entry_link,
+    entry_published,
+    entry_title,
+    item_body,
+    newest_entries,
+)
+from windex.wiki.reader import read_article_pair
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 _INPUT_BATCH = 8
@@ -84,10 +112,6 @@ def _published(value):
 
 
 def html_trafilatura(ctx: TaskContext) -> SliceResult:
-    from windex.crawl.extract import declared_canonical, extract_page
-    from windex.crawl.ids import document_suffix
-    from windex.crawl.scope import canonicalize, same_host
-
     minimum = int(ctx.config.get("min_chars", 200))
     policy = SimpleNamespace(extract=SimpleNamespace(
         min_chars=minimum,
@@ -141,16 +165,6 @@ def html_trafilatura(ctx: TaskContext) -> SliceResult:
 
 
 def html_devdocs_page(ctx: TaskContext) -> SliceResult:
-    from windex.docs_source.canonical import canonical_url
-    from windex.docs_source.ingest import (
-        _ATTR_DIV,
-        framework_of,
-        html_to_text,
-        page_title,
-        strip_html,
-        upstream_url,
-    )
-
     def parse(blob: RawBlob) -> list[ExtractedDoc]:
         try:
             pages = json.loads(blob_bytes(blob))
@@ -177,8 +191,8 @@ def html_devdocs_page(ctx: TaskContext) -> SliceResult:
             outputs.append(ExtractedDoc(
                 ref=ref,
                 suffix=f"{slug}/{path}",
-                url=canonical_url(slug, path, upstream),
-                canonical_url=canonical_url(slug, path, upstream),
+                url=devdocs_canonical_url(slug, path, upstream),
+                canonical_url=devdocs_canonical_url(slug, path, upstream),
                 title=page_title(body),
                 text=text,
                 fields={
@@ -237,15 +251,6 @@ def markdown_passthrough(ctx: TaskContext) -> SliceResult:
 
 
 def feed_inline_docs(ctx: TaskContext) -> SliceResult:
-    from windex.smallweb.extract import extract_post
-    from windex.smallweb.poll import (
-        entry_link,
-        entry_published,
-        entry_title,
-        item_body,
-        newest_entries,
-    )
-
     max_items = int(ctx.effective_config.get("max_items", 20))
     min_chars = int(ctx.effective_config.get("min_chars", 200))
 
@@ -292,9 +297,7 @@ def feed_inline_docs(ctx: TaskContext) -> SliceResult:
             )
             if extracted is None or len(extracted["text"]) < min_chars:
                 continue
-            canonical = __import__(
-                "windex.ccnews.dedup", fromlist=["canonical_url"]
-            ).canonical_url(url)
+            canonical = news_canonical_url(url)
             outputs.append(ExtractedDoc(
                 ref=blob.ref,
                 suffix=hashlib.sha1(canonical.encode()).hexdigest()[:20],
@@ -321,10 +324,8 @@ def feed_inline_docs(ctx: TaskContext) -> SliceResult:
 
 
 def oai_arxiv_records(ctx: TaskContext) -> SliceResult:
-    from windex.arxiv.harvest import abs_url, parse_records
-
     def parse(blob: RawBlob) -> list[ExtractedDoc]:
-        records, _ = parse_records(blob_bytes(blob))
+        records, _ = parse_arxiv_records(blob_bytes(blob))
         outputs = []
         for record in records:
             deleted = bool(record.get("deleted"))
@@ -332,7 +333,7 @@ def oai_arxiv_records(ctx: TaskContext) -> SliceResult:
             outputs.append(ExtractedDoc(
                 ref=blob.ref,
                 suffix=paper_id,
-                url=abs_url(paper_id),
+                url=arxiv_abs_url(paper_id),
                 title="" if deleted else record.get("title") or "",
                 text="" if deleted else record.get("abstract") or "",
                 published_at=(
@@ -361,8 +362,6 @@ def oai_arxiv_records(ctx: TaskContext) -> SliceResult:
 
 
 def algolia_hn_stories(ctx: TaskContext) -> SliceResult:
-    from windex.hn.harvest import story_from_hit
-
     def parse(blob: RawBlob) -> list[ExtractedDoc]:
         try:
             body = json.loads(blob_bytes(blob))
@@ -400,8 +399,6 @@ def algolia_hn_stories(ctx: TaskContext) -> SliceResult:
 
 
 def parquet_rows(ctx: TaskContext) -> SliceResult:
-    from windex.hn.backfill import stories_from_table
-
     def parse(blob: RawBlob) -> list[ExtractedDoc]:
         if blob.path is None:
             raise PermanentTaskError("parquet.rows requires a spooled RawBlob")
@@ -440,8 +437,6 @@ def parquet_rows(ctx: TaskContext) -> SliceResult:
 
 
 def cirrus_articles(ctx: TaskContext) -> SliceResult:
-    from windex.wiki.reader import read_article_pair
-
     chunk_rows = int(ctx.config.get("chunk_rows", 2_000))
     if chunk_rows <= 0:
         raise PermanentTaskError("cirrus.articles chunk_rows must be positive")
@@ -702,63 +697,7 @@ def _wiki_block_index(
     return offsets, max(offsets.values())
 
 
-def warc_datatrove(ctx: TaskContext) -> SliceResult:
-    from windex.ccnews.pipeline import process_batch
-
-    language = str(ctx.config.get("language", "en"))
-    workers = int(ctx.config.get("workers", 4))
-
-    def parse(blob: RawBlob) -> list[ExtractedDoc]:
-        if blob.path is None:
-            raise PermanentTaskError("warc.datatrove requires a spooled RawBlob")
-        digest = hashlib.sha256(
-            f"{ctx.run_id}:{ctx.task_id}:{blob.ref.key}".encode()
-        ).hexdigest()[:24]
-        base = Settings().staging_dir / "_pipeline_extract" / str(ctx.run_id) / digest
-        output = base / "parquet"
-        logs = base / "logs"
-        shutil.rmtree(base, ignore_errors=True)
-        process_batch(
-            blob.path.parent,
-            [blob.path.name],
-            output,
-            logs,
-            language,
-            workers=workers,
-        )
-        documents = []
-        for path in sorted(output.rglob("*.parquet")):
-            for row in pq.read_table(path).to_pylist():
-                metadata = row.get("metadata") or {}
-                url = str(row.get("url") or metadata.get("url") or "")
-                text = str(row.get("text") or "")
-                if not url or not text:
-                    continue
-                canonical = __import__(
-                    "windex.ccnews.dedup", fromlist=["canonical_url"]
-                ).canonical_url(url)
-                documents.append(ExtractedDoc(
-                    ref=blob.ref,
-                    suffix=hashlib.sha1(canonical.encode()).hexdigest()[:20],
-                    url=url,
-                    canonical_url=canonical,
-                    title=str(row.get("title") or metadata.get("title") or ""),
-                    text=text,
-                    published_at=_published(
-                        row.get("date") or metadata.get("date")),
-                    lang=str(row.get("language") or metadata.get("language")
-                             or language),
-                    fields=dict(metadata),
-                    epoch=blob.epoch,
-                ))
-        return documents
-
-    return _run(ctx, parse, limit=1)
-
-
 def github_compose_doc(ctx: TaskContext) -> SliceResult:
-    from windex.github.clean import clean_readme, compose_doc
-
     max_chars = 100_000
 
     def parse(blob: RawBlob) -> list[ExtractedDoc]:
@@ -799,3 +738,48 @@ def github_compose_doc(ctx: TaskContext) -> SliceResult:
         )]
 
     return _run(ctx, parse)
+
+
+# Module digests include imported helper files whose behavior is part of the
+# implementation.  Otherwise a parser-only change would leave pinned Sources
+# looking current even though a new Run executes different code.
+html_trafilatura.__windex_digest_dependencies__ = (
+    declared_canonical,
+    extract_page,
+    document_suffix,
+    canonicalize,
+    same_host,
+    extract_html,
+    build_quality_filters,
+    parse_and_clamp,
+)
+html_devdocs_page.__windex_digest_dependencies__ = (
+    devdocs_canonical_url,
+    html_to_text,
+)
+feed_inline_docs.__windex_digest_dependencies__ = (
+    extract_post,
+    newest_entries,
+    news_canonical_url,
+    parse_and_clamp,
+)
+oai_arxiv_records.__windex_digest_dependencies__ = (
+    parse_arxiv_records,
+    parse_and_clamp,
+)
+algolia_hn_stories.__windex_digest_dependencies__ = (
+    story_from_hit,
+    parse_and_clamp,
+)
+parquet_rows.__windex_digest_dependencies__ = (
+    stories_from_table,
+    parse_and_clamp,
+)
+cirrus_articles.__windex_digest_dependencies__ = (
+    read_article_pair,
+    parse_and_clamp,
+)
+github_compose_doc.__windex_digest_dependencies__ = (
+    compose_doc,
+    parse_and_clamp,
+)

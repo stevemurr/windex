@@ -176,12 +176,14 @@ def deployment_issues(
         issues.append(issue("values", "invalid_type", "values must be an object"))
         values = {}
     fields = {value.key: value for value in pipeline.parameters}
-    for key in values:
-        if key not in fields:
-            issues.append(issue(
+    issues.extend(
+        issue(
                 f"values.{key}", "unknown_parameter",
                 f"unknown Pipeline parameter {key!r}",
-            ))
+        )
+        for key in values
+        if key not in fields
+    )
     for key, declaration in fields.items():
         if key not in values or values[key] is None:
             if declaration.required and declaration.default is None:

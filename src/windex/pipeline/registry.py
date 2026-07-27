@@ -85,8 +85,7 @@ _DISCOVER = (
     Module(
         "state.pending", "discover", "Pending units",
         "Selects units whose upstream has moved past what was last ingested.",
-        built_from="docs_source/sync.py:83, hf/sync.py:268, arxiv/harvest.py:256, "
-                   "ccnews/sync.py:86, wiki/sync.py:117, hn/harvest.py:221",
+        built_from="modules/discover.py",
         fields=(
             _p("store", "str", required=True, label="Store",
                help="Which of the Pipeline's declared stores to claim from."),
@@ -123,8 +122,7 @@ _DISCOVER = (
         "static.once", "discover", "Run once",
         "Emits exactly one unit of work. The root for a flow that polls a fixed "
         "upstream rather than iterating a store.",
-        built_from="ccnews/sync.py, docs_source/sync.py, hf/sync.py, wiki/sync.py "
-                   "— every `sync` step that fetches one known listing",
+        built_from="modules/discover.py",
         fields=(
             _p("key", "str", default="once", label="Unit key",
                help="Recorded on the unit so a sync flow's history is readable. "
@@ -136,7 +134,7 @@ _DISCOVER = (
     Module(
         "state.repos_pending", "discover", "Pending repos",
         "The repos-table adapter of the pending selector.",
-        built_from="github/hydrate.py:82, github/embed_index.py:51",
+        built_from="modules/discover.py",
         fields=(
             _p("store", "str", required=True, label="Store",
                help="The repos store. A dedicated wide table behind a store adapter: "
@@ -153,7 +151,7 @@ _DISCOVER = (
     Module(
         "time.calendar", "discover", "Calendar keys",
         "Synthesizes hour/day/month keys over a range and seeds them into a store.",
-        built_from="github/tail.py:18, ccnews/sync.py:23",
+        built_from="modules/discover.py",
         fields=(
             _p("unit", "choice", choices=("hour", "day", "month", "year"),
                default="day", required=True),
@@ -167,7 +165,7 @@ _DISCOVER = (
     Module(
         "time.windows", "discover", "Time windows",
         "Plans [from,until) windows: a backfill sweep plus a rolling re-armed tail.",
-        built_from="arxiv/harvest.py:208, hn/harvest.py:132",
+        built_from="modules/discover.py",
         fields=(
             _p("unit", "choice", choices=("day", "month", "year"), default="month"),
             _p("incremental_days", "int", lo=1, hi=365, default=7),
@@ -178,7 +176,7 @@ _DISCOVER = (
         "crawl.frontier", "discover", "Crawl frontier",
         "BFS frontier claim: shallowest-first, budget-bounded, persisted so a "
         "resumed run continues rather than restarting.",
-        built_from="crawl/run.py:78-105, :221-231",
+        built_from="modules/discover.py",
         fields=(
             _p("store", "str", required=True, label="Frontier store",
                help="Where the BFS frontier is persisted. Run-scoped: it cascade-"
@@ -195,7 +193,7 @@ _DISCOVER = (
     Module(
         "push.docs", "receive", "Pushed documents",
         "Documents arrive over HTTP instead of being fetched.",
-        built_from="custom_source/ingest.py:48, memory_source/ingest.py",
+        built_from="modules/receive.py",
         fields=(
             _p("mode", "choice", choices=("delta", "full_set"), default="delta",
                label="Push semantics",
@@ -216,7 +214,7 @@ _FETCH = (
         "Polite GET with robots.txt, per-host rate limiting, size caps and an "
         "SSRF guard re-checked on every redirect hop by resolved IP.",
         allowed_hosts=("*",), capabilities=("network.outbound",),
-        built_from="smallweb/poll.py:197 (PageFetcher), crawl/fetch.py:64-190",
+        built_from="modules/http_get.py, smallweb/http.py, crawl/fetch.py",
         fields=(
             _p("host_interval", "float", lo=1.0, hi=300, default=2.0, unit="s",
                floor="crawl_host_interval_min", label="Per-host interval",
@@ -261,7 +259,7 @@ _FETCH = (
         "http.download", "fetch", "Download to disk",
         "Fetches a large artifact to the downloads tier rather than into memory.",
         capabilities=("network.outbound",),
-        built_from="ccnews/download.py, github/tail.py:67, docs_source/ingest.py:172",
+        built_from="modules/fetch.py",
         fields=(
             _p("url_template", "str", required=True, max_len=500,
                help="Substitution only, over the unit's declared placeholders."),
@@ -278,7 +276,7 @@ _FETCH = (
         "http.paginate", "fetch", "Paginated API",
         "Walks a paginated upstream by a declared protocol.",
         capabilities=("network.outbound",),
-        built_from="arxiv/harvest.py:403, hn/harvest.py:264, github/discover.py:33",
+        built_from="modules/fetch.py, modules/fetch_paginate.py",
         fields=(
             _p("protocol", "choice", required=True,
                choices=("oai_resumption", "algolia_numeric", "github_search_pages",
@@ -298,7 +296,7 @@ _FETCH = (
         "github.graphql_batch", "fetch", "GitHub GraphQL batch",
         "Hydrates repo metadata + README in batches of up to 40.",
         allowed_hosts=("api.github.com",), capabilities=("network.outbound",),
-        built_from="github/hydrate.py:51-247",
+        built_from="modules/fetch.py, github/api.py",
         fields=(
             _p("batch", "int", lo=1, hi=40, default=40),
             _p("token_ref", "secret_ref", allow=("github_tokens",), required=True,
@@ -309,7 +307,7 @@ _FETCH = (
     Module(
         "local.parquet_lookup", "fetch", "Local parquet lookup",
         "Reads a previously-staged sidecar by key. No network.",
-        built_from="github/embed_index.py:31-47",
+        built_from="modules/fetch.py",
         fields=(
             _p("dir", "str", required=True),
             _p("key_column", "str", required=True),
@@ -331,48 +329,49 @@ def _simple(name, kind, title, summary, built_from="", **kw) -> Module:
 
 _CATALOG = (
     _simple("list.lines", "catalog", "Line list", "One entry per line.",
-            "smallweb/sync.py:35",
+            "modules/catalog.py",
             fields=(_p("scheme_allow", "csv", default="http,https"),
                     _p("shrink_floor", "int", lo=0, hi=1_000_000, default=200,
                        help="Refuse a listing that shrank below this — a truncated "
                             "upstream fetch must not look like mass deletion."),)),
     _simple("list.json_manifest", "catalog", "JSON manifest", "Manifest of entries.",
-            "docs_source/sync.py:24",
+            "modules/catalog.py",
             fields=(_p("key_field", "str", required=True),
                     _p("upstream_field", "str", default=""),)),
     _simple("list.sitemap", "catalog", "Sitemap", "sitemap.xml urls + lastmod.",
-            "hf/sync.py:74",
+            "modules/catalog.py",
             fields=(_p("shard_allow", "csv", default=""),)),
     _simple("list.apache_index", "catalog", "Apache index", "Directory listing.",
-            "wiki/sync.py:31",
+            "modules/catalog.py",
             fields=(_p("name_pattern", "regex_list", max_items=4, max_len=500),
                     _p("require_marker", "str", default="",
                        help="Only accept a directory carrying this completeness "
                             "marker — a dump still being written has none."),
                     _p("newest_only", "bool", default=True),)),
     _simple("list.path_manifest_gz", "catalog", "gzipped path manifest",
-            "Newline-delimited paths inside a .gz.", "ccnews/sync.py:32",
+            "Newline-delimited paths inside a .gz.", "modules/catalog.py",
             fields=(_p("key_pattern", "regex_list", max_items=4, max_len=500),
                     _p("min_age_days", "int", lo=0, hi=3650, default=0),
                     _p("max_age_days", "int", lo=0, hi=3650, default=0,
                        help="Exclude dated paths older than this rolling window; "
                             "zero keeps the lower bound open."),)),
     _simple("list.llms_txt", "catalog", "llms.txt", "Link list from an llms.txt.",
-            "hf/sync.py:120"),
+            "modules/catalog.py, hf/formats.py"),
     _simple("github.watch_events", "catalog", "GH Archive watch events",
-            "WatchEvents from an hourly archive.", "github/tail.py:91",
+            "WatchEvents from an hourly archive.", "modules/catalog.py",
             fields=(_p("event_type", "str", default="WatchEvent"),)),
     _simple("github.search_items", "catalog", "GitHub search results",
-            "Repos from a Search API page.", "github/discover.py:109"),
+            "Repos from a Search API page.", "modules/catalog.py"),
     _simple("github.hydrated_repos", "catalog", "Hydrated repos",
-            "Accept/reject a hydrated repo against thresholds.", "github/hydrate.py:137",
+            "Accept/reject a hydrated repo against thresholds.", "modules/catalog.py",
             fields=(_p("stars_gte", "int", lo=0, hi=100_000, default=10),)),
     _simple("feed.entries", "catalog", "Feed entries",
-            "Per-post units from a summary-only feed.", "smallweb/poll.py:71",
+            "Per-post units from a summary-only feed.",
+            "modules/catalog.py, smallweb/feed.py",
             fields=(_p("max_items", "int", lo=1, hi=200, default=20),)),
     _simple("crawl.links", "catalog", "Discovered links",
             "In-scope links from a fetched page, enqueued at depth+1.",
-            "crawl/links.py, crawl/scope.py:97",
+            "modules/catalog.py, crawl/links.py, crawl/scope.py",
             fields=(
                 _p("into", "str", required=True, label="Frontier store"),
                 _p("max_depth", "int", lo=0, hi=8, default=2,
@@ -389,7 +388,7 @@ _CATALOG = (
 
 _EXTRACT = (
     _simple("html.trafilatura", "extract", "HTML article", "Main-content extraction.",
-            "crawl/extract.py:117, smallweb/extract.py, ccnews/pipeline.py:14",
+            "modules/extract.py, crawl/extract.py",
             thread_safe=False,
             fields=(
                 _p("min_chars", "int", lo=0, hi=100_000, default=200),
@@ -406,24 +405,27 @@ _EXTRACT = (
                         "smuggle in an out-of-scope id."),
             )),
     _simple("html.devdocs_page", "extract", "DevDocs page", "A DevDocs entry.",
-            "docs_source/ingest.py:87"),
+            "modules/extract.py, docs_source/html.py"),
     _simple("markdown.passthrough", "extract", "Markdown", "Markdown as-is.",
-            "hf/crawl.py:106"),
+            "modules/extract.py"),
     _simple("feed.inline_docs", "extract", "Inline feed bodies",
-            "Full-text feed entries, no page fetch.", "smallweb/poll.py:89"),
+            "Full-text feed entries, no page fetch.",
+            "modules/extract.py, smallweb/feed.py"),
     _simple("oai.arxiv_records", "extract", "arXiv OAI records",
-            "OAI-PMH metadata records, including tombstones.", "arxiv/harvest.py:108"),
+            "OAI-PMH metadata records, including tombstones.",
+            "modules/extract.py, arxiv/oai.py"),
     _simple("algolia.hn_stories", "extract", "HN stories", "Algolia hits.",
-            "hn/harvest.py:78"),
+            "modules/extract.py, hn/algolia.py"),
     _simple("parquet.rows", "extract", "Parquet rows", "Rows from a parquet mirror.",
-            "hn/backfill.py"),
+            "modules/extract.py, hn/mirror.py"),
     _simple("cirrus.articles", "extract", "CirrusSearch articles",
-            "Wikipedia dump articles, streamed.", "wiki/reader.py",
+            "Wikipedia dump articles, streamed.",
+            "modules/extract.py, wiki/snapshots.py",
             fields=(_p("chunk_rows", "int", lo=100, hi=50_000, default=2000),)),
     _simple("warc.datatrove", "extract", "WARC via datatrove",
             "The FineWeb block pipeline: extraction, language and quality in one "
             "pass, resumable at bounded response-record chunks.",
-            "ccnews/pipeline.py:48-101", batched=True,
+            "modules/warc.py", batched=True,
             fields=(
                 _p("language", "str", default="en"),
                 _p("workers", "int", lo=1, hi=8, default=1,
@@ -437,38 +439,38 @@ _EXTRACT = (
             )),
     _simple("github.compose_doc", "extract", "Compose repo document",
             "Repo metadata + cleaned README into one document.",
-            "github/clean.py, github/embed_index.py:81"),
+            "modules/extract.py, github/api.py"),
 )
 
 _TRANSFORM = (
     _simple("canonical.url", "transform", "Canonical id", "Derives the stable doc id.",
-            "ccnews/dedup.py:42, crawl/run.py:58, docs_source/canonical.py",
+            "modules/transform.py",
             fields=(_p("strategy", "choice", required=True,
                        choices=("sha1_of_canonical", "path_suffix", "field")),)),
     _simple("dedup.exact", "transform", "Exact dedup", "text_hash equality.",
-            "ccnews/dedup.py:64",
+            "modules/transform.py, ccnews/identity.py",
             fields=(_p("scope", "choice", choices=("batch", "ledger", "both"),
                        default="both"),)),
     _simple("dedup.minhash", "transform", "Near-duplicate dedup",
-            "MinHash LSH over a rolling window.", "ccnews/minhash.py",
+            "MinHash LSH over a rolling window.", "modules/minhash.py",
             capabilities=("stateful",),
             fields=(_p("window_days", "int", lo=1, hi=365, default=30,
                        help="News syndication crosses days; the window is why."),)),
     _simple("dedup.boilerplate", "transform", "Boilerplate guard",
             "Drops pages whose text repeats — soft-404 SPA shells return 200 for "
             "every path and would otherwise fill a source with one page.",
-            "crawl/run.py:25-30, :199-271", capabilities=("stateful",),
+            "modules/transform.py", capabilities=("stateful",),
             fields=(_p("repeat_cap", "int", lo=2, hi=100, default=2),)),
     _simple("filter.quality", "transform", "Quality filters",
-            "Gopher/C4/FineWeb gates.", "smallweb/extract.py"),
+            "Gopher/C4/FineWeb gates.", "modules/transform.py"),
     _simple("filter.lang", "transform", "Language filter", "Keeps declared languages.",
-            "datatrove LanguageFilter",
+            "modules/transform.py",
             fields=(_p("languages", "csv", default="en"),)),
 )
 
 _SINKS = (
     _simple("store.upsert", "collect", "Write store", "Upserts partition records.",
-            "smallweb/sync.py:84, docs_source/sync.py:56, hf/sync.py:162",
+            "modules/collect.py",
             fields=(
                 _p("store", "str", required=True),
                 _p("on_conflict", "choice", choices=("merge", "increment", "skip"),
@@ -478,15 +480,14 @@ _SINKS = (
                         "forever — smallweb's fail_count, generalized."),
             )),
     _simple("store.repos", "collect", "Write repos", "The repos-table adapter.",
-            "github/tail.py:114, github/hydrate.py:172",
+            "modules/collect.py",
             fields=(_p("store", "str", default="repos"),)),
     Module(
         "ledger.stage", "load", "Stage documents",
-        "Writes a per-batch parquet and a text_hash-guarded ledger delta. The one "
-        "place documents enter the index.",
+        "Sanitizes document text, writes a per-batch parquet, and applies a "
+        "text_hash-guarded ledger delta. The one place documents enter the index.",
         capabilities=("destructive",),
-        built_from="custom_source/ingest.py:129-216, memory_source/ingest.py:131-247, "
-                   "crawl/run.py:124-162, plus six identical ledger upserts",
+        built_from="modules/load.py",
         fields=(
             _p("write_mode", "choice", choices=("upsert",), default="upsert",
                locked_reason="Upsert is the only safe mode; deletion is expressed by "
@@ -549,13 +550,6 @@ for _m in (_DISCOVER + _FETCH + _CATALOG + _EXTRACT + _TRANSFORM + _SINKS):
         preconditions=_pre,
         contract_roles=tuple(sorted(set(_m.contract_roles) | set(_ROLE_BY_KIND.get(_m.kind, ())))),
     )
-
-# Modules the compiler injects itself, which a Pipeline may neither name nor skip.
-# Sanitization is not optional: smuggled/invisible code points must be stripped
-# before text reaches the embedder, or a Tags-block payload slips under the char
-# cap while blowing the model's token window.
-ALWAYS_BEFORE_LOAD = ("text.sanitize",)
-
 
 def register_custom(descriptor: dict) -> Module:
     """Install one approved immutable DB descriptor into this process."""
@@ -807,5 +801,7 @@ def describe() -> dict:
             }
             for m in MODULES.values()
         ],
-        "always_before_load": list(ALWAYS_BEFORE_LOAD),
+        # Backward-compatible registry field. No Module is injected: ledger.stage
+        # enforces sanitization internally at the terminal write boundary.
+        "always_before_load": [],
     }

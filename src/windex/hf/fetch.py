@@ -39,7 +39,7 @@ import re
 import httpx
 
 from windex.hf import USER_AGENT
-from windex.smallweb.poll import HostRateLimiter, PageFetcher
+from windex.smallweb.http import HostRateLimiter, PageFetcher
 
 # `ratelimit: "pages";r=98;t=83` — remaining requests and seconds to reset.
 _R_RE = re.compile(r"\br=(\d+)")

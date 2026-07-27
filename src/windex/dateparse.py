@@ -13,12 +13,12 @@ then clamp). Out-of-range or unparseable → ``None`` — ``published_at`` is nu
 and every consumer already tolerates NULL.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 # Oldest plausible content across every source: arXiv 1991, Wikipedia 2001,
 # HN 2006, CC-News ~2016. 1990 leaves headroom without admitting year-0001 /
 # epoch-0 defaults. A single global bound is sufficient — no per-source override.
-MIN_PUBLISHED = datetime(1990, 1, 1, tzinfo=timezone.utc)
+MIN_PUBLISHED = datetime(1990, 1, 1, tzinfo=UTC)
 # Grace for feed clock skew / mis-set publish timestamps.
 MAX_FUTURE_SKEW = timedelta(days=2)
 
@@ -31,10 +31,10 @@ def clamp_date(dt: datetime | None, *, now: datetime | None = None) -> datetime 
     """
     if dt is None:
         return None
-    ref = dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
-    now = now or datetime.now(timezone.utc)
+    ref = dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+    now = now or datetime.now(UTC)
     if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+        now = now.replace(tzinfo=UTC)
     if ref < MIN_PUBLISHED or ref > now + MAX_FUTURE_SKEW:
         return None
     return dt

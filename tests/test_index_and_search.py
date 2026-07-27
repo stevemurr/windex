@@ -3,7 +3,7 @@
 import pytest
 from qdrant_client import models as qm
 
-from windex.ccnews.embed_index import point_id
+from windex.embed.pipeline import point_id
 from windex.index import qdrant as qidx
 from windex.index import search as searchmod
 

@@ -79,8 +79,12 @@ The Postgres state is the non-rebuildable part, and a live spot-check already fo
 - **Move `windex serve` to the Spark** — hot path becomes loopback embed→search→rerank (vs ~6.5ms WiFi hops + passage transfer). Search runs on the Grace CPU; GPU stays reserved for the models. Budget: ~30–120ms, sub-100ms target.
 
 ### Phase 5 — arxiv coverage: extend 2018→present (folds into the Phase 4 rebuild)
-- arxiv is a live **OAI-PMH harvester** (not a dump); nothing bounds it to 2017 — the backfill just stopped and the daily cron only covers a trailing 7 days (`arxiv/harvest.py`). First run `windex arxiv status` to see why incremental never advanced.
-- **`windex arxiv harvest --from-year 2018`** (→ present): idempotent per-year windows, auto re-stage + re-embed; rate-limited 1 req/3s (multi-hour crawl). Repair the `arxiv:1706.03762` point-gap (its neighbors exist; the Phase 4 reindex recovers a dropped point).
+- arxiv is a live **OAI-PMH Source** (not a dump). Contract epoch 2 represents
+  its backfill and incremental windows in the canonical Pipeline state stores.
+- Set the arXiv Source's install-stage `earliest` value, then queue its
+  `harvest` Flow through the admin Source runs endpoint. The Flow is resumable
+  and rate-limited to one request per three seconds. Re-indexing repairs the
+  `arxiv:1706.03762` point gap after coverage lands.
 
 ### Phase 6 — Latency polish
 - PG pool (`db/__init__.py:114-123`): raise `max_size`/segment a reserved pool for the metric-write path (fixes the dashboard-path `PoolTimeout`). Sparse BM25 prefetch breadth (`limit×4`, `search.py:189`).

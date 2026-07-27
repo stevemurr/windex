@@ -277,11 +277,13 @@ Not as the product — as a **freshness signal we don't otherwise have**:
 
 ```
 src/windex/hf/
-  __init__.py      # USER_AGENT (shared honest UA)
-  sync.py          # sitemap.xml → sitemap-doc/-blog → hf_roots + hf_blog watermarks
-  crawl.py         # per root: llms.txt → hash-gate → .md fetch; blog: HTML + trafilatura.
-                   # RobotsCache reused; HF-specific 3s interval driven off `ratelimit: r=`
-  embed_index.py   # two SourceSpecs (hfdocs, hfblog)
+  __init__.py      # USER_AGENT, base URL, and license attribution
+  formats.py       # sitemap and llms.txt format parsers
+  fetch.py         # HF rate-limit handling over the shared bounded page fetcher
+
+Epoch-2 orchestration lives in `modules/fetch.py`, `modules/http_get.py`,
+`modules/catalog.py`, `modules/extract.py`, and `modules/load.py`; the Source
+state stores replace the former source-specific watermark and embed loops.
 ```
 
 ```sql

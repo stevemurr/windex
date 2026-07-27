@@ -26,6 +26,7 @@ import os
 import signal
 import threading
 import time
+from contextlib import suppress
 
 import psycopg
 
@@ -119,10 +120,8 @@ def slot_main(dsn: str, resolve: Resolve, cfg: PoolConfig, index: int) -> int:
     finally:
         for conn in (ctl, work):
             if conn is not None:
-                try:
+                with suppress(Exception):
                     conn.close()
-                except Exception:      # noqa: BLE001 — already going away
-                    pass
     log.info("slot %s exiting after %d slice(s)", me, slices)
     return EXIT_DONE
 

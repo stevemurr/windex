@@ -265,7 +265,7 @@ class Marker:
     document: dict[str, Any]
 
     @classmethod
-    def load(cls, root: Path, manifest: dict[str, Any]) -> "Marker":
+    def load(cls, root: Path, manifest: dict[str, Any]) -> Marker:
         directory = root / "cutover"
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{manifest['bootstrap_id']}.json"

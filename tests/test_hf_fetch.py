@@ -9,7 +9,7 @@ import pytest
 
 from windex.config import Settings
 from windex.hf.fetch import PagesRateLimiter, build_fetcher, parse_ratelimit
-from windex.smallweb.poll import PageFetcher
+from windex.smallweb.http import PageFetcher
 
 ROBOTS = "User-agent: *\nAllow: /\n\nSitemap: https://huggingface.co/sitemap.xml\n"
 

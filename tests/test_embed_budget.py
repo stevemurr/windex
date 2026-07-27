@@ -140,9 +140,11 @@ def test_endpoints_get_independent_budgets(endpoint, monkeypatch):
     """A second embedding server must not share the first one's budget."""
     other = "http://second-model:4000"
     assert slot_dir(endpoint) != slot_dir(other)
-    with embed_slot(endpoint, 1):
-        with embed_slot(other, 1, wait_timeout=2) as got:
-            assert got is True  # not blocked by the other endpoint's holder
+    with (
+        embed_slot(endpoint, 1),
+        embed_slot(other, 1, wait_timeout=2) as got,
+    ):
+        assert got is True  # not blocked by the other endpoint's holder
 
 
 class _Inner:

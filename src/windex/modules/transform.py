@@ -5,10 +5,9 @@ from __future__ import annotations
 import hashlib
 from collections import Counter
 from dataclasses import replace
-from datetime import date
 
-from windex.ccnews.dedup import canonical_url as news_canonical
-from windex.ccnews.dedup import text_hash
+from windex.ccnews.identity import canonical_url as news_canonical
+from windex.ccnews.identity import text_hash
 from windex.modules.common import (
     finish_batch,
     pending_batches,
@@ -124,73 +123,6 @@ def dedup_exact(ctx: TaskContext) -> SliceResult:
     return _run(ctx, transform)
 
 
-def dedup_minhash(ctx: TaskContext) -> SliceResult:
-    from windex.ccnews.minhash import band_hashes, signature
-
-    window = int(ctx.config.get("window_days", 30))
-
-    def transform(docs: list[ExtractedDoc]) -> list[ExtractedDoc]:
-        with ctx.conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM minhash_bands WHERE day < current_date - %s",
-                (window,),
-            )
-        local: dict[tuple[int, int], str] = {}
-        outputs = []
-        for doc in docs:
-            signature_value = signature(doc.text)
-            if signature_value is None:
-                outputs.append(doc)
-                continue
-            bands = band_hashes(signature_value)
-            duplicate = next(
-                (local[(index, value)] for index, value in enumerate(bands)
-                 if (index, value) in local),
-                None,
-            )
-            if duplicate is None:
-                with ctx.conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT doc_id
-                          FROM minhash_bands
-                         WHERE (band_idx, band_hash) IN (
-                               SELECT * FROM unnest(%s::smallint[], %s::bigint[]))
-                         ORDER BY day DESC LIMIT 1
-                        """,
-                        (list(range(len(bands))), bands),
-                    )
-                    row = cur.fetchone()
-                    duplicate = row[0] if row else None
-            if duplicate:
-                outputs.append(replace(
-                    doc,
-                    fields={**doc.fields, "_duplicate_of": duplicate},
-                ))
-                continue
-            doc_id = _doc_id(ctx, doc)
-            published = doc.published_at.date() if doc.published_at else date.today()
-            with ctx.conn.cursor() as cur:
-                cur.executemany(
-                    """
-                    INSERT INTO minhash_bands
-                           (band_idx, band_hash, doc_id, day)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT DO NOTHING
-                    """,
-                    [
-                        (index, value, doc_id, published)
-                        for index, value in enumerate(bands)
-                    ],
-                )
-            for index, value in enumerate(bands):
-                local[(index, value)] = doc_id
-            outputs.append(doc)
-        return outputs
-
-    return _run(ctx, transform)
-
-
 def dedup_boilerplate(ctx: TaskContext) -> SliceResult:
     cap = int(ctx.config.get("repeat_cap", 2))
 
@@ -275,3 +207,8 @@ def filter_lang(ctx: TaskContext) -> SliceResult:
         return outputs
 
     return _run(ctx, transform)
+
+
+canonical_url.__windex_digest_dependencies__ = (news_canonical,)
+dedup_exact.__windex_digest_dependencies__ = (text_hash,)
+dedup_boilerplate.__windex_digest_dependencies__ = (text_hash,)

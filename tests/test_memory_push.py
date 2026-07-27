@@ -9,7 +9,7 @@ previous chat. These tests pin identity to the documents themselves.
 Pure functions only — no postgres, no qdrant.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -98,7 +98,7 @@ def test_identity_is_read_from_the_document():
     assert identity.url == f"llmchat://chat/{CONVERSATION}?chunk=3"
     assert identity.title == "Design review"
     assert identity.published_at == datetime(
-        2026, 7, 26, 9, 15, tzinfo=timezone.utc)
+        2026, 7, 26, 9, 15, tzinfo=UTC)
     assert identity.fields == {
         "conversation_id": CONVERSATION,
         "chunk_index": 3,
@@ -146,7 +146,7 @@ def test_legacy_document_shape_still_maps():
     assert identity.fields["chunk_index"] == 2
     assert identity.fields["message_range"] == [2, 6]
     assert identity.published_at == datetime(
-        2026, 7, 26, 9, 15, tzinfo=timezone.utc)
+        2026, 7, 26, 9, 15, tzinfo=UTC)
 
 
 def test_non_object_fields_are_rejected():

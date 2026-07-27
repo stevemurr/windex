@@ -12,6 +12,12 @@ from tempfile import NamedTemporaryFile
 import httpx
 
 from windex.config import Settings
+from windex.crawl.fetch import check_url
+from windex.crawl.links import extract_links
+from windex.crawl.scope import canonicalize
+from windex.hf.fetch import PagesRateLimiter
+from windex.hf.formats import parse_llms
+from windex.hf import license_for
 from windex.modules import fetch as legacy
 from windex.modules.common import (
     InputBatch,
@@ -21,7 +27,8 @@ from windex.modules.common import (
 )
 from windex.pipeline import wire
 from windex.pipeline.ports import PartitionRef, RawBlob, WorkUnit
-from windex.smallweb.poll import HostRateLimiter, RobotsCache
+from windex.smallweb.feed import newest_entries
+from windex.smallweb.http import HostRateLimiter, RobotsCache
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 _PAGES_PER_SLICE = 20
@@ -80,8 +87,6 @@ def _page_plan(
         if not isinstance(plan, dict) or not isinstance(plan.get("pages"), list):
             raise RuntimeError(f"invalid Hugging Face page plan {plan_path}")
         return plan
-
-    from windex.hf.sync import parse_llms
 
     listing = legacy._page(ctx, unit, client, robots, limiter)
     pages = []
@@ -315,7 +320,20 @@ def http_get(ctx: TaskContext) -> SliceResult:
 # The wrapper delegates every non-root request to the legacy runner. Including
 # that runner as a digest dependency keeps frozen Run locks honest when its
 # implementation changes.
-http_get.__windex_digest_dependencies__ = (legacy.http_get,)
+http_get.__windex_digest_dependencies__ = (
+    legacy.http_get,
+    check_url,
+    extract_links,
+    canonicalize,
+    PagesRateLimiter,
+    parse_llms,
+    newest_entries,
+    RobotsCache,
+    legacy._unit_url,
+    pending_batches,
+    wire.encode,
+    license_for,
+)
 
 
 __all__ = ["http_get"]

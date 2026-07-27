@@ -86,10 +86,9 @@ def tick(
     conn.commit()
     for trigger_id in trigger_ids:
         try:
-            with conn.transaction():
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """SELECT t.id, s.name, t.flow_name, t.trigger_type,
+            with conn.transaction(), conn.cursor() as cur:
+                cur.execute(
+                    """SELECT t.id, s.name, t.flow_name, t.trigger_type,
                                   t.trigger_spec, t.next_fire_at, ctl.paused,
                                   s.enabled, s.archived_at
                              FROM source_triggers t
@@ -97,62 +96,62 @@ def tick(
                              JOIN source_control ctl ON ctl.source_id = s.id
                             WHERE t.id = %s AND t.enabled
                             FOR UPDATE OF t""",
-                        (trigger_id,),
+                    (trigger_id,),
+                )
+                row = cur.fetchone()
+                if row is None or row[5] is None or row[5] > instant:
+                    continue
+                (
+                    _id, source_name, flow, kind, spec, planned, paused,
+                    enabled, archived,
+                ) = row
+                try:
+                    following = next_fire(kind, spec, instant)
+                except TriggerValidationError as exc:
+                    _quarantine_invalid(
+                        cur,
+                        trigger_id=trigger_id,
+                        source_name=source_name,
+                        trigger_type=kind,
+                        error=exc,
                     )
-                    row = cur.fetchone()
-                    if row is None or row[5] is None or row[5] > instant:
-                        continue
-                    (
-                        _id, source_name, flow, kind, spec, planned, paused,
-                        enabled, archived,
-                    ) = row
-                    try:
-                        following = next_fire(kind, spec, instant)
-                    except TriggerValidationError as exc:
-                        _quarantine_invalid(
-                            cur,
-                            trigger_id=trigger_id,
-                            source_name=source_name,
-                            trigger_type=kind,
-                            error=exc,
-                        )
-                        result.failed.append({
-                            "trigger_id": trigger_id,
-                            "source": source_name,
-                            "error": str(exc),
-                            "disabled": True,
-                        })
-                        continue
-                    if paused or not enabled or archived:
-                        cur.execute(
-                            "UPDATE source_triggers SET next_fire_at = %s, "
-                            "updated_at = now() WHERE id = %s",
-                            (following, trigger_id),
-                        )
-                        result.skipped.append({
-                            "trigger_id": trigger_id, "source": source_name,
-                            "reason": "source unavailable",
-                        })
-                        append(
-                            cur, component="scheduler", event="trigger.skipped",
-                            source_name=source_name, message="Source unavailable",
-                            data={"trigger_id": trigger_id})
-                        continue
-                    run_id = submit_source(
-                        conn, source_name, flow=flow, trigger_type="schedule",
-                        trigger_by=f"trigger:{trigger_id}", commit=False)
+                    result.failed.append({
+                        "trigger_id": trigger_id,
+                        "source": source_name,
+                        "error": str(exc),
+                        "disabled": True,
+                    })
+                    continue
+                if paused or not enabled or archived:
                     cur.execute(
-                        """UPDATE source_triggers
+                        "UPDATE source_triggers SET next_fire_at = %s, "
+                        "updated_at = now() WHERE id = %s",
+                        (following, trigger_id),
+                    )
+                    result.skipped.append({
+                        "trigger_id": trigger_id, "source": source_name,
+                        "reason": "source unavailable",
+                    })
+                    append(
+                        cur, component="scheduler", event="trigger.skipped",
+                        source_name=source_name, message="Source unavailable",
+                        data={"trigger_id": trigger_id})
+                    continue
+                run_id = submit_source(
+                    conn, source_name, flow=flow, trigger_type="schedule",
+                    trigger_by=f"trigger:{trigger_id}", commit=False)
+                cur.execute(
+                    """UPDATE source_triggers
                               SET last_fired_at = %s, last_run_id = coalesce(%s, last_run_id),
                                   next_fire_at = %s, updated_at = now()
                             WHERE id = %s""",
-                        (instant, run_id, following, trigger_id),
-                    )
-                    target = result.fired if run_id is not None else result.coalesced
-                    target.append({
-                        "trigger_id": trigger_id, "source": source_name,
-                        "run_id": run_id, "planned_for": planned.isoformat(),
-                    })
+                    (instant, run_id, following, trigger_id),
+                )
+                target = result.fired if run_id is not None else result.coalesced
+                target.append({
+                    "trigger_id": trigger_id, "source": source_name,
+                    "run_id": run_id, "planned_for": planned.isoformat(),
+                })
         except (ValueError, RunConflictError) as exc:
             conn.rollback()
             result.failed.append({
@@ -306,10 +305,9 @@ def _tick_event_trigger(
 ) -> None:
     context: dict[str, object] = {"trigger_id": trigger_id}
     try:
-        with conn.transaction():
-            with conn.cursor() as cur:
-                cur.execute(
-                    """SELECT t.id, s.name, t.flow_name, t.trigger_spec,
+        with conn.transaction(), conn.cursor() as cur:
+            cur.execute(
+                """SELECT t.id, s.name, t.flow_name, t.trigger_spec,
                               ctl.paused, s.enabled, s.archived_at, c.after_seq
                          FROM source_triggers t
                          JOIN sources s ON s.id = t.source_id
@@ -319,49 +317,49 @@ def _tick_event_trigger(
                         WHERE t.id = %s AND t.enabled
                           AND t.trigger_type = 'event'
                         FOR UPDATE OF t, c""",
-                    (trigger_id,),
+                (trigger_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return
+            (
+                _id,
+                source_name,
+                flow,
+                spec,
+                paused,
+                source_enabled,
+                archived,
+                after_seq,
+            ) = row
+            context["source"] = source_name
+            try:
+                validate_trigger("event", spec)
+            except TriggerValidationError as exc:
+                _quarantine_invalid(
+                    cur,
+                    trigger_id=trigger_id,
+                    source_name=source_name,
+                    trigger_type="event",
+                    error=exc,
                 )
-                row = cur.fetchone()
-                if row is None:
-                    return
-                (
-                    _id,
-                    source_name,
-                    flow,
-                    spec,
-                    paused,
-                    source_enabled,
-                    archived,
-                    after_seq,
-                ) = row
-                context["source"] = source_name
-                try:
-                    validate_trigger("event", spec)
-                except TriggerValidationError as exc:
-                    _quarantine_invalid(
-                        cur,
-                        trigger_id=trigger_id,
-                        source_name=source_name,
-                        trigger_type="event",
-                        error=exc,
-                    )
-                    result.failed.append({
-                        "trigger_id": trigger_id,
-                        "source": source_name,
-                        "error": str(exc),
-                        "disabled": True,
-                    })
-                    return
-                # Trigger mutations take this row lock before rebasing under
-                # the journal lock.  Preserve that order here to avoid a
-                # trigger-edit/dispatch deadlock.
-                #
-                # The exclusive journal lock waits for event writers that may
-                # already own a lower sequence, then prevents new writers until
-                # cursor advancement and Run submission commit together.
-                lock_journal(cur, exclusive=True)
-                cur.execute(
-                    """SELECT e.seq, e.component, e.event, e.source_name,
+                result.failed.append({
+                    "trigger_id": trigger_id,
+                    "source": source_name,
+                    "error": str(exc),
+                    "disabled": True,
+                })
+                return
+            # Trigger mutations take this row lock before rebasing under
+            # the journal lock.  Preserve that order here to avoid a
+            # trigger-edit/dispatch deadlock.
+            #
+            # The exclusive journal lock waits for event writers that may
+            # already own a lower sequence, then prevents new writers until
+            # cursor advancement and Run submission commit together.
+            lock_journal(cur, exclusive=True)
+            cur.execute(
+                """SELECT e.seq, e.component, e.event, e.source_name,
                               e.run_id,
                               coalesce(r.trigger_type = 'event', false)
                          FROM operational_events e
@@ -369,187 +367,186 @@ def _tick_event_trigger(
                         WHERE e.seq > %s
                         ORDER BY e.seq
                         LIMIT %s""",
-                    (after_seq, scan_limit),
-                )
-                events = cur.fetchall()
-                if not events:
-                    # The journal can contain sequence gaps after rolled-back
-                    # inserts.  A checked timestamp still rotates this trigger
-                    # fairly behind peers.
-                    cur.execute(
-                        """UPDATE source_event_trigger_cursors
+                (after_seq, scan_limit),
+            )
+            events = cur.fetchall()
+            if not events:
+                # The journal can contain sequence gaps after rolled-back
+                # inserts.  A checked timestamp still rotates this trigger
+                # fairly behind peers.
+                cur.execute(
+                    """UPDATE source_event_trigger_cursors
                               SET last_checked_at = now(), updated_at = now()
                             WHERE trigger_id = %s""",
-                        (trigger_id,),
-                    )
-                    return
-
-                selected = None
-                for event_row in events:
-                    (
-                        seq,
-                        component,
-                        event_name,
-                        event_source,
-                        _event_run_id,
-                        event_triggered,
-                    ) = event_row
-                    # Scheduler events are dispatch bookkeeping, never inputs.
-                    # This makes observable dispatch outcomes unable to sustain
-                    # a trigger loop even if an operator names one explicitly.
-                    if component == "scheduler":
-                        continue
-                    if event_name != spec["event"]:
-                        continue
-                    expected_source = spec.get("source")
-                    if expected_source is not None and event_source != expected_source:
-                        continue
-                    selected = (
-                        int(seq),
-                        str(event_name),
-                        event_source,
-                        bool(event_triggered),
-                    )
-                    break
-
-                if selected is None:
-                    _advance_event_cursor(
-                        cur,
-                        trigger_id=trigger_id,
-                        after_seq=int(events[-1][0]),
-                    )
-                    return
-
-                event_seq, event_name, event_source, event_triggered = selected
-                context.update({
-                    "event_seq": event_seq,
-                    "event": event_name,
-                    "event_source": event_source,
-                })
-                if event_triggered:
-                    reason = "event-triggered run causality is limited to one hop"
-                    _advance_event_cursor(
-                        cur, trigger_id=trigger_id, after_seq=event_seq)
-                    item = {
-                        "trigger_id": trigger_id,
-                        "source": source_name,
-                        "event_seq": event_seq,
-                        "reason": "loop suppressed",
-                    }
-                    result.skipped.append(item)
-                    _append_event_dispatch(
-                        cur,
-                        outcome="skipped",
-                        trigger_id=trigger_id,
-                        source_name=source_name,
-                        event_seq=event_seq,
-                        event_name=event_name,
-                        event_source=event_source,
-                        reason=reason,
-                    )
-                    return
-
-                unavailable = _event_unavailable_reason(
-                    paused=bool(paused),
-                    source_enabled=bool(source_enabled),
-                    archived=archived,
+                    (trigger_id,),
                 )
-                if unavailable is not None:
-                    _advance_event_cursor(
-                        cur, trigger_id=trigger_id, after_seq=event_seq)
-                    result.skipped.append({
-                        "trigger_id": trigger_id,
-                        "source": source_name,
-                        "event_seq": event_seq,
-                        "reason": unavailable,
-                    })
-                    _append_event_dispatch(
-                        cur,
-                        outcome="skipped",
-                        trigger_id=trigger_id,
-                        source_name=source_name,
-                        event_seq=event_seq,
-                        event_name=event_name,
-                        event_source=event_source,
-                        reason=unavailable,
-                    )
-                    return
+                return
 
-                run_id = submit_source(
-                    conn,
-                    source_name,
-                    flow=flow,
-                    trigger_type="event",
-                    trigger_by=f"event-trigger:{trigger_id}:event:{event_seq}",
-                    idempotency_key=f"event-trigger:{trigger_id}:{event_seq}",
-                    commit=False,
+            selected = None
+            for event_row in events:
+                (
+                    seq,
+                    component,
+                    event_name,
+                    event_source,
+                    _event_run_id,
+                    event_triggered,
+                ) = event_row
+                # Scheduler events are dispatch bookkeeping, never inputs.
+                # This makes observable dispatch outcomes unable to sustain
+                # a trigger loop even if an operator names one explicitly.
+                if component == "scheduler":
+                    continue
+                if event_name != spec["event"]:
+                    continue
+                expected_source = spec.get("source")
+                if expected_source is not None and event_source != expected_source:
+                    continue
+                selected = (
+                    int(seq),
+                    str(event_name),
+                    event_source,
+                    bool(event_triggered),
                 )
+                break
+
+            if selected is None:
+                _advance_event_cursor(
+                    cur,
+                    trigger_id=trigger_id,
+                    after_seq=int(events[-1][0]),
+                )
+                return
+
+            event_seq, event_name, event_source, event_triggered = selected
+            context.update({
+                "event_seq": event_seq,
+                "event": event_name,
+                "event_source": event_source,
+            })
+            if event_triggered:
+                reason = "event-triggered run causality is limited to one hop"
                 _advance_event_cursor(
                     cur, trigger_id=trigger_id, after_seq=event_seq)
-                cur.execute(
-                    """UPDATE source_triggers
+                item = {
+                    "trigger_id": trigger_id,
+                    "source": source_name,
+                    "event_seq": event_seq,
+                    "reason": "loop suppressed",
+                }
+                result.skipped.append(item)
+                _append_event_dispatch(
+                    cur,
+                    outcome="skipped",
+                    trigger_id=trigger_id,
+                    source_name=source_name,
+                    event_seq=event_seq,
+                    event_name=event_name,
+                    event_source=event_source,
+                    reason=reason,
+                )
+                return
+
+            unavailable = _event_unavailable_reason(
+                paused=bool(paused),
+                source_enabled=bool(source_enabled),
+                archived=archived,
+            )
+            if unavailable is not None:
+                _advance_event_cursor(
+                    cur, trigger_id=trigger_id, after_seq=event_seq)
+                result.skipped.append({
+                    "trigger_id": trigger_id,
+                    "source": source_name,
+                    "event_seq": event_seq,
+                    "reason": unavailable,
+                })
+                _append_event_dispatch(
+                    cur,
+                    outcome="skipped",
+                    trigger_id=trigger_id,
+                    source_name=source_name,
+                    event_seq=event_seq,
+                    event_name=event_name,
+                    event_source=event_source,
+                    reason=unavailable,
+                )
+                return
+
+            run_id = submit_source(
+                conn,
+                source_name,
+                flow=flow,
+                trigger_type="event",
+                trigger_by=f"event-trigger:{trigger_id}:event:{event_seq}",
+                idempotency_key=f"event-trigger:{trigger_id}:{event_seq}",
+                commit=False,
+            )
+            _advance_event_cursor(
+                cur, trigger_id=trigger_id, after_seq=event_seq)
+            cur.execute(
+                """UPDATE source_triggers
                           SET last_fired_at = %s,
                               last_run_id = coalesce(%s, last_run_id),
                               updated_at = now()
                         WHERE id = %s""",
-                    (instant, run_id, trigger_id),
+                (instant, run_id, trigger_id),
+            )
+            if run_id is None:
+                result.coalesced.append({
+                    "trigger_id": trigger_id,
+                    "source": source_name,
+                    "run_id": None,
+                    "event_seq": event_seq,
+                })
+                _append_event_dispatch(
+                    cur,
+                    outcome="coalesced",
+                    trigger_id=trigger_id,
+                    source_name=source_name,
+                    event_seq=event_seq,
+                    event_name=event_name,
+                    event_source=event_source,
+                    reason="an active Source Flow already covers this event",
                 )
-                if run_id is None:
-                    result.coalesced.append({
-                        "trigger_id": trigger_id,
-                        "source": source_name,
-                        "run_id": None,
-                        "event_seq": event_seq,
-                    })
-                    _append_event_dispatch(
-                        cur,
-                        outcome="coalesced",
-                        trigger_id=trigger_id,
-                        source_name=source_name,
-                        event_seq=event_seq,
-                        event_name=event_name,
-                        event_source=event_source,
-                        reason="an active Source Flow already covers this event",
-                    )
-                else:
-                    result.fired.append({
-                        "trigger_id": trigger_id,
-                        "source": source_name,
-                        "run_id": run_id,
-                        "event_seq": event_seq,
-                    })
-                    _append_event_dispatch(
-                        cur,
-                        outcome="fired",
-                        trigger_id=trigger_id,
-                        source_name=source_name,
-                        event_seq=event_seq,
-                        event_name=event_name,
-                        event_source=event_source,
-                        run_id=run_id,
-                    )
+            else:
+                result.fired.append({
+                    "trigger_id": trigger_id,
+                    "source": source_name,
+                    "run_id": run_id,
+                    "event_seq": event_seq,
+                })
+                _append_event_dispatch(
+                    cur,
+                    outcome="fired",
+                    trigger_id=trigger_id,
+                    source_name=source_name,
+                    event_seq=event_seq,
+                    event_name=event_name,
+                    event_source=event_source,
+                    run_id=run_id,
+                )
     except Exception as exc:  # noqa: BLE001 - isolate one durable trigger
         conn.rollback()
         failure = {**context, "error": str(exc)}
         result.failed.append(failure)
         try:
-            with conn.transaction():
-                with conn.cursor() as cur:
-                    _append_event_dispatch(
-                        cur,
-                        outcome="error",
-                        trigger_id=trigger_id,
-                        source_name=str(context.get("source") or ""),
-                        event_seq=int(context.get("event_seq") or 0),
-                        event_name=str(context.get("event") or ""),
-                        event_source=(
-                            str(context["event_source"])
-                            if context.get("event_source") is not None
-                            else None
-                        ),
-                        reason=str(exc),
-                        level="error",
-                    )
+            with conn.transaction(), conn.cursor() as cur:
+                _append_event_dispatch(
+                    cur,
+                    outcome="error",
+                    trigger_id=trigger_id,
+                    source_name=str(context.get("source") or ""),
+                    event_seq=int(context.get("event_seq") or 0),
+                    event_name=str(context.get("event") or ""),
+                    event_source=(
+                        str(context["event_source"])
+                        if context.get("event_source") is not None
+                        else None
+                    ),
+                    reason=str(exc),
+                    level="error",
+                )
         except psycopg.Error:
             conn.rollback()
 

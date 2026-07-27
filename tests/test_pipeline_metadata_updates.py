@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from windex.ccnews.dedup import text_hash
+from windex.ccnews.identity import text_hash
 from windex.modules.load import (
     _Existing,
     _ledger_rows,

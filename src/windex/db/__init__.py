@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from typing import TypeVar
 
 import psycopg
@@ -76,10 +77,8 @@ class Reconnecting:
         raise last
 
     def _reconnect(self) -> bool:
-        try:
+        with suppress(Exception):
             self.conn.close()
-        except Exception:  # noqa: BLE001 — a dead connection may raise on close
-            pass
         try:
             self.conn = connect(self.dsn)
             return True
@@ -87,10 +86,8 @@ class Reconnecting:
             return False  # postgres still down; caller retries after backoff
 
     def close(self) -> None:
-        try:
+        with suppress(Exception):
             self.conn.close()
-        except Exception:  # noqa: BLE001
-            pass
 
 
 def _run_db(conn: "psycopg.Connection | Reconnecting",

@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from windex.pipeline import compile_pipeline, parse, validate
+from windex.pipeline import compile_pipeline, parse, registry, validate
 from windex.pipeline.contracts import PIPELINE_SCHEMA, SEARCH_SOURCE_CONTRACT
 from windex.pipeline.hashing import semantic_hash
 from windex.pipeline.store import load_seed_matrix
@@ -127,6 +127,13 @@ def test_pipeline_hash_includes_locked_module_implementations(settings):
     changed["parameters"][0]["default"] = 51
     assert semantic_hash(changed, settings) != first
     assert semantic_hash(document, settings) == first
+
+
+def test_registry_reports_loader_sanitization_without_a_fake_module():
+    document = registry.describe()
+
+    assert document["always_before_load"] == []
+    assert "sanitizes document text" in registry.get("ledger.stage").summary.lower()
 
 
 def test_source_capability_and_deployment_are_separate(settings):

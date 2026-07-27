@@ -22,7 +22,7 @@ from windex.modules.common import (
 )
 from windex.crawl.links import extract_links
 from windex.crawl.scope import canonicalize, in_scope
-from windex.hf.sync import blog_slug, kind_of, root_key
+from windex.hf.formats import blog_slug, kind_of, root_key
 from windex.pipeline.ports import PartitionRecord, RawBlob
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
@@ -534,3 +534,12 @@ def crawl_links(ctx: TaskContext) -> SliceResult:
         return records
 
     return _run(ctx, parse)
+
+
+list_sitemap.__windex_digest_dependencies__ = (root_key,)
+feed_entries.__windex_digest_dependencies__ = (canonicalize,)
+crawl_links.__windex_digest_dependencies__ = (
+    extract_links,
+    canonicalize,
+    in_scope,
+)

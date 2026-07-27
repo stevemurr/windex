@@ -1,4 +1,4 @@
-from windex.ccnews.dedup import (
+from windex.ccnews.identity import (
     canonical_url,
     doc_id,
     resolve_exact_duplicates,

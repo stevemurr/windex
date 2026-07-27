@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import inspect
 from types import SimpleNamespace
 
 import httpx
@@ -18,6 +19,21 @@ def _unit(day: str) -> WorkUnit:
     )
 
 
+def test_paginate_digest_tracks_extracted_protocols():
+    dependency_files = {
+        tuple(inspect.getsourcefile(dependency).rsplit("/", 2)[-2:])
+        for dependency in fetch.http_paginate.__windex_digest_dependencies__
+    }
+    assert dependency_files == {
+        ("arxiv", "oai.py"),
+        ("github", "api.py"),
+        ("hn", "algolia.py"),
+        ("modules", "common.py"),
+        ("modules", "fetch_paginate.py"),
+        ("modules", "fetch_urls.py"),
+    }
+
+
 def test_oai_paces_across_terminal_window_boundaries(monkeypatch):
     events: list[tuple[str, object]] = []
 
@@ -30,7 +46,7 @@ def test_oai_paces_across_terminal_window_boundaries(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "windex.arxiv.harvest.parse_records",
+        "windex.modules.fetch_paginate.parse_records",
         lambda _body: ([], None),
     )
     monkeypatch.setattr(
@@ -65,7 +81,7 @@ def test_oai_paces_every_resumption_page_including_last(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "windex.arxiv.harvest.parse_records",
+        "windex.modules.fetch_paginate.parse_records",
         lambda _body: ([], next(tokens)),
     )
     monkeypatch.setattr(
@@ -168,7 +184,7 @@ def test_hf_root_fetch_persists_page_slices_before_atomic_census(
         )
 
     monkeypatch.setattr(fetch, "_page", page)
-    monkeypatch.setattr("windex.hf.sync.parse_llms", lambda _text, _root: pages)
+    monkeypatch.setattr(http_get, "parse_llms", lambda _text, _root: pages)
     monkeypatch.setattr(http_get, "finish_batch", finish)
     monkeypatch.setattr(
         http_get,

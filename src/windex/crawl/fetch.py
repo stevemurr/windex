@@ -168,7 +168,7 @@ def build_fetcher(
     with this same ``fetch(url) -> (body, final_url, reason)`` shape; nothing in
     ``run.py`` would change.
     """
-    from windex.smallweb.poll import HostRateLimiter, PageFetcher
+    from windex.smallweb.http import HostRateLimiter, PageFetcher
 
     page = PageFetcher(
         client, settings,

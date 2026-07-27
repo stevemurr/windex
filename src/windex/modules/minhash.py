@@ -5,14 +5,13 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date
 
+from windex.ccnews.minhash import band_hashes, signature
 from windex.modules.transform import _doc_id, _run
 from windex.pipeline.ports import ExtractedDoc
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 
 def dedup_minhash(ctx: TaskContext) -> SliceResult:
-    from windex.ccnews.minhash import band_hashes, signature
-
     if ctx.source_id is None:
         raise PermanentTaskError("dedup.minhash requires a source-bound Pipeline Run")
     source_id = ctx.source_id
@@ -93,3 +92,6 @@ def dedup_minhash(ctx: TaskContext) -> SliceResult:
         return outputs
 
     return _run(ctx, transform)
+
+
+dedup_minhash.__windex_digest_dependencies__ = (signature,)

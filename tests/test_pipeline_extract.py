@@ -78,7 +78,7 @@ def test_warc_extraction_resumes_in_durable_record_chunks(
 
     monkeypatch.setattr(warc, "pending_batches", pending)
     monkeypatch.setattr(warc, "finish_batch", finish)
-    monkeypatch.setattr("windex.ccnews.pipeline.process_batch", process)
+    monkeypatch.setattr(warc, "process_batch", process)
     monkeypatch.setattr(
         warc,
         "Settings",

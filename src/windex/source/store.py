@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import secrets
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
@@ -12,114 +11,38 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-from windex.config import Settings, invalidate_overrides
+from windex.config import Settings
 from windex.pipeline.compile import resolve_parameters
 from windex.pipeline.contracts import SEARCH_SOURCE_CONTRACT
-from windex.pipeline.events import lock_journal
-from windex.pipeline.spec import Pipeline, parse
+from windex.pipeline.spec import parse
 from windex.pipeline.store import get_revision
 from windex.pipeline.validation import validate_deployment
+from windex.source._projections import get_source, list_sources, lock_source
+from windex.source._shared import (
+    SourceConflictError,
+    StaleSourceError,
+    values_hash,
+)
+from windex.source.operator_store import (
+    delete_operator_setting,
+    get_operator_settings,
+    list_secrets,
+    patch_operator_settings,
+)
+from windex.source.settings_store import (
+    delete_setting,
+    patch_settings,
+    settings_projection,
+)
+from windex.source.trigger_store import (
+    create_trigger,
+    delete_trigger,
+    list_triggers,
+    update_trigger,
+)
 from windex.source.trigger_validation import (
     TriggerValidationError,
-    scheduled_next_fire,
-    validate_trigger,
 )
-
-
-class StaleSourceError(RuntimeError):
-    pass
-
-
-class SourceConflictError(RuntimeError):
-    pass
-
-
-def values_hash(values: Mapping[str, Any]) -> str:
-    canonical = json.dumps(
-        dict(values), sort_keys=True, separators=(",", ":"), default=str)
-    return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
-
-
-_SOURCE_SELECT = """
-SELECT s.id, s.name, s.title, s.description, s.origin, s.metadata,
-       s.pipeline_revision_id, p.name, r.version, r.spec_hash,
-       s.search_contract_version, s.search_name, s.id_prefix, s.collection_key,
-       s.search_profile, s.include_in_all, s.state_namespace, s.enabled,
-       s.generation, s.archived_at, s.created_at, s.updated_at, c.values,
-       c.values_hash, ctl.paused, ctl.pause_reason, ctl.paused_at, r.spec,
-       r.module_locks
-  FROM sources s
-  JOIN pipeline_revisions r ON r.id = s.pipeline_revision_id
-  JOIN pipelines p ON p.id = r.pipeline_id
-  JOIN source_config c ON c.source_id = s.id
-  JOIN source_control ctl ON ctl.source_id = s.id
-"""
-
-
-def _source(
-    row: tuple[Any, ...],
-    *,
-    include_spec: bool = False,
-    ready: bool,
-) -> dict[str, Any]:
-    keys = (
-        "id", "name", "title", "description", "origin", "metadata",
-        "pipeline_revision_id", "pipeline_name", "pipeline_version", "pipeline_hash",
-        "search_contract_version", "search_name", "id_prefix", "collection_key",
-        "search_profile", "include_in_all", "state_namespace", "enabled",
-        "generation", "archived_at", "created_at", "updated_at", "values",
-        "values_hash", "paused", "pause_reason", "paused_at", "spec",
-        "_module_locks",
-    )
-    out = dict(zip(keys, row))
-    for key in ("archived_at", "created_at", "updated_at", "paused_at"):
-        if out[key] is not None:
-            out[key] = out[key].isoformat()
-    out["etag"] = out["values_hash"]
-    out["ready"] = ready
-    out.pop("_module_locks")
-    if not include_spec:
-        out.pop("spec")
-    return out
-
-
-def _source_projections(
-    conn: psycopg.Connection,
-    rows: list[tuple[Any, ...]],
-    *,
-    include_spec: bool = False,
-) -> list[dict[str, Any]]:
-    """Project Sources with the runtime availability of their frozen revision."""
-    from windex.pipeline import registry
-
-    lock_sets = [row[-1] or {} for row in rows]
-    unavailable = registry.unavailable_modules_many(conn, lock_sets)
-    return [
-        _source(row, include_spec=include_spec, ready=not missing)
-        for row, missing in zip(rows, unavailable, strict=True)
-    ]
-
-
-def get_source(
-    conn: psycopg.Connection, name: str, *, include_spec: bool = False,
-) -> dict[str, Any] | None:
-    with conn.cursor() as cur:
-        cur.execute(_SOURCE_SELECT + " WHERE s.name = %s", (name,))
-        row = cur.fetchone()
-    if row is None:
-        return None
-    return _source_projections(
-        conn, [row], include_spec=include_spec)[0]
-
-
-def list_sources(
-    conn: psycopg.Connection, *, include_archived: bool = False,
-) -> list[dict[str, Any]]:
-    where = "" if include_archived else " WHERE s.archived_at IS NULL"
-    with conn.cursor() as cur:
-        cur.execute(_SOURCE_SELECT + where + " ORDER BY s.name")
-        rows = cur.fetchall()
-    return _source_projections(conn, rows)
 
 
 def _conflicts(conn: psycopg.Connection, *, exclude: str | None = None) -> dict[str, set[str]]:
@@ -274,142 +197,6 @@ def patch_source(
     return get_source(conn, name)  # type: ignore[return-value]
 
 
-def settings_projection(
-    conn: psycopg.Connection, name: str, *, settings: Settings | None = None,
-) -> dict[str, Any]:
-    source = get_source(conn, name, include_spec=True)
-    if source is None:
-        raise KeyError(name)
-    pipeline = parse(source["spec"], settings)
-    configured = source["values"]
-    fields = []
-    for declaration in pipeline.parameters:
-        value = configured.get(declaration.key)
-        origin = "source" if declaration.key in configured else (
-            "default" if declaration.default is not None else "unset")
-        fields.append({
-            **declaration.to_spec(),
-            "value": None if declaration.secret else value,
-            "origin": origin,
-            "secret_set": bool(value) if declaration.secret else False,
-            "clamped": False,
-        })
-    return {
-        "source": name,
-        "pipeline": source["pipeline_name"],
-        "pipeline_version": source["pipeline_version"],
-        "etag": source["values_hash"],
-        "values": {
-            key: value for key, value in configured.items()
-            if not next(
-                (p.secret for p in pipeline.parameters if p.key == key), False)
-        },
-        "fields": fields,
-    }
-
-
-def _normalize_configured_parameters(
-    pipeline: Pipeline,
-    settings: Settings,
-    values: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Resolve configured values without materializing an unset optional key."""
-    normalized = resolve_parameters(pipeline, settings, values)
-    for declaration in pipeline.parameters:
-        if (
-            declaration.key not in values
-            and declaration.default is None
-            and not declaration.required
-        ):
-            normalized.pop(declaration.key, None)
-    return normalized
-
-
-def patch_settings(
-    conn: psycopg.Connection,
-    name: str,
-    changes: Mapping[str, Any],
-    *,
-    if_match: str,
-    settings: Settings | None = None,
-) -> dict[str, Any]:
-    source = get_source(conn, name, include_spec=True)
-    if source is None:
-        raise KeyError(name)
-    if source["values_hash"] != if_match:
-        raise StaleSourceError("Source settings ETag is stale")
-    pipeline = parse(source["spec"], settings)
-    candidate = {**source["values"], **dict(changes)}
-    normalized = _normalize_configured_parameters(
-        pipeline, settings or Settings(), candidate)
-    return _replace_settings(
-        conn,
-        name,
-        source,
-        normalized,
-        if_match=if_match,
-        settings=settings,
-    )
-
-
-def _replace_settings(
-    conn: psycopg.Connection,
-    name: str,
-    source: Mapping[str, Any],
-    values: Mapping[str, Any],
-    *,
-    if_match: str,
-    settings: Settings | None = None,
-) -> dict[str, Any]:
-    """Store one exact, normalized Source configuration behind its ETag."""
-    if source["values_hash"] != if_match:
-        raise StaleSourceError("Source settings ETag is stale")
-    digest = values_hash(values)
-    with conn.cursor() as cur:
-        cur.execute(
-            """UPDATE source_config
-                  SET values = %s, values_hash = %s, updated_at = now()
-                WHERE source_id = %s AND values_hash = %s RETURNING source_id""",
-            (Jsonb(dict(values)), digest, source["id"], if_match),
-        )
-        if cur.fetchone() is None:
-            conn.rollback()
-            raise StaleSourceError("Source settings ETag is stale")
-    conn.commit()
-    return settings_projection(conn, name, settings=settings)
-
-
-def delete_setting(
-    conn: psycopg.Connection,
-    name: str,
-    key: str,
-    *,
-    if_match: str,
-    settings: Settings | None = None,
-) -> dict[str, Any]:
-    source = get_source(conn, name, include_spec=True)
-    if source is None:
-        raise KeyError(name)
-    values = dict(source["values"])
-    pipeline = parse(source["spec"], settings)
-    declaration = next((p for p in pipeline.parameters if p.key == key), None)
-    if declaration is None:
-        raise ValueError(f"unknown Pipeline parameter {key!r}")
-    values.pop(key, None)
-    if declaration.default is not None:
-        values[key] = declaration.default
-    normalized = _normalize_configured_parameters(
-        pipeline, settings or Settings(), values)
-    return _replace_settings(
-        conn,
-        name,
-        source,
-        normalized,
-        if_match=if_match,
-        settings=settings,
-    )
-
-
 def set_paused(
     conn: psycopg.Connection, name: str, paused: bool, reason: str = "",
 ) -> dict[str, Any]:
@@ -442,304 +229,6 @@ def archive(conn: psycopg.Connection, name: str) -> bool:
         changed = cur.fetchone() is not None
     conn.commit()
     return changed
-
-
-def list_triggers(conn: psycopg.Connection, name: str) -> list[dict[str, Any]]:
-    with conn.cursor() as cur:
-        cur.execute(
-            """SELECT t.id, t.flow_name, t.trigger_type, t.trigger_spec, t.enabled,
-                      t.next_fire_at, t.last_fired_at, t.last_run_id
-                 FROM source_triggers t JOIN sources s ON s.id = t.source_id
-                WHERE s.name = %s ORDER BY t.id""",
-            (name,),
-        )
-        return [{
-            "id": row[0], "flow_name": row[1], "trigger_type": row[2],
-            "trigger_spec": row[3], "enabled": row[4],
-            "next_fire_at": row[5].isoformat() if row[5] else None,
-            "last_fired_at": row[6].isoformat() if row[6] else None,
-            "last_run_id": row[7],
-        } for row in cur.fetchall()]
-
-
-def _lock_source(
-    conn: psycopg.Connection,
-    name: str,
-    *,
-    include_spec: bool = False,
-) -> dict[str, Any] | None:
-    """Lock a Source while changing configuration bound to its revision."""
-
-    with conn.cursor() as cur:
-        cur.execute(
-            _SOURCE_SELECT + " WHERE s.name = %s FOR UPDATE OF s",
-            (name,),
-        )
-        row = cur.fetchone()
-    return (
-        _source_projections(conn, [row], include_spec=include_spec)[0]
-        if row is not None
-        else None
-    )
-
-
-def _trigger_transaction_time(conn: psycopg.Connection) -> datetime:
-    """Use Postgres' transaction clock for an atomic re-arm decision."""
-
-    with conn.cursor() as cur:
-        cur.execute("SELECT now()")
-        return cur.fetchone()[0]
-
-
-def _scheduled_deadline(
-    *,
-    trigger_type: str,
-    trigger_spec: Mapping[str, Any],
-    enabled: bool,
-    explicit: Any,
-    reset: bool,
-    conn: psycopg.Connection,
-) -> Any:
-    """Resolve the stored deadline after a trigger create or patch.
-
-    Disabled, event, and manual triggers are always unarmed.  A non-null
-    explicit deadline wins for an enabled schedule.  Otherwise ``reset``
-    requests a fresh deadline from the transaction clock.
-    """
-
-    if not enabled or trigger_type not in {"cron", "interval"}:
-        return None
-    if explicit is not None:
-        return explicit
-    if reset:
-        return scheduled_next_fire(
-            trigger_type,
-            trigger_spec,
-            _trigger_transaction_time(conn),
-        )
-    return None
-
-
-def _event_journal_tail(cur: psycopg.Cursor) -> int:
-    """Return the highest committed operational event visible to this change."""
-
-    lock_journal(cur, exclusive=True)
-    cur.execute("SELECT coalesce(max(seq), 0) FROM operational_events")
-    return int(cur.fetchone()[0])
-
-
-def _rebase_event_cursor(cur: psycopg.Cursor, trigger_id: int) -> None:
-    """Start an event trigger after the journal state visible right now."""
-
-    tail = _event_journal_tail(cur)
-    cur.execute(
-        """INSERT INTO source_event_trigger_cursors
-                   (trigger_id, after_seq, last_checked_at, updated_at)
-           VALUES (%s, %s, now(), now())
-           ON CONFLICT (trigger_id) DO UPDATE
-                   SET after_seq = excluded.after_seq,
-                       last_checked_at = excluded.last_checked_at,
-                       updated_at = excluded.updated_at""",
-        (trigger_id, tail),
-    )
-
-
-def create_trigger(
-    conn: psycopg.Connection, name: str, body: Mapping[str, Any],
-) -> dict[str, Any]:
-    enabled = body.get("enabled", True)
-    if not isinstance(enabled, bool):
-        raise TriggerValidationError(
-            ("enabled",), "trigger enabled must be a boolean")
-    validate_trigger(
-        body.get("trigger_type"),
-        body.get("trigger_spec", {}),
-        next_fire_at=body.get("next_fire_at"),
-    )
-    source = _lock_source(conn, name, include_spec=True)
-    if source is None:
-        conn.rollback()
-        raise KeyError(name)
-    flows = set(source["spec"]["flows"])
-    if body.get("flow_name") not in flows:
-        conn.rollback()
-        raise ValueError("trigger Flow does not exist in the active revision")
-    deadline = _scheduled_deadline(
-        trigger_type=body["trigger_type"],
-        trigger_spec=body.get("trigger_spec") or {},
-        enabled=enabled,
-        explicit=body.get("next_fire_at"),
-        reset=True,
-        conn=conn,
-    )
-    with conn.cursor() as cur:
-        cur.execute(
-            """INSERT INTO source_triggers
-                   (source_id, flow_name, trigger_type, trigger_spec, enabled,
-                    next_fire_at)
-               VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-            (
-                source["id"], body["flow_name"], body["trigger_type"],
-                Jsonb(dict(body.get("trigger_spec") or {})),
-                enabled, deadline,
-            ),
-        )
-        trigger_id = cur.fetchone()[0]
-        if body["trigger_type"] == "event":
-            _rebase_event_cursor(cur, trigger_id)
-    conn.commit()
-    return next(item for item in list_triggers(conn, name) if item["id"] == trigger_id)
-
-
-def update_trigger(
-    conn: psycopg.Connection,
-    name: str,
-    trigger_id: int,
-    changes: Mapping[str, Any],
-) -> dict[str, Any]:
-    fields = (
-        "flow_name", "trigger_type", "trigger_spec", "enabled", "next_fire_at")
-    allowed = set(fields)
-    unknown = set(changes) - allowed
-    if unknown:
-        raise ValueError(f"unknown trigger fields: {', '.join(sorted(unknown))}")
-    source = _lock_source(conn, name, include_spec=True)
-    if source is None:
-        conn.rollback()
-        raise KeyError(name)
-    with conn.cursor() as cur:
-        cur.execute(
-            """SELECT t.id, t.flow_name, t.trigger_type, t.trigger_spec,
-                      t.enabled, t.next_fire_at, t.last_fired_at, t.last_run_id
-                 FROM source_triggers t
-                WHERE t.id = %s AND t.source_id = %s
-                  FOR UPDATE OF t""",
-            (trigger_id, source["id"]),
-        )
-        row = cur.fetchone()
-    if row is None:
-        conn.rollback()
-        raise KeyError(trigger_id)
-    current = {
-        "id": row[0],
-        "flow_name": row[1],
-        "trigger_type": row[2],
-        "trigger_spec": row[3],
-        "enabled": row[4],
-        "next_fire_at": row[5].isoformat() if row[5] else None,
-        "last_fired_at": row[6].isoformat() if row[6] else None,
-        "last_run_id": row[7],
-    }
-    requested = dict(changes)
-    candidate = {**current, **requested}
-    if candidate["flow_name"] not in set(source["spec"]["flows"]):
-        raise ValueError("trigger Flow does not exist in the active revision")
-    if not isinstance(candidate["enabled"], bool):
-        raise TriggerValidationError(
-            ("enabled",), "trigger enabled must be a boolean")
-
-    cadence_changed = (
-        candidate["trigger_type"] != current["trigger_type"]
-        or candidate["trigger_spec"] != current["trigger_spec"]
-    )
-    enabled_changed = candidate["enabled"] != current["enabled"]
-    deadline_explicit = "next_fire_at" in requested
-    explicit_deadline = requested.get("next_fire_at")
-
-    # A stale deadline from the prior trigger kind must not make an otherwise
-    # valid switch to event/manual fail validation.  A caller-supplied non-null
-    # deadline is still rejected for those trigger kinds.
-    if candidate["trigger_type"] not in {"cron", "interval"}:
-        deadline_for_validation = (
-            explicit_deadline
-            if deadline_explicit and explicit_deadline is not None
-            else None
-        )
-    else:
-        deadline_for_validation = (
-            explicit_deadline
-            if deadline_explicit
-            else candidate["next_fire_at"]
-        )
-    validate_trigger(
-        candidate["trigger_type"],
-        candidate["trigger_spec"],
-        next_fire_at=deadline_for_validation,
-    )
-
-    reset_deadline = (
-        cadence_changed
-        or (enabled_changed and candidate["enabled"])
-        or (deadline_explicit and explicit_deadline is None)
-    )
-    if (
-        candidate["enabled"]
-        and candidate["trigger_type"] in {"cron", "interval"}
-        and not reset_deadline
-        and not deadline_explicit
-    ):
-        deadline = current["next_fire_at"]
-    else:
-        deadline = _scheduled_deadline(
-            trigger_type=candidate["trigger_type"],
-            trigger_spec=candidate["trigger_spec"],
-            enabled=candidate["enabled"],
-            explicit=explicit_deadline if deadline_explicit else None,
-            reset=reset_deadline,
-            conn=conn,
-        )
-    candidate["next_fire_at"] = deadline
-
-    effective = {
-        key: candidate[key]
-        for key in fields
-        if candidate[key] != current[key]
-    }
-    if not effective:
-        conn.commit()
-        return current
-
-    assignments, args = [], []
-    for key, value in effective.items():
-        assignments.append(f"{key} = %s")
-        args.append(Jsonb(dict(value)) if key == "trigger_spec" else value)
-    args.extend([trigger_id, source["id"]])
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""UPDATE source_triggers
-                   SET {', '.join(assignments)}, updated_at = now()
-                 WHERE id = %s AND source_id = %s
-                 RETURNING id""",
-            args,
-        )
-        if cur.fetchone() is None:
-            conn.rollback()
-            raise KeyError(trigger_id)
-        if candidate["trigger_type"] == "event":
-            # Any effective edit changes the meaning or availability of the
-            # binding.  Rebase rather than applying a new binding to events
-            # observed under the old one (including time spent disabled).
-            _rebase_event_cursor(cur, trigger_id)
-        elif current["trigger_type"] == "event":
-            cur.execute(
-                "DELETE FROM source_event_trigger_cursors WHERE trigger_id = %s",
-                (trigger_id,),
-            )
-    conn.commit()
-    return next(item for item in list_triggers(conn, name) if item["id"] == trigger_id)
-
-
-def delete_trigger(conn: psycopg.Connection, name: str, trigger_id: int) -> bool:
-    with conn.cursor() as cur:
-        cur.execute(
-            """DELETE FROM source_triggers t USING sources s
-                WHERE t.source_id = s.id AND t.id = %s AND s.name = %s
-                RETURNING t.id""",
-            (trigger_id, name),
-        )
-        deleted = cur.fetchone() is not None
-    conn.commit()
-    return deleted
 
 
 def _confirmation(
@@ -1068,7 +557,7 @@ def upgrade(
         # Serialize revision changes with all trigger mutations.  The preview
         # hash detects edits that committed before this lock; operations that
         # start afterward block and then validate against the new revision.
-        source = _lock_source(conn, name, include_spec=True)
+        source = lock_source(conn, name, include_spec=True)
         if source is None:
             raise KeyError(name)
         with conn.cursor() as cur:
@@ -1272,97 +761,6 @@ def module_statuses(
             "unavailable_modules": unavailable,
         })
     return result
-
-
-def get_operator_settings(conn: psycopg.Connection) -> dict[str, Any]:
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT values, values_hash, updated_at FROM operator_settings "
-            "WHERE scope = '_global'")
-        row = cur.fetchone()
-    if row is None:
-        return {"scope": "_global", "values": {}, "etag": values_hash({})}
-    return {
-        "scope": "_global", "values": row[0], "etag": row[1],
-        "updated_at": row[2].isoformat(),
-    }
-
-
-def patch_operator_settings(
-    conn: psycopg.Connection,
-    changes: Mapping[str, Any],
-    *,
-    if_match: str,
-) -> dict[str, Any]:
-    from windex import settings_schema
-
-    current = get_operator_settings(conn)
-    if current["etag"] != if_match:
-        raise StaleSourceError("operator settings ETag is stale")
-    normalized = settings_schema.coerce_all(
-        settings_schema.GLOBAL, dict(changes))
-    candidate = {**current["values"], **normalized}
-    digest = values_hash(candidate)
-    with conn.cursor() as cur:
-        cur.execute(
-            """UPDATE operator_settings
-                  SET values = %s, values_hash = %s, updated_at = now()
-                WHERE scope = '_global' AND values_hash = %s RETURNING scope""",
-            (Jsonb(candidate), digest, if_match),
-        )
-        if cur.fetchone() is None:
-            conn.rollback()
-            raise StaleSourceError("operator settings ETag is stale")
-    conn.commit()
-    invalidate_overrides()
-    return get_operator_settings(conn)
-
-
-def delete_operator_setting(
-    conn: psycopg.Connection,
-    key: str,
-    *,
-    if_match: str,
-) -> dict[str, Any]:
-    from windex import settings_schema
-
-    allowed = {
-        declaration.key
-        for declaration in settings_schema.fields_for(settings_schema.GLOBAL)
-    }
-    if key not in allowed:
-        raise ValueError(f"{key!r} is not an editable operator setting")
-    current = get_operator_settings(conn)
-    candidate = dict(current["values"])
-    candidate.pop(key, None)
-    # PATCH merges, so update directly for a deletion.
-    if current["etag"] != if_match:
-        raise StaleSourceError("operator settings ETag is stale")
-    digest = values_hash(candidate)
-    with conn.cursor() as cur:
-        cur.execute(
-            """UPDATE operator_settings
-                  SET values = %s, values_hash = %s, updated_at = now()
-                WHERE scope = '_global' AND values_hash = %s RETURNING scope""",
-            (Jsonb(candidate), digest, if_match),
-        )
-        if cur.fetchone() is None:
-            conn.rollback()
-            raise StaleSourceError("operator settings ETag is stale")
-    conn.commit()
-    invalidate_overrides()
-    return get_operator_settings(conn)
-
-
-def list_secrets(conn: psycopg.Connection) -> list[dict[str, Any]]:
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT name, provider, configured, metadata, updated_at "
-            "FROM secret_references ORDER BY name")
-        return [{
-            "name": row[0], "provider": row[1], "configured": row[2],
-            "metadata": row[3], "updated_at": row[4].isoformat(),
-        } for row in cur.fetchall()]
 
 
 __all__ = [

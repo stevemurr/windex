@@ -14,7 +14,8 @@ All facts verified against the live OAI-PMH endpoint on 2026-07-16, not memory. 
   harvests metadata only (title + abstract), never PDFs/source.
 - **Rate limit** (arXiv Terms of Use): 1 request / 3 seconds, a single
   connection, and a descriptive `User-Agent` with a contact URL (the shared
-  windex UA). Enforced in `harvest.py` (`arxiv_request_interval = 3.0`).
+  windex UA). Enforced by the epoch-2 `http.paginate` Module using the
+  Source's `request_interval` setting.
 - **Record shape** (`metadataPrefix=arXiv`): `id`, `created`, `updated`,
   `authors` (each `keyname` + `forenames` [+ `suffix`]), `title`, `categories`
   (space-separated, **first = primary**), `abstract`, and optional `doi`,

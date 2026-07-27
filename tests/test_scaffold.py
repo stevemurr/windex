@@ -39,27 +39,9 @@ def test_ledger_probes_carry_no_source_predicate():
     assert not offenders, f"source predicate alongside an id list: {offenders}"
 
 
-def test_every_documents_batch_writer_locks_in_id_order():
-    """Regression (2026-07-16): wiki ingest upserted `documents` in dump order
-    while the embed loop UPDATEd the same rows in parquet order. Two
-    transactions, same row locks, different order — deadlock. Postgres killed
-    one and the whole shard failed; two shards died that way, leaving 5% of the
-    wiki corpus unindexed. Sorting only one side does NOT help: a cycle needs
-    only one writer out of order, so every batch writer must sort."""
+def test_embed_status_updates_lock_in_id_order():
+    """Keep the epoch-2 embed driver's status update lock order stable."""
     import pathlib
-    import re
 
-    writers = {
-        "src/windex/wiki/ingest.py", "src/windex/docs_source/ingest.py",
-        "src/windex/hn/harvest.py", "src/windex/arxiv/harvest.py",
-        "src/windex/smallweb/poll.py", "src/windex/embed/pipeline.py",
-        "src/windex/hf/crawl.py",
-    }
-    for path in sorted(writers):
-        src = pathlib.Path(path).read_text()
-        assert re.search(r"sort\(|sorted\(", src), f"{path}: no sort before a documents batch write"
-
-    # and the shared embed driver must sort the ids it locks (embedded + rejected
-    # go into one sorted array used by the status UPDATE's WHERE id = ANY(...))
     driver = pathlib.Path("src/windex/embed/pipeline.py").read_text()
     assert "all_ids = sorted(" in driver, "embed driver UPDATEs documents without ordering its locks"

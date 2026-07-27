@@ -13,8 +13,7 @@ import json
 import os
 import re
 import time
-from collections import deque
-from datetime import date, datetime, timezone, timedelta
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -29,14 +28,32 @@ from windex.config import Settings
 from windex.crawl.fetch import BlockedTarget, check_url
 from windex.crawl.links import extract_links
 from windex.crawl.scope import canonicalize, in_scope
+from windex.github.api import (
+    TokenPool as _GitHubTokenPool,
+    build_graphql_query as _build_graphql_query,
+    graphql_post as _graphql_post,
+)
 from windex.modules.common import (
     _store_outputs,
     finish_batch,
     pending_batches,
     require_type,
 )
+from windex.modules.fetch_paginate import (
+    DIGEST_DEPENDENCIES as _PAGINATION_DIGEST_DEPENDENCIES,
+    _algolia,
+    _github_search,
+    _link_header,
+    _oai,
+)
+from windex.modules.fetch_urls import (
+    assert_host as _assert_host,
+    hosts as _hosts,
+    unit_url as _unit_url,
+)
 from windex.pipeline.ports import PartitionRef, RawBlob, WorkUnit
-from windex.smallweb.poll import HostRateLimiter, RobotsCache
+from windex.smallweb.http import HostRateLimiter, RobotsCache
+from windex.wiki.snapshots import latest_complete as _wiki_latest_complete
 from windex.worker.protocol import PermanentTaskError, SliceResult, TaskContext
 
 _INPUT_BATCH = 40
@@ -44,40 +61,6 @@ _USER_AGENT = "windex/1.0 (+local knowledge index)"
 _REDIRECTS = frozenset({301, 302, 303, 307, 308})
 _CRAWL_UNIT_PREFIX = "crawl-url:"
 _CRAWL_COVERAGE_KEY = "crawl-coverage"
-
-
-def _hosts(raw) -> set[str]:
-    values = raw if isinstance(raw, list) else str(raw or "").split(",")
-    return {str(value).strip().lower() for value in values if str(value).strip()}
-
-
-def _assert_host(url: str, allowed: set[str]) -> None:
-    host = (urlsplit(url).hostname or "").lower()
-    if not host or (allowed and host not in allowed):
-        raise PermanentTaskError(
-            f"fetch target host {host or '<missing>'!r} is not in the allowlist")
-
-
-def _unit_url(ctx: TaskContext, unit: WorkUnit) -> str:
-    # A root's stored URL is its human-facing landing page. The enumeration
-    # contract is llms.txt; page children carry `path` plus their own URL and
-    # must still take the ordinary payload branch below.
-    if (ctx.search_name == "hf" and unit.ref.store == "root"
-            and not unit.payload.get("path")):
-        key = unit.ref.key.strip("/")
-        return f"https://huggingface.co/{key}/llms.txt"
-    if unit.payload.get("url"):
-        return str(unit.payload["url"])
-    if ctx.search_name == "hf" and unit.ref.key == "sitemap":
-        return "https://huggingface.co/sitemap.xml"
-    if ctx.search_name == "hf":
-        key = unit.ref.key.strip("/")
-        if unit.ref.store == "post":
-            return f"https://huggingface.co/blog/{key}"
-    if unit.ref.key.startswith(("http://", "https://")):
-        return unit.ref.key
-    raise PermanentTaskError(
-        f"{ctx.module} cannot derive a URL for unit {unit.ref.key!r}")
 
 
 def _template_url(ctx: TaskContext, unit: WorkUnit) -> str:
@@ -130,10 +113,8 @@ def _request_download(ctx: TaskContext, unit: WorkUnit,
     allowed = _hosts(ctx.config.get("allowed_hosts"))
     _assert_host(url, allowed)
     if ctx.search_name == "wiki" and unit.ref.key == "dump-index":
-        from windex.wiki.sync import latest_complete
-
         wiki = str(ctx.effective_config.get("dump", "enwiki"))
-        dump_date, files = latest_complete(client, wiki)
+        dump_date, files = _wiki_latest_complete(client, wiki)
         listing = ""
         if dump_date:
             listing = '<a href="_SUCCESS">_SUCCESS</a>\n' + "\n".join(
@@ -242,6 +223,13 @@ def http_download(ctx: TaskContext) -> SliceResult:
     ) as client:
         return _run_batches(
             ctx, lambda unit: [_request_download(ctx, unit, client)])
+
+
+http_download.__windex_digest_dependencies__ = (
+    _wiki_latest_complete,
+    _assert_host,
+    pending_batches,
+)
 
 
 def _allowed_types(raw) -> tuple[str, ...]:
@@ -382,8 +370,8 @@ def _retry_after_seconds(response: httpx.Response) -> float:
         try:
             when = parsedate_to_datetime(raw)
             if when.tzinfo is None:
-                when = when.replace(tzinfo=timezone.utc)
-            return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+                when = when.replace(tzinfo=UTC)
+            return max(0.0, (when - datetime.now(UTC)).total_seconds())
         except (TypeError, ValueError, OverflowError):
             return 0.0
 
@@ -757,7 +745,7 @@ def _crawl_http_get(
 def _hf_sync_blob(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
                   robots: RobotsCache, limiter: HostRateLimiter) -> RawBlob:
     from windex.hf import license_for
-    from windex.hf.sync import (
+    from windex.hf.formats import (
         WANTED_SHARDS,
         kind_of,
         parse_llms,
@@ -846,7 +834,7 @@ def _hf_sync_blob(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
 def _hf_root_pages(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
                    robots: RobotsCache,
                    limiter: HostRateLimiter) -> list[RawBlob]:
-    from windex.hf.sync import parse_llms
+    from windex.hf.formats import parse_llms
 
     listing = _page(ctx, unit, client, robots, limiter)
     if not listing.body:
@@ -908,7 +896,7 @@ def _smallweb_feed(ctx: TaskContext, unit: WorkUnit, client: httpx.Client,
                    robots: RobotsCache, limiter: HostRateLimiter) -> RawBlob:
     import feedparser
 
-    from windex.smallweb.poll import (
+    from windex.smallweb.feed import (
         entry_link,
         entry_published,
         entry_title,
@@ -1037,164 +1025,6 @@ def http_get(ctx: TaskContext) -> SliceResult:
     )
 
 
-def _oai(ctx: TaskContext, unit: WorkUnit, client: httpx.Client) -> list[RawBlob]:
-    endpoint = Settings().arxiv_oai_endpoint
-    interval = float(ctx.config.get("request_interval", 3))
-    token = None
-    outputs = []
-    while True:
-        params = (
-            {"verb": "ListRecords", "resumptionToken": token}
-            if token else
-            {"verb": "ListRecords",
-             "metadataPrefix": Settings().arxiv_metadata_prefix,
-             "from": unit.payload["from"], "until": unit.payload["until"]}
-        )
-        response = client.get(endpoint, params=params)
-        response.raise_for_status()
-        outputs.append(RawBlob(
-            ref=unit.ref,
-            uri=str(response.url),
-            media_type=response.headers.get("content-type", "application/xml"),
-            body=response.content,
-            meta={"status": response.status_code, "page": len(outputs) + 1,
-                  "payload": unit.payload, "upstream": unit.upstream},
-            epoch=unit.epoch,
-        ))
-        from windex.arxiv.harvest import parse_records
-
-        _, token = parse_records(response.content)
-        # The next request may be either another resumption page in this call
-        # or the first page of a new window in a later worker slice. Cool down
-        # after terminal pages too, otherwise the slice boundary bypasses the
-        # configured arXiv request interval.
-        time.sleep(interval)
-        if not token:
-            return outputs
-        # A date window is the replace/resume boundary. Finish it even when the
-        # supervisor requests a yield; the heartbeat thread keeps the lease
-        # alive and _run_batches yields cleanly before claiming another window.
-
-
-def _algolia(ctx: TaskContext, unit: WorkUnit,
-              client: httpx.Client) -> list[RawBlob]:
-    from windex.hn.harvest import fetch_window_stories
-
-    interval = float(ctx.config.get("request_interval", 1))
-    last = [0.0]
-
-    def pace():
-        delay = interval - (time.monotonic() - last[0])
-        if delay > 0:
-            time.sleep(delay)
-        last[0] = time.monotonic()
-
-    hits, queries = fetch_window_stories(
-        client,
-        Settings().hn_algolia_url,
-        int(unit.payload["from_ts"]),
-        int(unit.payload["until_ts"]),
-        on_request=pace,
-        max_hits=int(ctx.config.get("result_cap", 1000)),
-    )
-    return [RawBlob(
-        ref=unit.ref,
-        uri=Settings().hn_algolia_url,
-        media_type="application/json",
-        body=json.dumps({"hits": hits}).encode(),
-        meta={"status": 200, "queries": queries, "payload": unit.payload,
-              "upstream": unit.upstream},
-        epoch=unit.epoch,
-    )]
-
-
-def _github_search(ctx: TaskContext, unit: WorkUnit,
-                   client: httpx.Client) -> list[RawBlob]:
-    from windex.github.discover import _get
-
-    tokens = Settings().github_token_list()
-    if not tokens:
-        raise PermanentTaskError("github_search_pages requires a GitHub token")
-    threshold = int(unit.payload.get(
-        "star_threshold", ctx.effective_config.get("star_threshold", 10)))
-    start = date.fromisoformat(str(unit.payload.get("from", "2008-01-01")))
-    end = date.fromisoformat(str(unit.payload.get("to", date.today().isoformat())))
-    page_size = int(ctx.config.get("page_size", 100))
-    cap = int(ctx.config.get("result_cap", 1000))
-    split = bool(ctx.config.get("split_on_cap", True))
-    interval = float(ctx.config.get("request_interval", 2.1))
-    queue = deque([(start, end)])
-    items = []
-    leaves = []
-    token_index = 0
-    while queue:
-        a, b = queue.popleft()
-        query = f"stars:>={threshold} created:{a}..{b}"
-        token = tokens[token_index % len(tokens)]
-        token_index += 1
-        first = _get(
-            client, token,
-            {"q": query, "per_page": page_size, "page": 1},
-        )
-        total = int(first.get("total_count", 0))
-        if split and total > cap and (b - a).days >= 1:
-            midpoint = a + (b - a) / 2
-            queue.extend(((a, midpoint), (midpoint + timedelta(days=1), b)))
-            time.sleep(interval / len(tokens))
-            continue
-        shard_items = list(first.get("items") or [])
-        pages = min((min(total, cap) + page_size - 1) // page_size,
-                    max(1, cap // page_size))
-        for page in range(2, pages + 1):
-            time.sleep(interval / len(tokens))
-            token = tokens[token_index % len(tokens)]
-            token_index += 1
-            shard_items.extend(_get(
-                client, token,
-                {"q": query, "per_page": page_size, "page": page},
-            ).get("items") or [])
-        items.extend(shard_items)
-        leaves.append({
-            "from": a.isoformat(), "to": b.isoformat(),
-            "star_threshold": threshold, "repos": len(shard_items),
-            "capped": total > cap,
-        })
-        # state.pending emits one creation day per input unit. Complete that
-        # bounded unit atomically, then _run_batches observes the yield before
-        # claiming another day.
-        time.sleep(interval / len(tokens))
-    return [RawBlob(
-        ref=unit.ref,
-        uri="https://api.github.com/search/repositories",
-        media_type="application/json",
-        body=json.dumps({"items": items, "shards": leaves}).encode(),
-        meta={"status": 200, "items": len(items), "payload": unit.payload,
-              "upstream": unit.upstream},
-        epoch=unit.epoch,
-    )]
-
-
-def _link_header(ctx: TaskContext, unit: WorkUnit,
-                 client: httpx.Client) -> list[RawBlob]:
-    url = _unit_url(ctx, unit)
-    allowed = _hosts(ctx.config.get("allowed_hosts"))
-    outputs = []
-    while url:
-        _assert_host(url, allowed)
-        response = client.get(url)
-        response.raise_for_status()
-        outputs.append(RawBlob(
-            ref=unit.ref, uri=str(response.url),
-            media_type=response.headers.get("content-type", ""),
-            body=response.content,
-            meta={"status": response.status_code, "payload": unit.payload,
-                  "upstream": unit.upstream},
-            epoch=unit.epoch,
-        ))
-        url = response.links.get("next", {}).get("url")
-    return outputs
-
-
 def http_paginate(ctx: TaskContext) -> SliceResult:
     protocol = str(ctx.config.get("protocol", ""))
     with httpx.Client(
@@ -1215,9 +1045,16 @@ def http_paginate(ctx: TaskContext) -> SliceResult:
     raise PermanentTaskError(f"http.paginate has unknown protocol {protocol!r}")
 
 
-def github_graphql_batch(ctx: TaskContext) -> SliceResult:
-    from windex.github.hydrate import TokenPool, _build_query, _post
+# implementation_digest hashes the runner's source file. Pagination protocols
+# live in a focused helper module now, so include that file explicitly to keep
+# frozen Module locks sensitive to every protocol implementation change.
+http_paginate.__windex_digest_dependencies__ = (
+    *_PAGINATION_DIGEST_DEPENDENCIES,
+    pending_batches,
+)
 
+
+def github_graphql_batch(ctx: TaskContext) -> SliceResult:
     limit = int(ctx.config.get("batch", 40))
     batches, more = pending_batches(ctx, limit=limit)
     pairs = [
@@ -1231,7 +1068,11 @@ def github_graphql_batch(ctx: TaskContext) -> SliceResult:
         raise PermanentTaskError("github.graphql_batch requires a GitHub token")
     names = [str(unit.payload["full_name"]) for _, unit in pairs]
     with httpx.Client(timeout=60) as client:
-        body = _post(client, TokenPool(tokens), _build_query(names))
+        body = _graphql_post(
+            client,
+            _GitHubTokenPool(tokens),
+            _build_graphql_query(names),
+        )
     data = body.get("data") or {}
     grouped: dict[str, list[RawBlob]] = {batch.key: [] for batch in batches}
     for index, (batch, unit) in enumerate(pairs):
@@ -1256,6 +1097,12 @@ def github_graphql_batch(ctx: TaskContext) -> SliceResult:
         exhausted=not more,
         stats={"inputs": len(batches), "repos": len(pairs)},
     )
+
+
+github_graphql_batch.__windex_digest_dependencies__ = (
+    _graphql_post,
+    pending_batches,
+)
 
 
 def local_parquet_lookup(ctx: TaskContext) -> SliceResult:
@@ -1321,3 +1168,6 @@ def local_parquet_lookup(ctx: TaskContext) -> SliceResult:
         exhausted=not more,
         stats={"inputs": done, "matches": sum(map(len, grouped.values()))},
     )
+
+
+local_parquet_lookup.__windex_digest_dependencies__ = (pending_batches,)

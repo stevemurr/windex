@@ -45,6 +45,7 @@ import time
 import uuid
 from collections import deque
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 
 import psycopg
@@ -176,10 +177,8 @@ def _reader(settings: Settings, spec: SourceSpec, refs: dict[str, list[str]],
         err.append(exc)
     finally:
         # Best-effort: on the pause path the main thread has stopped consuming.
-        try:
+        with suppress(queue.Full):
             work_q.put(_DONE, timeout=5)
-        except queue.Full:
-            pass
 
 
 def _upserter(up_q: queue.Queue, client: QdrantClient, collection: str) -> None:

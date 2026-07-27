@@ -10,7 +10,7 @@ from __future__ import annotations
 import csv
 import io
 from calendar import monthrange
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from psycopg import sql
@@ -542,11 +542,11 @@ def _window_rows(ctx: TaskContext, today: date) -> list[tuple[str, dict, bool]]:
         floor = date(2006, 10, 1)
         rows = []
         for year, month in _months(floor, today):
-            start = datetime(year, month, 1, tzinfo=timezone.utc)
+            start = datetime(year, month, 1, tzinfo=UTC)
             end = (
-                datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+                datetime(year + 1, 1, 1, tzinfo=UTC)
                 if month == 12 else
-                datetime(year, month + 1, 1, tzinfo=timezone.utc)
+                datetime(year, month + 1, 1, tzinfo=UTC)
             )
             frm, until = int(start.timestamp()), int(end.timestamp())
             rows.append((
@@ -554,7 +554,7 @@ def _window_rows(ctx: TaskContext, today: date) -> list[tuple[str, dict, bool]]:
                 {"from_ts": frm, "until_ts": until},
                 False,
             ))
-        day0 = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+        day0 = datetime(today.year, today.month, today.day, tzinfo=UTC)
         frm = int((day0 - timedelta(days=incremental)).timestamp())
         until = int((day0 + timedelta(days=1)).timestamp())
         rows.append((
@@ -717,3 +717,6 @@ def crawl_frontier(ctx: TaskContext) -> SliceResult:
         units_total=len(seeds),
         stats={"emitted": done, "store": store, "max_pages": max_pages},
     )
+
+
+crawl_frontier.__windex_digest_dependencies__ = (canonicalize,)

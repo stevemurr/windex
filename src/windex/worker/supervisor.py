@@ -33,6 +33,7 @@ import os
 import signal
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -144,17 +145,13 @@ class Pool:
             self._stopping = True
 
         for sig in (signal.SIGTERM, signal.SIGINT):
-            try:
+            with suppress(ValueError):
                 self._prev_signals[sig] = signal.signal(sig, _stop)
-            except ValueError:      # pragma: no cover — not the main thread (tests)
-                pass
 
     def _restore_signals(self) -> None:
         for sig, handler in self._prev_signals.items():
-            try:
+            with suppress(ValueError, TypeError):
                 signal.signal(sig, handler)     # type: ignore[arg-type]
-            except (ValueError, TypeError):     # pragma: no cover
-                pass
         self._prev_signals.clear()
 
     def shutdown(self) -> None:

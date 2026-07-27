@@ -16,7 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from psycopg.types.json import Jsonb
 
-from windex.ccnews.dedup import text_hash
+from windex.ccnews.identity import text_hash
 from windex.config import Settings
 from windex.modules.common import finish_batch, pending_batches, require_type
 from windex.pipeline.ports import ExtractedDoc
@@ -657,3 +657,10 @@ def ledger_stage(ctx: TaskContext) -> SliceResult:
             "prune_skipped": prune_skipped,
         },
     )
+
+
+ledger_stage.__windex_digest_dependencies__ = (
+    text_hash,
+    strip_smuggled,
+    is_empty_text,
+)

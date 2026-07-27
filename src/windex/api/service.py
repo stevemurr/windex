@@ -6,6 +6,7 @@ import hashlib
 import json
 import threading
 import time
+from contextlib import suppress
 from datetime import datetime
 
 import psycopg
@@ -159,11 +160,9 @@ def _record_search_metric(
         except Exception:
             pass
 
-    try:
+    with suppress(Exception):
         threading.Thread(
             target=write, name="search-metric", daemon=True).start()
-    except Exception:
-        pass
 
 
 def validate_source(settings: Settings, source: str) -> str:

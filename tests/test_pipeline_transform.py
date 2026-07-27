@@ -77,8 +77,8 @@ def test_minhash_dedup_scopes_reads_and_writes_to_source(
         "finish_batch",
         lambda _ctx, item, *, outputs: finished.append((item, outputs)),
     )
-    monkeypatch.setattr("windex.ccnews.minhash.signature", lambda _text: (1,))
-    monkeypatch.setattr("windex.ccnews.minhash.band_hashes", lambda _signature: [101, 202])
+    monkeypatch.setattr(minhash, "signature", lambda _text: (1,))
+    monkeypatch.setattr(minhash, "band_hashes", lambda _signature: [101, 202])
     ctx = _context(42)
 
     result = minhash.dedup_minhash(ctx)
@@ -132,9 +132,10 @@ def test_minhash_dedup_ignores_existing_bands_from_same_document(
         "finish_batch",
         lambda _ctx, item, *, outputs: finished.extend(outputs),
     )
-    monkeypatch.setattr("windex.ccnews.minhash.signature", lambda _text: (1,))
+    monkeypatch.setattr(minhash, "signature", lambda _text: (1,))
     monkeypatch.setattr(
-        "windex.ccnews.minhash.band_hashes",
+        minhash,
+        "band_hashes",
         lambda _signature: [101, 202],
     )
 

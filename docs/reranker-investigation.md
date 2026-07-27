@@ -30,7 +30,7 @@ reranks the fused pool, and replaces `score` with the relevance score, degrading
 the fused order on any failure.
 
 windex feeds the reranker **`f"{title}\n{snippet}"`** with `snippet = text[:400]`
-(`index/search.py`, per-source `embed_index.py`) — i.e. short text, not full docs.
+(`index/search.py`, `modules/load.py`) — i.e. short text, not full docs.
 
 ## 2. The symptom that started it
 

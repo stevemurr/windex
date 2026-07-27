@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
-from windex.ccnews.dedup import text_hash
+from windex.ccnews.identity import text_hash
 
 
 def document_suffix(url: str, seed: str = "") -> str:
