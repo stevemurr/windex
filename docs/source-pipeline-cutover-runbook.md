@@ -5,6 +5,10 @@ database to the canonical Pipeline/Source backend. It intentionally preserves no
 Postgres rows, Qdrant vectors, custom Sources, settings overrides, or Run history.
 Normal `windex init-db` is non-destructive and refuses a legacy schema.
 
+This is not the normal deployment procedure for an existing epoch-2 database.
+Use [the production rebuild/deploy runbook](operations.md#rebuild-and-deploy)
+for additive schema initialization, Module re-locking, and Source upgrades.
+
 ## Preconditions
 
 1. Build and tag one immutable backend image from the reviewed commit.
@@ -84,17 +88,20 @@ old/new combination.
 ## Controlled restart and acceptance
 
 1. Start the API with all Source triggers disabled.
-2. Verify `/admin/v1/health` reports contract epoch `2` and schema generation
-   `2`.
+2. Verify `/admin/v1/health` reports contract epoch `2`, schema generation `2`,
+   and `readiness.ready: true`. A top-level `degraded` status is dependency
+   state, not a different contract epoch; resolve every critical component
+   before proceeding.
 3. Verify `/admin/v1/registry`, seeded Pipelines/Sources,
    `/admin/v1/overview`, `/admin/v1/events/stream`, and
    `/admin/v1/log-events/stream`.
-4. Confirm event redaction with a token-shaped test value.
-5. Start workers, then the Source scheduler.
-6. Queue one bounded Source Run. Observe graph tasks, the visible
+4. Verify `/admin/v1/module-health` has no stranded enabled Sources.
+5. Confirm event redaction with a token-shaped test value.
+6. Start workers, then the Source scheduler.
+7. Queue one bounded Source Run. Observe graph tasks, the visible
    `platform.index` continuation, and terminal `succeeded`.
-7. Query its document through `/v1/search`.
-8. Enable Sources and triggers individually while watching queue pressure,
+8. Query its document through `/v1/search`.
+9. Enable Sources and triggers individually while watching queue pressure,
    failures, and searchable counts.
 
 Do not quarantine the old generation until the bounded Source reaches searchable

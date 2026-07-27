@@ -1,178 +1,411 @@
-# windex operations
+# Windex epoch-2 operations
 
-How to start, run, and operate windex. Human- and agent-facing: the dashboard is
-the human control surface, the REST API + `windex` CLI are the agent/headless
-surface, and both drive the same service layer. Metrics/alerting live in the
-remote Grafana (192.168.1.237); this doc is the operational runbook.
+This is the production runbook for the canonical Pipeline/Source backend.
+Production is the Linux rootless-Podman project in `compose.yaml`; application
+source is baked into `localhost/windex-app:latest`.
 
-## TL;DR — start it
+The steady-state process set is:
 
-```bash
-windex up          # containers → serve (:8100) → the 8 embed loops, in order
-windex status      # what's up (add --json for machine output)
-windex down        # stop serve + loops (keeps containers; --stop-containers to stop those too)
-```
-
-`windex up` is **idempotent** and **health-gated**: it preflights the external
-mount, brings up the postgres/qdrant containers (`scripts/dev.sh up`), waits for
-them to answer, applies the schema + Qdrant collections, then starts serve and
-the loops — **skipping anything already running**. Re-run it any time; it only
-starts what's missing. Flags: `--no-serve`, `--no-loops`, `--source <s>`
-(repeatable), `--foreground`, `--timeout <s>`.
-
-For unattended operation you don't run `windex up` by hand — the supervisor does
-(see [Supervision & at-boot](#supervision--at-boot)).
-
-## Process map — what should be running
-
-| Process | How it's started | pgrep pattern | Log | Health signal |
-|---|---|---|---|---|
-| `windex-postgres` container | `dev.sh up` (via `windex up`) | — | `container logs` | `windex status` · TCP :5432 |
-| `windex-qdrant` container | `dev.sh up` (via `windex up`) | — | `container logs` | `windex status` · TCP :6333 |
-| `windex serve` (REST + dashboard + `/metrics` on :8100) | `windex up` | `windex serve --host` | `~/.windex/logs/serve.log` | `windex status` · `windex_*` scrape |
-| 8 embed loops (`windex embed-loop <src>`) | `windex up` | `windex embed-loop <src>` | `~/.windex/logs/<job>.log` | `windex_loop_up{source}` |
-| watchdog (supervisor) | launchd agent / `nohup` | `watchdog.sh` | `~/.windex/watchdog.log` | its own heartbeat line |
-
-**Supervised set = serve + the 8 embed loops.** The one-shot ingest/harvest/daily
-jobs are not supervised (they run and exit; scheduled via launchd calendar
-agents). Sources: `ccnews, gh, wiki, arxiv, smallweb, docs, hn, hf`.
-
-## Health checks
-
-```bash
-windex status --json     # authoritative; works even when serve is down. Top-level
-                         # "up": bool and "down": [absent supervised members]
-windex health            # postgres + qdrant (+ --embed to ping the embedder)
-curl -s localhost:8100/metrics | grep -E '^windex_(loop_up|job_up|gateway_up|db_up|qdrant_up)'
-```
-
-- **Dashboard**: `http://<box>:8100/` — live stats, per-source counts, log viewer,
-  and the operational switches. The header carries a **Metrics ↗** link to Grafana
-  when `WINDEX_GRAFANA_URL` is set.
-- **Grafana** (192.168.1.237): dashboards + the `LoopDown` / `EmbedsStalled`
-  alert rules (`ops/grafana/alerting/windex-rules.yml`). windex only exposes
-  `/metrics`; the remote box scrapes it.
-
-### Module-safe backend deployments
-
-Pipeline revisions freeze the exact digest of every executable Module. A new
-image that changes a Module implementation cannot execute a Source still pinned
-to the old digest; new Runs fail closed with `module_revoked`.
-
-The API runs idempotent `init-db` seeding before it starts accepting traffic.
-This publishes new built-in Pipeline revisions but intentionally does not move
-Source pins. After rolling the API:
-
-1. Check `/admin/v1/module-health`. `status` must be `ok` and
-   `stranded_sources` must be zero. The generic Overview health projection also
-   reports `module_locks` and the stranded Source names.
-2. For each affected Source, inspect
-   `/admin/v1/sources/{name}/module-status`.
-   `unavailable_modules` names the changed Modules and
-   `latest_pipeline_version` is the revision to preview/upgrade to.
-3. Stop or drain workers before moving Source pins. Upgrade affected Sources,
-   then start workers from the new image. Existing Runs retain their original
-   locks and require a matching old worker or a deliberate cancel/rerun.
-4. Run `windex health`; it exits non-zero while an enabled Source is pinned to
-   an unavailable implementation.
-
-Never silently auto-upgrade Source pins during service startup. A revision can
-change install-stage parameters or state semantics, so the existing
-preview/confirmation workflow remains the safety boundary.
-
-## Day-2 ops
-
-| Task | CLI | REST |
-|---|---|---|
-| Pause / resume indexing | `windex` control flag | `POST /v1/control/{pause,start}` |
-| Embed throughput profile | — | `POST /v1/throttle/{polite,full,env}` |
-| Start / stop a pipeline job | `windex <job>` | `POST /v1/jobs/{name}/{start,stop}` (whitelist: `jobs.py`) |
-| List jobs + running state | `windex status` | `GET /v1/jobs` |
-| Rebuild the index from parquet | `windex reindex <source>` | `reindex` job (confirm-gated) |
-| Store maintenance (VACUUM; weekly reindex) | `windex maintain [--reindex]` | `maintain` job |
-
-Pause and throttle are read by the embedders at each pass, so they take effect
-within ~a minute without restarting anything.
-
-## Supervision & at-boot
-
-The watchdog (`scripts/watchdog.sh`, v4) is the supervisor. When the data plane
-is healthy it reads `windex status --json` and restarts any absent supervised
-member with idempotent `windex up`. Guards against restart storms: a 2-cycle
-debounce, a 5-per-600s rate cap (then alert-only — the Grafana alerts page a
-human), and a bounded backstop that stops re-launching a serve that won't stay
-up. It still guards the two containers exactly as v3 did (3-failure debounce,
-mount-loss guard). On start it waits for the external mount, then `windex up`.
-
-Run it durably via a launchd LaunchAgent:
-
-```bash
-bash deploy/install-launchd.sh              # installs the supervisor + calendar agents
-bash deploy/install-launchd.sh --uninstall  # removes them
-```
-
-- **LaunchAgent, not Daemon** — the external volume, the Apple `container`
-  per-user runtime, the venv and `.env` all live in the user session.
-- A LaunchAgent runs only in a logged-in GUI session. For the supervisor to come
-  up **at boot**, enable **Automatic login** (System Settings → Users & Groups).
-- The plist's `PATH` includes `/usr/local/bin` (where `container` lives) — launchd's
-  default PATH omits it.
-
-Manual start without launchd: `nohup bash scripts/watchdog.sh &`.
-
-## Recurring schedule
-
-Installed by `deploy/install-launchd.sh` as launchd calendar agents (chosen over
-cron: they run a **missed** job on wake, and don't need the deprecated macOS
-cron). All jobs are idempotent.
-
-| When | Job |
+| Compose service | Responsibility |
 |---|---|
-| 02:15 daily | `windex daily` (news + github freshness) |
-| 03:30 daily | arxiv harvest + embed |
-| 04:00 daily | smallweb sync + poll + embed |
-| 04:30 daily | hn harvest + embed |
-| 05:00 Sun | wiki sync + ingest + embed |
-| 05:30 daily | docs sync + ingest + embed |
-| 05:45 daily | `windex maintain` |
-| 06:00 daily | hf sync + crawl + embed |
-| 06:15 Sun | `windex maintain --reindex` |
+| `postgres` | canonical metadata, immutable revisions, Runs, task leases, watermarks, and document ledger |
+| `qdrant` | dense/sparse vectors and searchable payloads |
+| `windex-serve` | public search/data API, authenticated admin API, health, and metrics |
+| `windex-source-scheduler` | cron/interval/event trigger dispatch, trigger repair, journal retention, and Pipeline storage GC |
+| `windex-worker` | one leased, sliced Pipeline worker pool for every Source |
+| `windex-module-sandbox` | isolated execution service for approved local Modules |
 
-## Log locations
+There are no per-Source ingestion or embedding processes. A Source Run freezes
+one Pipeline revision and the worker executes its graph, including the
+`platform.index` continuation that makes staged documents searchable.
 
-- `~/.windex/logs/serve.log` — the API server (uvicorn).
-- `~/.windex/logs/<job>.log` — each embed loop and one-shot job (jobs-registry names).
-- `~/.windex/watchdog.log` — supervisor decisions + container health + heartbeat.
-- `~/.windex/logs/supervisor.out` — launchd-level stdout/err for the supervisor.
-- Rotation: `deploy/newsyslog-windex.conf` (`sudo cp` it into `/etc/newsyslog.d/`).
+## First start
 
-## Incident playbook
+Review `.env` before starting. In particular, set the local-NVMe
+`WINDEX_DATA_ROOT` and `WINDEX_STACK_DATA`, the embedding endpoint/model/dimension,
+and `WINDEX_WRITE_TOKEN`.
 
-- **A loop or serve died** → the watchdog restarts it within a couple of cycles
-  (`~/.windex/watchdog.log` logs the action). If the rate cap tripped, it's
-  alerting-only — a member is crash-looping; investigate its log.
-- **External mount lost** → the watchdog stops the containers to limit corruption
-  and waits for the mount to return, then `dev.sh up`. `windex up` also refuses to
-  start if the mount is absent.
-- **Embedding gateway outage** → loops never exit; they back off and keep probing,
-  self-healing when the gateway returns (the 2026-07-17 lesson). Search degrades
-  hybrid→lexical via the query-embed breaker meanwhile.
-- **Wedged container** → `dev.sh`'s `run_or_start` recreates a container that
-  can't `exec`.
-- **Rebuild vectors** → extracted text in parquet is the source of truth:
-  `windex reindex <source>` drops the collection and re-embeds; the loops repopulate.
+```sh
+cp .env.example .env
+podman-compose -p windex -f compose.yaml build
+podman-compose -p windex -f compose.yaml up -d postgres qdrant
+podman-compose -p windex -f compose.yaml run --rm windex-serve init-db
+podman-compose -p windex -f compose.yaml up -d
+```
 
-## Agent-oriented surface
+The one-off `init-db` command is intentionally before the scheduler and worker.
+It applies additive schema changes, verifies contract epoch 2/schema generation
+2, creates the active filesystem generation, and seeds built-in Pipelines and
+Sources. It refuses an unknown or pre-epoch-2 database without modifying it.
+The destructive migration for such a database is documented separately in
+[the cutover runbook](source-pipeline-cutover-runbook.md).
 
-An AI agent or script operates windex through the CLI and REST API (same service
-core as the dashboard — a GUI is the wrong shape for an agent). Everything below
-is machine-drivable:
+Useful lifecycle commands:
 
-- **State**: `windex status --json` (top-level `up`, `down`), `GET /v1/stats`,
-  `GET /v1/metrics`, `GET /v1/jobs`, `GET /v1/logs` + `GET /v1/logs/{name}`.
-- **Control**: `POST /v1/control/{pause,start}`, `POST /v1/throttle/{profile}`,
-  `POST /v1/jobs/{name}/{start,stop}` (typed, bounded params — the whitelist in
-  `src/windex/api/jobs.py` is the security boundary; the API is LAN-exposed).
-- **Search**: `GET /v1/search`, `GET /v1/docs/{id}`; MCP tools `search_index` /
-  `get_document` (`windex serve-mcp`).
-- **Lifecycle**: `windex up` / `down` / `status` for bring-up and teardown.
+```sh
+podman-compose -p windex -f compose.yaml ps
+podman-compose -p windex -f compose.yaml logs --tail 200 windex-serve
+podman-compose -p windex -f compose.yaml logs -f windex-worker
+podman-compose -p windex -f compose.yaml stop -t 40
+podman-compose -p windex -f compose.yaml up -d
+```
+
+Stopping containers does not remove Postgres, Qdrant, or corpus data. Do not use
+a project teardown as a routine restart.
+
+## Health and compatibility
+
+`GET /admin/v1/health` is unauthenticated so pairing and monitors can always
+read compatibility. It remains HTTP 200 and retains `contract_epoch: 2` even
+when a dependency is down.
+
+```sh
+B=http://127.0.0.1:8100
+curl -fsS "$B/admin/v1/health" | jq .
+uv run windex health --embed
+```
+
+Interpret the response in two independent steps:
+
+1. `contract_epoch == 2` establishes client/backend compatibility.
+2. `readiness.ready` establishes serving readiness.
+
+Top-level `status: degraded` includes advisory failures and does not itself mean
+the API is incompatible or wholly unavailable. Postgres/schema and Qdrant are
+critical. The embedder, worker capacity, scheduler lateness, and frozen Module
+locks are advisory because lexical search or unaffected Sources may still be
+useful. The snapshot is cached for ten seconds and its summaries are redacted.
+
+For authenticated detail:
+
+```sh
+TOKEN="${WINDEX_WRITE_TOKEN:?export WINDEX_WRITE_TOKEN first}"
+AUTH="Authorization: Bearer $TOKEN"
+
+curl -fsS "$B/admin/v1/module-health" -H "$AUTH" | jq .
+curl -fsS "$B/admin/v1/overview" -H "$AUTH" | jq .
+curl -fsS "$B/admin/v1/sources/ccnews/status" -H "$AUTH" | jq .
+```
+
+`module-health.status: degraded` means at least one enabled Source is pinned to
+a Pipeline revision whose frozen Module implementation is unavailable in this
+build. It is not repaired by restarting a worker.
+
+## Metrics and logs
+
+Prometheus scrapes the unversioned, unauthenticated `GET /metrics` endpoint:
+
+```sh
+curl -fsS "$B/metrics" | grep -E \
+  '^windex_(db_up|qdrant_up|gateway_up|runs|run_tasks|worker_claim_stalled|scheduler_max_lag_seconds|storage_gc_errors)'
+```
+
+The exporter reports canonical Source/Run/task state, dependency availability,
+search request/error/latency metrics, the query-embedding breaker, storage
+headroom, and Pipeline storage cleanup. It deliberately has no synthetic
+per-Source process gauges. The checked-in scrape configuration, dashboard, and
+alerts are described in [`ops/README.md`](../ops/README.md).
+
+Container stdout/stderr is the process log:
+
+```sh
+podman-compose -p windex -f compose.yaml logs --since 1h windex-source-scheduler
+podman-compose -p windex -f compose.yaml logs --since 1h windex-worker
+podman-compose -p windex -f compose.yaml logs --since 1h windex-module-sandbox
+```
+
+Structured application history is in the operational journal:
+
+```sh
+curl -fsS "$B/admin/v1/log-events?level=error&limit=200" -H "$AUTH" | jq .
+curl -N "$B/admin/v1/log-events/stream?level=error" -H "$AUTH"
+```
+
+Use journal facets at `GET /admin/v1/log-events/facets`, or filter by
+`component`, `source`, `pipeline`, `run_id`, `node`, `module`, time range, and
+text.
+
+## Running a Source
+
+Manual Source execution uses
+`POST /admin/v1/sources/{name}/runs`; status and history remain generic Runs.
+List the concrete Source deployment and its available Pipeline revision before
+starting work:
+
+```sh
+source_json=$(curl -fsS "$B/admin/v1/sources/ccnews" -H "$AUTH")
+version=$(jq -r .pipeline_version <<<"$source_json")
+jq . <<<"$source_json"
+curl -fsS "$B/admin/v1/pipelines/ccnews/revisions/$version/tasks?flow=sync" \
+  -H "$AUTH" | jq .
+```
+
+Queue one Flow:
+
+```sh
+run=$(
+  curl -fsS -X POST "$B/admin/v1/sources/ccnews/runs" \
+    -H "$AUTH" -H 'Content-Type: application/json' \
+    -d '{"flow":"sync","priority":50}' |
+  jq -r .run_id
+)
+curl -fsS "$B/admin/v1/runs/$run" -H "$AUTH" | jq .
+curl -N "$B/admin/v1/log-events/stream?run_id=$run" -H "$AUTH"
+```
+
+HTTP 202 means queued, not completed. A duplicate active Source/Flow may
+coalesce, in which case `queued` is false and `run_id` is null. Follow the Run
+to `succeeded`; `failed` includes the terminal error and the Run event stream
+contains node/module context.
+
+Cancel only an active Run:
+
+```sh
+curl -fsS -X POST "$B/admin/v1/runs/$run/cancel" -H "$AUTH"
+```
+
+Pulled Pipelines expose these current Flow sequences:
+
+| Source | Order |
+|---|---|
+| `ccnews` | `sync`, then `ingest` |
+| `gh` | `discover`, then `hydrate`, then `compose` |
+| `wiki` | `sync`, then `ingest` |
+| `smallweb` | `sync`, then `poll` |
+| `docs` | `sync`, then `ingest` |
+| `hf` | `sync`, then `crawl` |
+| `arxiv` | `harvest` |
+| `hn` | `harvest` |
+
+Queue dependent Flows only after the prior Run succeeds. Every successful
+Source-bound Flow automatically schedules the index continuation; no separate
+embedding command is required.
+
+Pause a Source to reject new manual, push, or scheduled Runs without discarding
+its configuration:
+
+```sh
+curl -fsS -X POST "$B/admin/v1/sources/ccnews/pause" \
+  -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"reason":"operator maintenance"}'
+curl -fsS -X POST "$B/admin/v1/sources/ccnews/resume" -H "$AUTH"
+```
+
+Pausing does not cancel an already active Run. Cancel or let it drain
+explicitly.
+
+## Triggers
+
+Triggers bind to a Flow on the Source's pinned revision:
+
+```sh
+# Daily calendar schedule.
+curl -fsS -X POST "$B/admin/v1/sources/hn/triggers" \
+  -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"flow_name":"harvest","trigger_type":"cron",
+       "trigger_spec":{"cron":"30 4 * * *","timezone":"America/Los_Angeles"}}'
+
+# Fixed interval.
+curl -fsS -X POST "$B/admin/v1/sources/arxiv/triggers" \
+  -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"flow_name":"harvest","trigger_type":"interval",
+       "trigger_spec":{"seconds":86400}}'
+```
+
+Cron expressions have exactly five fields and require an IANA timezone.
+Interval seconds are positive integers. Editing cadence or re-enabling a
+trigger re-arms it from the transaction time instead of retaining a stale
+deadline. A `manual` binding is valid configuration but has no automatic
+deadline and is not dispatched by the scheduler. Invalid persisted rows are
+disabled and emit `trigger.invalid`.
+
+An event trigger matches an exact operational event name and, optionally, one
+exact `source_name`:
+
+```sh
+curl -fsS -X POST "$B/admin/v1/sources/docs/triggers" \
+  -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"flow_name":"sync","trigger_type":"event",
+       "trigger_spec":{"event":"run.succeeded","source":"hf"}}'
+```
+
+Event cursors are durable and per trigger. A new or materially edited event
+trigger starts after the journal tail visible at that moment; it does not
+replay historical events. Dispatch advances the cursor atomically with Run
+submission, coalesces an already active Source/Flow, and never treats scheduler
+bookkeeping as input. Events caused by an event-triggered Run are limited to one
+hop to prevent feedback loops. Paused, disabled, or archived Sources skip and
+advance rather than accumulating an unbounded replay.
+
+## Pipeline and Source changes
+
+Pipeline revisions are immutable. Publishing against an existing Pipeline must
+name the expected head with `parent_version`, `parent_hash`, or one strong
+`If-Match` value:
+
+```sh
+head=$(curl -fsS "$B/admin/v1/pipelines/custom" -H "$AUTH")
+version=$(jq -r .version <<<"$head")
+hash=$(jq -r .spec_hash <<<"$head")
+revision=$(
+  curl -fsS "$B/admin/v1/pipelines/custom/revisions/$version" -H "$AUTH"
+)
+body=$(jq -c \
+  '{spec:.spec,author:"operator",note:"idempotent publication check"}' \
+  <<<"$revision")
+
+curl -fsS -X POST "$B/admin/v1/pipelines/custom/revisions" \
+  -H "$AUTH" -H "If-Match: \"$hash\"" \
+  -H 'Content-Type: application/json' \
+  -d "$body"
+```
+
+Omitting the guard returns HTTP 428; a stale guard returns HTTP 412. HTTP 201
+means a new immutable revision was created. HTTP 200 means the request moved
+the head to an existing semantic revision (rollback) or was an idempotent
+no-op. Never infer revision creation from a generic 2xx.
+
+A Source stays pinned until an explicit preview and upgrade. The preview
+validates settings plus every enabled and disabled trigger Flow, returns the
+exact candidate values, and issues a short-lived confirmation token:
+
+```sh
+preview=$(
+  curl -fsS -X POST "$B/admin/v1/sources/memory/upgrade/preview" \
+    -H "$AUTH" -H 'Content-Type: application/json' \
+    -d '{"target_version":2,"values":null}'
+)
+jq . <<<"$preview"
+jq -e '.valid == true and .confirmation_token != null' <<<"$preview"
+
+upgrade_body=$(jq -c \
+  '{target_version,values:.candidate,confirmation_token}' <<<"$preview")
+curl -fsS -X POST "$B/admin/v1/sources/memory/upgrade" \
+  -H "$AUTH" -H 'Content-Type: application/json' -d "$upgrade_body"
+```
+
+Use the actual `latest_pipeline_version` from the Source's
+`/module-status`; version `2` above is illustrative. Submit the preview's exact
+candidate. A settings, revision, or trigger edit makes the token stale rather
+than silently applying an outdated plan.
+
+## Rebuild and deploy
+
+A code change requires a new image and container recreation. Use this order for
+schema, scheduler, worker, Module, and API changes:
+
+1. Quiesce external API writers and the macOS client.
+2. Inspect active Runs. Let them finish or cancel them deliberately.
+3. Build and test the exact commit.
+4. Stop the scheduler, worker, API, and sandbox.
+5. Run the new image's `init-db`.
+6. Start the new API and sandbox only.
+7. Upgrade every Source whose frozen Modules are unavailable.
+8. Start the new worker, then the Source scheduler.
+9. Verify health, metrics, a bounded Run, and a search result before releasing
+   clients.
+
+```sh
+git pull --ff-only origin main
+B=http://127.0.0.1:8100
+TOKEN="${WINDEX_WRITE_TOKEN:?export WINDEX_WRITE_TOKEN first}"
+AUTH="Authorization: Bearer $TOKEN"
+uv sync --all-extras
+uv run pytest
+uv run ruff check src tests
+uv run python scripts/dump-openapi.py --check
+uv run python scripts/dump-openapi.py --which admin --check
+
+podman-compose -p windex -f compose.yaml build
+podman-compose -p windex -f compose.yaml stop -t 40 \
+  windex-source-scheduler windex-worker windex-serve windex-module-sandbox
+
+podman-compose -p windex -f compose.yaml run --rm windex-serve init-db
+podman-compose -p windex -f compose.yaml up -d --no-deps --force-recreate \
+  windex-module-sandbox windex-serve
+
+curl -fsS "$B/admin/v1/health" | jq .
+curl -fsS "$B/admin/v1/module-health" -H "$AUTH" | jq .
+# Preview and upgrade each Source reported above before continuing.
+
+podman-compose -p windex -f compose.yaml up -d --no-deps --force-recreate \
+  windex-worker
+podman-compose -p windex -f compose.yaml up -d --no-deps --force-recreate \
+  windex-source-scheduler
+podman-compose -p windex -f compose.yaml ps
+```
+
+`serve` also runs idempotent initialization before accepting traffic, but the
+explicit one-off is the deployment barrier: it ensures the schema and built-in
+revision publication complete before any new scheduler or worker starts.
+
+Module locks are frozen per Pipeline revision. When an in-tree implementation
+changes (for example `push.docs` or `ledger.stage`), `init-db` publishes a new
+built-in revision because the semantic hash includes implementation locks.
+It intentionally leaves Sources pinned. Starting workers before upgrading those
+Sources produces `module_revoked` failures; restarting without the upgrade
+cannot fix that state. Historic active Runs retain their old locks, so either
+finish them with a matching old worker before the deployment or cancel and
+rerun them on the upgraded Source.
+
+The current schema includes durable event-trigger cursors, metadata fingerprints
+for payload-only refreshes, memory message ranges, and DB-aware Pipeline storage
+cleanup. The current API also adds dependency readiness and mandatory Pipeline
+head preconditions. Consequently, a coordinated release must include:
+
+- backend schema initialization before scheduler/worker start;
+- Source re-lock/upgrade for every Pipeline whose Module digest changed;
+- macOS OpenAPI/DTO regeneration whenever either checked-in OpenAPI document
+  changes;
+- client pairing based on `contract_epoch`, then readiness—not top-level
+  `status == "ok"`;
+- memory-consumer use of the canonical ingest endpoint and Run polling; and
+- a complete re-push of old conversations if historical `message_range` values
+  must become searchable.
+
+The memory request and repair procedure is in
+[`docs/memory-ingest-contract.md`](memory-ingest-contract.md).
+
+## Storage retention
+
+The Source scheduler runs bounded Pipeline storage cleanup at
+`WINDEX_PIPELINE_GC_INTERVAL_SECONDS`. A candidate file is removed only when:
+
+- its owning Run is terminal and older than
+  `WINDEX_PIPELINE_GC_TERMINAL_RETENTION_SECONDS`;
+- the file is older than `WINDEX_PIPELINE_GC_MIN_FILE_AGE_SECONDS`;
+- no active Run, task output, capture, coverage row, or
+  `documents.text_ref` references it; and
+- it resolves under a managed staging/download root and is not a symlink.
+
+`keep: true` downloads, unknown ownership, active data, run artifacts, and paths
+outside managed roots are retained. Each pass is capped by
+`WINDEX_PIPELINE_GC_MAX_FILES_PER_TICK` and
+`WINDEX_PIPELINE_GC_MAX_BYTES_PER_TICK`. Errors are isolated for retry and
+reported in `windex_storage_gc_*` metrics plus `storage.gc.completed` events.
+There is no cleanup HTTP command; keep the scheduler running.
+
+## Incident checks
+
+- **Search returns HTTP 503 for one Source** — that Source's Qdrant index is
+  unavailable. Retry with backoff; do not convert it to an empty successful
+  result. `source=all` may return explicit partial degradation if other Sources
+  remain available.
+- **Ready work but no progress** — inspect
+  `windex_worker_claim_stalled`, expired leases, worker logs, and the Run's
+  tasks/events. Restarting is not a substitute for resolving unavailable
+  Module locks.
+- **Scheduler lag** — inspect due triggers, scheduler logs, and
+  `trigger.invalid`; malformed legacy rows are quarantined instead of poisoning
+  the tick.
+- **Embedding gateway down** — indexing waits/backs off and hybrid search
+  degrades to lexical through the query breaker. Confirm
+  `windex_gateway_up`, then the Run/task state.
+- **Low storage** — ingestion refuses new staging before consuming the reserve.
+  Check both storage tiers and GC metrics; never manually delete a path still
+  referenced by `documents.text_ref`.
+- **Memory push returned HTTP 202 but data is absent** — poll the returned Run.
+  HTTP 202 only confirms queueing. Envelope and boundary errors that the API
+  can determine are synchronous HTTP 422, but Module-level validation can still
+  fail the accepted Run. Identity, Module-lock, and embedding failures remain
+  visible on that Run.

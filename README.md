@@ -12,7 +12,7 @@
 &nbsp;
 ![Serves](https://img.shields.io/badge/serves-REST%20%2B%20MCP-7a7568?style=flat-square&labelColor=29261f)
 
-[Quickstart](#quickstart) · [Architecture](#architecture) · [Search API](#search-api) · [Dashboard](#dashboard) · [Reproducibility](#reproducibility-rebuild-from-any-layer)
+[Quickstart](#quickstart) · [Architecture](#architecture) · [Search API](#search-api) · [Control plane](#control-plane) · [Reproducibility](#reproducibility-and-reset)
 
 </div>
 
@@ -89,22 +89,20 @@ blogs it politely polls, DevDocs' documentation bundles, and Hugging Face's docs
   many-hosts config. See [`docs/huggingface-source.md`](docs/huggingface-source.md).
 - **Chat memory** — the one source not *pulled* from an upstream: it's **pushed**.
   An external app (a chat client) chunks each conversation and `POST`s the whole
-  chunk list to `/v1/memory/conversations/{uuid}` (bearer-token-guarded writes).
-  The server treats each conversation as a DevDocs-style full-replace unit — the
-  chunk set is rewritten to `memory/clean/<id>.parquet` and a text-hash ledger
-  re-embeds only the changed delta, so a finished turn re-embeds just its trailing
-  chunk while edits/deletes tombstone vanished chunk ids. The shared embed driver
-  then drains it exactly like every other parquet-backed source; the app never
-  computes embeddings.
+  chunk list to `/v1/sources/memory/ingest` with a stable idempotency key.
+  The server treats each conversation partition as a complete replacement:
+  the Pipeline stages its current chunk set, tombstones vanished chunk IDs, and
+  the canonical ledger embeds only changed text. The producer never computes
+  embeddings, and it can poll the returned generic Run for completion.
 - **Hybrid search** — dense vectors from *your* embedding model (any OpenAI/TEI-compatible
   endpoint, or in-process sentence-transformers) fused with BM25 sparse vectors via RRF in
   [Qdrant](https://qdrant.tech). Semantic queries and exact-name lookups both work.
 - **Freshness as a first-class pattern** — every source follows the same loop: a watermark
   table discovers new upstream files, idempotent batch processing catches up, and a daily
   job keeps the index current. Backfill and incremental refresh are the same code.
-- **Operations console** — a single-file dashboard with live SSE updates: search UI,
-  pipeline stages, per-worker extraction activity, rate charts, a recently-indexed ticker,
-  and start/pause/stop controls for every pipeline job.
+- **Canonical control plane** — immutable Pipeline revisions, pinned Sources,
+  generic Runs, validated cron/interval/event triggers, exact-revision layouts,
+  and cursor-based operational events over authenticated `/admin/v1` APIs.
 
 ## Architecture
 
@@ -135,7 +133,7 @@ flowchart LR
     subgraph serving [Serving]
         API[REST /v1]
         MCP[MCP server]
-        DASH[dashboard]
+        ADMIN[macOS + admin clients]
     end
     CC --> EX --> DD --> PQ --> EM --> QD
     GHA --> GH --> PQ
@@ -148,7 +146,7 @@ flowchart LR
     MEM --> PQ
     DD <--> PG
     EM <--> PG
-    QD --> API --> DASH
+    QD --> API --> ADMIN
     QD --> MCP
 ```
 
@@ -158,218 +156,87 @@ recovering from index corruption is a re-embed and an alias flip — never a re-
 
 ## Quickstart
 
-Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/), `libmagic` for WARC
-processing (`brew install libmagic` on macOS), a container runtime
-(scripts target Apple's `container` CLI; the services are stock `postgres:16` and
-`qdrant/qdrant` images), and an embedding endpoint you control.
+Production is the Linux/rootless-Podman stack in [`compose.yaml`](compose.yaml).
+It runs Postgres, Qdrant, the API, one Source scheduler, one leased Pipeline
+worker pool, and the isolated local-Module sandbox. An OpenAI- or
+TEI-compatible embedding endpoint is supplied separately.
+
+Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), Podman,
+`podman-compose`, and an embedding endpoint.
 
 ```sh
-scripts/dev.sh up                  # postgres :5432 + qdrant :6333
-cp .env.example .env               # set WINDEX_EMBED_* (endpoint, model, dim)
-uv sync --all-extras
-uv run windex init-db
-uv run windex ensure-collections
-uv run windex health --embed
-uv run windex serve                # dashboard + API on :8100
+cp .env.example .env
+# Set WINDEX_EMBED_ENDPOINT, WINDEX_EMBED_MODEL, WINDEX_EMBED_DIM,
+# WINDEX_WRITE_TOKEN, and the two data roots in .env.
+
+podman-compose -p windex -f compose.yaml build
+podman-compose -p windex -f compose.yaml up -d postgres qdrant
+podman-compose -p windex -f compose.yaml run --rm windex-serve init-db
+podman-compose -p windex -f compose.yaml up -d
+
+curl -fsS http://127.0.0.1:8100/admin/v1/health
+podman-compose -p windex -f compose.yaml ps
 ```
 
-### Ingest news
+`init-db` is additive and idempotent for an epoch-2 database. It creates schema
+additions and publishes changed built-in Pipeline revisions, but it deliberately
+does not move existing Sources to those revisions. See
+[`docs/operations.md`](docs/operations.md) for the required preview/upgrade step
+after a Module implementation changes.
+
+### Run and schedule Sources
+
+Pull ingestion is now expressed as immutable Pipeline revisions and Source
+Runs. There are no per-Source command families or embedding processes. To start
+one bounded Flow:
 
 ```sh
-uv run windex ccnews sync --days 90     # discover WARCs into the watermark table
-uv run windex ccnews run                # download → extract → filter → dedup
-uv run windex ccnews embed-loop        # drain the backlog into the index
-```
+B=http://127.0.0.1:8100
+TOKEN="${WINDEX_WRITE_TOKEN:?export WINDEX_WRITE_TOKEN first}"
 
-### Ingest GitHub projects
-
-```sh
-uv run windex gh sync-hours --start 2024-10-01 --end 2025-10-01   # star-rich archive window
-uv run windex gh scan                   # count star events → candidates
-uv run windex gh discover               # Search-API sweep for post-2025-10 repos
-uv run windex gh hydrate                # metadata + READMEs (needs WINDEX_GITHUB_TOKENS)
-uv run windex gh embed
-```
-
-> **Why the fixed archive window?** GitHub's 2025-10-07 Events API change removed ~99% of
-> star events from the public timeline, so event-based discovery only works against the
-> older archive; newer repos are discovered via date-sharded Search API sweeps. See
-> `docs/wikipedia-sources.md` for the same verify-against-reality approach applied to the
-> next source.
-
-### Ingest Wikipedia
-
-```sh
-uv run windex wiki sync      # record the newest complete weekly snapshot (64 shards)
-uv run windex wiki ingest    # stream shards → clean parquet + ledger (delta only)
-uv run windex wiki embed     # embed staged articles into the wiki collection
-```
-
-### Ingest arXiv
-
-```sh
-uv run windex arxiv harvest --from-year 2005   # full backfill: per-year OAI windows (~2-3h at 1 req/3s)
-uv run windex arxiv harvest --days 7           # incremental: rolling last-N-days window (cron this)
-uv run windex arxiv embed                      # embed staged papers into the arxiv collection
-```
-
-> **Why per-year windows?** arXiv's OAI resumption tokens expire at the next 00:00
-> UTC, so a single 2–3h token chain can't span a day boundary. The backfill is
-> chunked into independently restartable per-year windows (`arxiv_windows`
-> watermark); the text-hash ledger keeps re-harvests to the changed-paper delta.
-> See [`docs/arxiv-source.md`](docs/arxiv-source.md) for the verified source facts.
-
-### Ingest the Small Web
-
-```sh
-uv run windex smallweb sync                    # reconcile the feeds table against Kagi's smallweb.txt
-uv run windex smallweb poll --max-feeds 1000   # conditional-GET feeds → fetch + stage new posts (polite)
-uv run windex smallweb embed                   # embed staged posts into the smallweb collection
-```
-
-> **Politeness is the design.** This is windex's only fetch-based source, so the
-> poller honors robots.txt per host, throttles to a per-host minimum interval, caps
-> global concurrency, sends an honest descriptive User-Agent (a default UA drew 403s
-> in sampling), and skips a dead feed after N consecutive failures. Most feeds carry
-> full post text inline, so the common case fetches nothing beyond the feed itself.
-> The list is MIT-licensed; windex links out to the blogs. See
-> [`docs/smallweb-source.md`](docs/smallweb-source.md) for the verified source facts.
-
-### Ingest programming docs
-
-```sh
-uv run windex docs sync      # fetch the DevDocs manifest into the docsets watermark
-uv run windex docs ingest    # fetch pending docsets → clean parquet + ledger (delta only)
-uv run windex docs embed     # embed staged pages into the docs collection
-```
-
-> **Why DevDocs bundles?** One manifest + one `db.json` per docset replaces
-> scraping 20+ documentation sites, and the manifest's per-docset `mtime` is a
-> real freshness watermark (a refresh re-pulls only docsets that changed, and
-> the text-hash ledger re-embeds only changed pages; pages that vanish are
-> tombstoned). Results still link to the *official* docs: DevDocs records each
-> page's scraped-from URL, backed by a maintained canonical-URL table
-> (`docs_source/canonical.py`) built from DevDocs' open-source scraper
-> definitions. Per-docset upstream licenses (PSF, CC-BY-SA, …) are stored and
-> surfaced as attribution in every payload — windex indexes + links out, it
-> doesn't republish. See [`docs/devdocs-source.md`](docs/devdocs-source.md).
-
-### Ingest Hacker News
-
-```sh
-uv run windex hn backfill              # fast path: monthly parquet mirror, 2006-10 → now (no API load)
-uv run windex hn harvest --days 2      # trailing re-pull: new stories + points refresh (cron this)
-uv run windex hn embed                 # embed staged stories into the hn collection
-```
-
-> **Why a trailing window?** Story text freezes at submission, but points and
-> comment counts drift for days. The re-pull skips unchanged stories via the
-> text-hash ledger and refreshes their `points`/`num_comments` payloads in
-> place (`set_payload`) — score freshness never costs an embedding. Algolia
-> caps every query at 1000 hits, so busy windows recursively halve until they
-> fit (2026-07-15 had 1,172 stories). Backfill months and the daily tail share
-> the same `hn_windows` watermark, so the parquet mirror and the API are
-> interchangeable per window. See [`docs/hn-source.md`](docs/hn-source.md).
-
-### Ingest Hugging Face
-
-```sh
-uv run windex hf sync     # sitemap → 52 doc roots + 829 blog posts, then re-hash every llms.txt
-uv run windex hf crawl    # pull .md for CHANGED roots + new blog posts (~3.3h cold, minutes warm)
-uv run windex hf embed    # embed staged pages into the hf collection
-```
-
-> **The hash gate is load-bearing, not an optimization.** HF's `pages` rate-limit
-> bucket is 1 req/3s (published on every response as
-> `ratelimit-policy: "fixed window";"pages";q=100;w=300`), so a naive re-sweep of
-> 4,014 pages would cost 3.3 hours *every night* — and a conditional GET wouldn't
-> help, because a 304 still spends a request. Instead `hf sync` re-hashes the 52
-> `llms.txt` files (~55 requests, ~3 min) and `hf crawl` touches only the roots
-> whose hash moved; a quiet day is ~60 requests. The crawler self-throttles off
-> the live `ratelimit: "pages";r=98;t=83` counter rather than open-loop sleeping,
-> so it stretches automatically when something else has spent the shared per-IP
-> budget. Doc pages need no extraction at all (HF serves `text/markdown`); only
-> the blog goes through trafilatura. Ids omit the version
-> (`hf:docs/transformers/quicktour`) so a version bump upserts rather than forks,
-> and link to the unversioned canonical URL the page itself declares. See
-> [`docs/huggingface-source.md`](docs/huggingface-source.md).
-
-### Crawl an arbitrary web cluster
-
-Point windex at one link and it indexes that corner of the web as a searchable
-source — no per-site code. Drive it from the **`/manage` console** (Crawl tab;
-`/crawl` still redirects there), the API, or the CLI:
-
-```sh
-uv run windex crawl --source claude_cookbook \
-  --seed https://platform.claude.com/cookbook/ --max-depth 1
-```
-
-```sh
-# Same thing over the API (write-token gated); windex-loop-crawl executes it.
-curl -X POST :8100/v1/crawl -H "Authorization: Bearer $WINDEX_WRITE_TOKEN" \
+curl -fsS -X POST "$B/admin/v1/sources/ccnews/runs" \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"source":"claude_cookbook","seed":"https://platform.claude.com/cookbook/",
-       "limits":{"max_depth":1}}'
+  -d '{"flow":"sync"}'
 ```
 
-Every call reduces to a **recipe** — seeds, scope rules, limits — stored on the
-source so a cluster is re-crawlable and schedulable, and frozen into each run so
-history stays truthful when the recipe is later edited. A crawled cluster is just
-a custom source: it reuses the same parquet staging, `text_hash` ledger, Qdrant
-collection and embed loop as everything else, so re-crawling unchanged pages
-costs no re-embedding.
+The response is HTTP 202 with a `run_id`. Follow it at
+`GET /admin/v1/runs/{run_id}`; the worker adds the searchable `platform.index`
+continuation automatically. Queue the next Flow only after its prerequisite
+Run succeeds—for example `ccnews: sync → ingest`, `wiki: sync → ingest`,
+`docs: sync → ingest`, `smallweb: sync → poll`, `hf: sync → crawl`, and
+`gh: discover → hydrate → compose`. arXiv and HN each expose `harvest`.
 
-> **Scope defaults to the seed's own directory**, not the whole host — the
-> surprising-and-expensive reading of "crawl this cluster". `same_host`, a path
-> prefix, and include/exclude regexes narrow it further; `max_pages` is a hard
-> stop that marks the run `truncated` rather than reporting a clean finish.
->
-> **Two hazards this handles that a naive crawler does not.** Some sites answer
-> HTTP 200 with the same shell page for *every* unknown path (the Claude cookbook
-> does), so 404s cannot prune and the shell would be indexed once per bad URL —
-> pages whose extracted text matches a seed's, or that repeat within a run, are
-> dropped as boilerplate. And trafilatura declines some legitimate doc pages
-> outright (2 of 84 on the cookbook, ~4,700 words each), so a structural
-> extractor rescues what it drops rather than losing them silently.
->
-> **Self-cleaning is opt-in** (`dedup.prune`). By default a crawl only ever adds
-> and updates, so narrowing a recipe's scope leaves the previous scope's pages
-> indexed forever. With `prune` on, pages the run did not reach are tombstoned —
-> but only when the run is a trustworthy census: it refuses on a cancelled run, a
-> run that hit `max_pages`, one with any failed page, or one that produced no
-> documents at all. An incomplete crawl is never read as proof a page is gone, so
-> a transient 502 or a too-low page budget cannot silently delete a corpus. The
-> reason it declined is reported as `prune_skipped`.
->
-> Because the seed URL comes from an API caller, the fetcher rejects any target
-> resolving to a loopback, private, or link-local address — re-checked after every
-> redirect, not just on the seed — so a crawl can never be pointed at Postgres,
-> Qdrant, or cloud instance metadata. robots.txt is always honoured; there is no
-> override.
+Recurring work belongs to Source triggers:
 
-### Keep it fresh
-
-Every job is idempotent — a rerun is a no-op, a crashed run resumes from its watermark.
-`windex daily` covers news + GitHub; the other sources run on their own cadence:
-
-```cron
-15 2 * * *  windex daily                                      # news + github tail
-30 3 * * *  windex arxiv harvest --days 7 && windex arxiv embed
-0  4 * * *  windex smallweb sync && windex smallweb poll && windex smallweb embed
-30 4 * * *  windex hn harvest --days 2 && windex hn embed     # trailing window also refreshes points
-0  5 * * 0  windex wiki sync && windex wiki ingest && windex wiki embed    # weekly dumps
-30 5 * * *  windex docs sync && windex docs ingest && windex docs embed    # devdocs mtime-gated
-0  6 * * *  windex hf sync && windex hf crawl && windex hf embed           # llms.txt hash-gated (~60 req on a quiet day)
-45 5 * * *  windex maintain                                   # vacuum/analyze churn tables
-15 6 * * 0  windex maintain --reindex                         # weekly: rebuild bloat-flagged indexes
+```sh
+curl -fsS -X POST "$B/admin/v1/sources/hn/triggers" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"flow_name":"harvest","trigger_type":"cron",
+       "trigger_spec":{"cron":"30 4 * * *","timezone":"America/Los_Angeles"}}'
 ```
 
-Prefer not to touch system cron? windex ships a **built-in scheduler**
-(`windex scheduler`) — a never-exiting loop that fires due entries from an editable
-`schedule` table (the same ingest/`daily`/`maintain`/`eval` jobs), so the whole
-fleet is supervised in-process. It's a first-class service in the container stack
-(see `compose.yaml`).
+The trigger API validates `cron`, `interval`, `event`, and `manual` bindings.
+The scheduler dispatches cron, interval, and event bindings; manual bindings
+have no automatic deadline. Event triggers consume the durable operational
+journal exactly once per trigger cursor, start at the journal tail when created
+or edited, and limit event-triggered causality to one hop.
+
+### Push documents
+
+Push Sources use the canonical data endpoint:
+
+```text
+POST /v1/sources/{name}/ingest
+```
+
+Every request has a stable 8–128 character `Idempotency-Key`, returns HTTP 202,
+and must be monitored as a Run if completion matters. The built-in `memory`
+Source uses full, partition-scoped replacement; reusable custom Sources use
+delta upserts and explicit tombstone documents. See
+[`docs/memory-ingest-contract.md`](docs/memory-ingest-contract.md) and
+[`docs/custom-sources.md`](docs/custom-sources.md).
 
 ## Search API
 
@@ -382,7 +249,6 @@ curl "http://127.0.0.1:8100/v1/search?q=list+comprehension&source=docs&framework
 curl "http://127.0.0.1:8100/v1/search?q=rust+web+framework&source=hn&min_points=50"
 curl "http://127.0.0.1:8100/v1/search?q=text+generation+pipeline&source=hf&root=transformers"
 curl "http://127.0.0.1:8100/v1/docs/arxiv:2401.00001"     # stored abstract by stable id
-curl "http://127.0.0.1:8100/v1/stats"                     # totals + freshness watermarks
 ```
 
 Responses carry stable ids (`news:<hash>`, `gh:owner/repo`, `wiki:<page_id>`,
@@ -395,13 +261,18 @@ response says so explicitly. Full OpenAPI docs at `/docs`.
 Agents can also connect over **MCP** (`uv run windex serve-mcp`): tools `search_index` and
 `get_document` return the same JSON objects.
 
-## Dashboard
+## Control plane
 
-`http://127.0.0.1:8100` — a Search tab and an operations Console: global index totals, live
-pipeline stages with per-worker extraction activity, ingest/embed/download rate charts, a
-recently-indexed feed, and whitelisted start/stop controls for every pipeline job (typed,
-bounded parameters only — the API is LAN-exposed, so nothing free-form ever reaches a
-command line). Realtime via SSE.
+The native macOS client is the interactive Pipeline, Source, Run, Overview, and
+Console surface. Headless operators use the authenticated `/admin/v1` API. Both
+consume the same immutable revisions, exact-revision layouts, generic Runs, and
+cursor-based event streams. This backend does not expose the removed browser
+operations console or legacy job-control routes.
+
+Pairing starts with `GET /admin/v1/health`. A compatible server always returns
+HTTP 200 and `contract_epoch: 2`; dependency state is reported separately in
+the additive `readiness` object. Temporary degradation must not be interpreted
+as a contract mismatch.
 
 ## Configuration
 
@@ -422,69 +293,62 @@ Everything is environment-driven (`WINDEX_*`, see `.env.example`). The important
 Model choice is config, not code: collections are named per model and served behind aliases,
 so a swap is re-embed from parquet + alias flip.
 
-## Reproducibility: rebuild from any layer
+## Reproducibility and reset
 
-Each layer derives from the one beneath it. The pipeline *is* the recovery procedure.
+Every Run freezes its Pipeline revision, Module locks, Source binding, effective
+parameters, and inputs. Pulled Sources retain durable watermark units; pushed
+Sources retain document identity in the canonical ledger. Re-running an
+unchanged unit is therefore idempotent, while metadata-only changes refresh the
+Qdrant payload without paying for another embedding.
 
-| Lost / corrupted | Rebuild |
-|---|---|
-| Vector index | `windex reindex all`, then the embed loops — no re-crawl, no re-extraction |
-| Embedding model swap | same operation into a new aliased collection |
-| Postgres | restore a dump, or re-run sync + processing (dedup makes re-runs idempotent) |
-| arXiv metadata | re-run `windex arxiv harvest` — the per-year windows are restartable and the text-hash ledger dedupes |
-| Small Web posts | re-run `windex smallweb poll` — the feeds watermark + text-hash ledger keep re-polls to genuinely new posts |
-| Programming docs | re-run `windex docs sync` + `docs ingest` — full-replace per docset; the text-hash ledger keeps it to the changed-page delta |
-| Hacker News stories | re-run `windex hn backfill` (parquet mirror) or `hn harvest` (Algolia) — the month windows are restartable and interchangeable between the two; the text-hash ledger dedupes |
-| Hugging Face pages | re-run `windex hf sync` + `hf crawl` — the llms.txt hash gate re-pulls only changed roots (an unchanged root costs zero requests); a killed crawl leaves its roots pending |
-| Everything | run the ingestion flow from the top |
+A Source reset is a confirmation-gated generation change:
 
-Battle-tested: an external-drive failure corrupted the vector store mid-backfill; the index
-was rebuilt from parquet staging with zero re-crawling.
+1. `POST /admin/v1/sources/{name}/reset/preview`
+2. review its document, state-unit, and outstanding-task counts;
+3. `POST /admin/v1/sources/{name}/reset` with the returned
+   `confirmation_token`; and
+4. queue the Source's ingestion Flows again.
+
+Do not delete Postgres tables, Qdrant collections, or staging paths by hand.
+The one-time destructive migration from a pre-epoch-2 database is a separate,
+fail-closed procedure in
+[`docs/source-pipeline-cutover-runbook.md`](docs/source-pipeline-cutover-runbook.md).
 
 ## Operations
 
-- **Job control** — every pipeline job can be started/stopped from the dashboard's
-  Operations cards or the CLI; job logs live under `~/.windex/logs/<job>.log`, viewable
-  in the dashboard's Logs panel (level + grep filters).
-- **Watchdog** — `nohup scripts/watchdog.sh &` supervises the containers: TCP-path
-  health probes, debounced restarts, mount-loss protection for external-drive setups,
-  hourly heartbeat in `~/.windex/watchdog.log`.
-- **Log rotation** — the server log self-rotates; for belt-and-braces on everything:
-  `sudo cp deploy/newsyslog-windex.conf /etc/newsyslog.d/windex.conf` (macOS-native).
-- **Pause/throttle** — the dashboard header pauses all indexing between batches; the
-  Activity throttle select trades embed throughput against live-search latency at
-  runtime (`env` / `polite` / `full`).
-- **Store tuning** — applied Postgres/Qdrant settings and their rationale are in
-  [`docs/store-tuning.md`](docs/store-tuning.md); schema.sql carries the durable parts.
-- **Metrics & alerting** — `windex serve` exposes Prometheus metrics at `GET
-  /metrics` on `:8100` (fleet liveness, embed throughput vs. backlog, search RED,
-  the query-embed breaker, per-source log staleness). Point a self-hosted
-  Prometheus at it and import the **"windex ops" Grafana dashboard** — an Active-
-  alerts panel + a dependency/loop uptime timeline up top, then throughput, search,
-  search-quality, and per-source rows — plus nine alert rules for the outage/stall
-  failure modes (the 2026-07-17 gateway outage that silently stalled indexing for
-  ~36h is the one they exist to catch). Drop-in scrape config, dashboard JSON, and
-  alert rules live in [`ops/`](ops/).
-- **Search quality** — `windex eval` measures *relevance* (NDCG@k / MRR / Recall@k)
-  over a known-item proxy + a curated golden set (+ an optional LLM judge), writes a
-  row to `search_quality`, and the exporter surfaces the latest run on the dashboard.
-  Run it nightly from the scheduler so quality is tracked on a cadence, not ad hoc.
-- **Containerized deploy** — `compose.yaml` + `Containerfile` bring up the full
-  stack (Postgres + Qdrant + `windex serve` + the nine per-source embed-loops + the
-  scheduler) under rootless podman/Docker Compose; the embedding gateway runs as a
-  separate project the app reaches over the host network. For local dev, `scripts/dev.sh`
-  runs just Postgres + Qdrant via Apple's `container` CLI.
+- **Lifecycle and logs** — use `podman-compose ... ps`, `logs`, `stop`, and
+  `up -d`; application source is baked into the image, so code changes require
+  a rebuild and container recreation.
+- **Health** — `GET /admin/v1/health` reports compatibility and component
+  readiness; `uv run windex health --embed` is the host-side diagnostic.
+- **Metrics** — `GET /metrics` exports canonical Source/Run/task state,
+  dependency probes, search RED metrics, and DB-aware storage-GC results.
+  Checked-in Prometheus, Grafana, and alert configuration lives in
+  [`ops/`](ops/).
+- **Retention** — the Source scheduler performs bounded hourly cleanup of
+  unreferenced files owned by old terminal Runs. It never treats a filesystem
+  walk alone as proof that a file is disposable.
+- **Deployments** — `init-db` must run before the new scheduler/workers. If
+  implementation digests changed, inspect `/admin/v1/module-health` and
+  explicitly preview/upgrade affected Sources before accepting new Runs.
+
+The complete production procedure and incident commands are in
+[`docs/operations.md`](docs/operations.md).
 
 ## Development
 
 ```sh
-uv run pytest                # unit + live-service integration tests
-scripts/dev.sh up|down|psql  # service management
+podman-compose -p windex -f compose.yaml up -d postgres qdrant
+uv sync --all-extras
+uv run pytest
+uv run ruff check src tests
+uv run python scripts/dump-openapi.py --check
+uv run python scripts/dump-openapi.py --which admin --check
 ```
 
 Tests run against the live dev Postgres/Qdrant using isolated namespaces and skip cleanly
 when services are down. The suite covers the dedup tiers, pipeline orchestration,
-outage behavior (fail-fast, circuit breakers), the job whitelist, and the API contract.
+leased worker behavior, trigger dispatch, outage behavior, and both OpenAPI contracts.
 
 ## Roadmap
 

@@ -31,19 +31,22 @@ All facts verified against the live OAI-PMH endpoint on 2026-07-16, not memory. 
   00:00 UTC** (observed `expirationDate` = next midnight Z), so a single token
   chain cannot safely span a day boundary.
 
-## Why per-year date windows (the `arxiv_windows` watermark)
+## Why bounded date windows
 
 Because a token chain expires at 00:00 UTC, the backfill is chunked into
-**independently restartable per-year windows** (`from=YYYY-01-01`,
-`until=YYYY-12-31`) rather than one 2–3h chain. A window is only marked `done`
+**independently restartable date windows** rather than one unbounded token
+chain. A window is only marked `done`
 once its token chain completes; an interrupted window is re-harvested from its
 start (safe — the `documents.text_hash` ledger over title+abstract keeps
 re-harvests to the changed-paper delta, exactly like the news/wiki ledgers). The
-rolling incremental window (`--days N`) is re-armed on each freshness run so
+rolling `incremental_days` window is re-armed on each freshness Run so
 metadata updates are picked up.
 
-Full backfill: ~3.1M records ≈ 2,389 requests ≈ 2–3h at the 3s rate. Run it as
-`windex arxiv harvest --from-year 2005`; the per-year windows make it resumable.
+Full backfill: ~3.1M records ≈ 2,389 requests ≈ 2–3h at the 3s rate. In epoch 2,
+set the arXiv Source's install-stage `earliest` value (default `2005-09-16`) and
+queue its `harvest` Flow through
+`POST /admin/v1/sources/arxiv/runs`. The canonical `window` state store makes
+the work resumable.
 
 ## Tombstones (`deletedRecord=persistent`)
 
