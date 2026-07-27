@@ -67,7 +67,25 @@ enum Fixtures {
           "checked_at":1753372928.4,"cache_ttl_s":10.0,
           "components":{"postgres":{"status":"\(ready ? "ok" : "unavailable")",
            "critical":true,"summary":"Canonical Postgres readiness.",
-           "observations":{}}}}}
+           "observations":{}},
+          "schema":{"status":"\(ready ? "ok" : "unknown")","critical":true,
+           "summary":"Canonical schema matches this build.",
+           "observations":{"schema_generation":1,"contract_epoch":2}},
+          "qdrant":{"status":"ok","critical":true,"summary":"Qdrant is reachable.",
+           "observations":{"collections":9}},
+          "embedding":{"status":"ok","critical":false,
+           "summary":"The embedding gateway is reachable.",
+           "observations":{"configured":true,"reachable":true,"gateway_required":true}},
+          "workers":{"status":"ok","critical":false,
+           "summary":"Worker capacity matches the current backlog.",
+           "observations":{"ready_tasks":2,"running_tasks":1,"live_workers":2,
+            "expired_leases":0}},
+          "scheduler":{"status":"ok","critical":false,
+           "summary":"The Source scheduler is within its lateness budget.",
+           "observations":{"due_triggers":0,"max_lag_s":0.0,"lateness_budget_s":30.0}},
+          "module_locks":{"status":"ok","critical":false,
+           "summary":"Enabled Source Module locks are runnable.",
+           "observations":{"stranded_sources":0,"enabled_sources":4}}}}}
         """
     }
 

@@ -26,9 +26,11 @@ document.
 Health now carries an optional additive `readiness` object with redacted
 component diagnostics. A dependency outage changes `status` to `degraded` but
 does not change `contract_epoch` or prevent pairing: the operator must be able
-to connect to diagnose it. Existing generated clients safely ignore the new
-field. Regenerate the admin DTOs when the app is ready to render component
-readiness; no regeneration is required merely to remain compatible.
+to connect to diagnose it. The generated `Health` decoder enforces the
+OpenAPI schema's `additionalProperties: false`, so a client generated before
+this field existed rejects a readiness-bearing response instead of ignoring
+it. Regenerate and ship the admin DTOs with this contract change; the checked-in
+types now decode the readiness status, component map, and bounded observations.
 
 ## Implemented frontend surfaces
 

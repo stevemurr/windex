@@ -21,6 +21,33 @@ struct PairingTests {
         #expect(health.isWindex)
         #expect(health.needsToken)
         #expect(health.version == "0.1.0")
+        let readiness = try #require(health.readiness)
+        #expect(readiness.status == .ok)
+        #expect(readiness.ready)
+        #expect(readiness.checkedAt == 1_753_372_928.4)
+        #expect(readiness.cacheTtlS == 10.0)
+        #expect(Set(readiness.components.additionalProperties.keys) == [
+            "postgres",
+            "schema",
+            "qdrant",
+            "embedding",
+            "workers",
+            "scheduler",
+            "module_locks",
+        ])
+        let schema = try #require(
+            readiness.components.additionalProperties["schema"]
+        )
+        #expect(schema.status == .ok)
+        #expect(schema.critical)
+        let schemaObservations = try #require(schema.observations)
+        let values = try schemaObservations.additionalProperties.decode(
+            [String: JSONValue].self
+        )
+        #expect(values == [
+            "schema_generation": .int(1),
+            "contract_epoch": .int(2),
+        ])
         // The open route must not have been sent credentials it doesn't need.
         #expect(server.lastRequest?.header("Authorization") == nil)
     }
@@ -231,6 +258,14 @@ struct PairingTests {
         #expect(health.status == "degraded")
         #expect(health.isSupportedEpoch)
         #expect(!health.isOK)
+        let readiness = try #require(health.readiness)
+        #expect(readiness.status == .degraded)
+        #expect(!readiness.ready)
+        let postgres = try #require(
+            readiness.components.additionalProperties["postgres"]
+        )
+        #expect(postgres.status == .unavailable)
+        #expect(postgres.critical)
     }
 
     /// An unreachable host must surface as `.transport`, not as a decode failure
