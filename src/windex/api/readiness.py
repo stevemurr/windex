@@ -28,6 +28,7 @@ from windex.api import prom
 from windex.config import Settings
 from windex.db.canonical import SCHEMA_GENERATION
 from windex.pipeline.contracts import CONTRACT_EPOCH
+from windex.pipeline.store import seed_matrix_hash
 from windex.source import store as source_store
 
 _CACHE_TTL_S = 10.0
@@ -70,6 +71,11 @@ def _database_unknown(
             critical=True,
             summary=schema_summary,
         ),
+        "canonical_seeds": _component(
+            "unknown",
+            critical=False,
+            summary="Built-in Pipeline seed freshness could not be determined.",
+        ),
         "workers": _component(
             "unknown",
             critical=False,
@@ -107,7 +113,7 @@ def _probe_database(settings: Settings) -> dict[str, dict[str, Any]]:
             try:
                 with conn.cursor() as cur:
                     cur.execute(
-                        """SELECT schema_generation, contract_epoch
+                        """SELECT schema_generation, contract_epoch, seed_hash
                              FROM windex_meta
                             WHERE singleton"""
                     )
@@ -135,7 +141,7 @@ def _probe_database(settings: Settings) -> dict[str, dict[str, Any]]:
                     schema_status="unavailable",
                     schema_summary="Canonical schema metadata is missing.",
                 )
-            generation, epoch = metadata
+            generation, epoch, stored_seed_hash = metadata
             schema_ok = (
                 generation == SCHEMA_GENERATION
                 and epoch == CONTRACT_EPOCH
@@ -159,6 +165,30 @@ def _probe_database(settings: Settings) -> dict[str, dict[str, Any]]:
                 )
                 result["schema"] = schema
                 return result
+
+            try:
+                expected_seed_hash = seed_matrix_hash(settings)
+            except Exception:  # noqa: BLE001 - local seed probe failure is health data
+                canonical_seeds = _component(
+                    "unknown",
+                    critical=False,
+                    summary="Built-in Pipeline seed freshness could not be determined.",
+                )
+            else:
+                seeds_current = stored_seed_hash == expected_seed_hash
+                canonical_seeds = _component(
+                    "ok" if seeds_current else "degraded",
+                    critical=False,
+                    summary=(
+                        "Built-in Pipeline seeds match this build."
+                        if seeds_current
+                        else (
+                            "Built-in Pipeline seeds are stale for this build; "
+                            "run windex init-db before starting workers."
+                        )
+                    ),
+                    matches_build=seeds_current,
+                )
 
             try:
                 with conn.cursor() as cur:
@@ -243,6 +273,7 @@ def _probe_database(settings: Settings) -> dict[str, dict[str, Any]]:
             return {
                 "postgres": postgres,
                 "schema": schema,
+                "canonical_seeds": canonical_seeds,
                 "workers": workers,
                 "scheduler": scheduler,
                 "module_locks": module_locks,
@@ -368,6 +399,7 @@ def _collect(settings: Settings) -> dict[str, Any]:
     components = {
         "postgres": database["postgres"],
         "schema": database["schema"],
+        "canonical_seeds": database["canonical_seeds"],
         "qdrant": qdrant,
         "embedding": embedding,
         "workers": database["workers"],
@@ -404,6 +436,11 @@ def _fallback() -> dict[str, Any]:
             "unknown",
             critical=True,
             summary="Schema readiness could not be determined.",
+        ),
+        "canonical_seeds": _component(
+            "unknown",
+            critical=False,
+            summary="Built-in Pipeline seed freshness could not be determined.",
         ),
         "qdrant": _component(
             "unknown",

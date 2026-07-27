@@ -3,6 +3,7 @@ from contextlib import nullcontext
 import pytest
 from fastapi import HTTPException, Response
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from windex.api.app import admin, app
 from windex.api.canonical import (
@@ -11,6 +12,7 @@ from windex.api.canonical import (
     ModuleHealthResponse,
     PipelineRevisionCreate,
     RegistryResponse,
+    SourcePatch,
     module_health,
     pipeline_revision_publish,
     source_ingest,
@@ -98,6 +100,10 @@ def test_openapi_is_one_pipeline_source_contract_epoch():
     assert "marketplace" not in encoded
 
     schemas = admin_schema["components"]["schemas"]
+    assert "metadata" in schemas["SourceCreate"]["properties"]
+    assert "metadata" in schemas["SourcePatch"]["properties"]
+    assert "metadata" in schemas["SourceModel"]["required"]
+    assert "module_status" in schemas["SourceStatusResponse"]["properties"]
     assert schemas["PipelineRunCreate"]["properties"]["dry_run"] == {
         "default": False,
         "title": "Dry Run",
@@ -111,6 +117,18 @@ def test_openapi_is_one_pipeline_source_contract_epoch():
         "/v1/pipelines/{name}/revisions"
     ]["post"]["responses"]
     assert {"200", "201"} <= set(publication_responses)
+
+
+def test_source_metadata_is_bounded_at_the_api_boundary():
+    accepted = SourcePatch(metadata={"talkie": {"recipe": {"tool": "http.get"}}})
+    assert accepted.metadata == {
+        "talkie": {"recipe": {"tool": "http.get"}},
+    }
+
+    with pytest.raises(ValidationError, match="65536 encoded bytes"):
+        SourcePatch(metadata={
+            "talkie": {"recipe": {"program": "x" * (64 * 1024)}},
+        })
 
 
 def test_upgrade_preview_exposes_structured_trigger_flow_issue(monkeypatch):

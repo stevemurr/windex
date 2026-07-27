@@ -42,7 +42,7 @@ class _Connection:
     def __init__(
         self,
         *,
-        metadata=(2, 2),
+        metadata=(2, 2, "seed-current"),
         worker=(0, 0, 0, 0),
         scheduler=(0, 0.0),
     ):
@@ -88,6 +88,11 @@ def _database(monkeypatch, connection, *, statuses=()):
 
     monkeypatch.setattr(readiness.psycopg, "connect", connect)
     monkeypatch.setattr(
+        readiness,
+        "seed_matrix_hash",
+        lambda _settings: "seed-current",
+    )
+    monkeypatch.setattr(
         readiness.source_store,
         "module_statuses",
         lambda _conn, enabled_only=False: list(statuses),
@@ -107,6 +112,10 @@ def test_healthy_database_reports_schema_capacity_scheduler_and_locks(monkeypatc
     assert result["schema"]["observations"] == {
         "schema_generation": 2,
         "contract_epoch": CONTRACT_EPOCH,
+    }
+    assert result["canonical_seeds"]["status"] == "ok"
+    assert result["canonical_seeds"]["observations"] == {
+        "matches_build": True,
     }
     assert result["workers"]["observations"] == {
         "ready_tasks": 0,
@@ -131,7 +140,10 @@ def test_postgres_down_is_critical_and_redacts_exception(monkeypatch):
     assert result["postgres"]["critical"] is True
     assert all(
         result[name]["status"] == "unknown"
-        for name in ("schema", "workers", "scheduler", "module_locks")
+        for name in (
+            "schema", "canonical_seeds", "workers", "scheduler",
+            "module_locks",
+        )
     )
     assert secret not in json.dumps(result)
     assert "do-not-leak" not in json.dumps(result)
@@ -142,13 +154,26 @@ def test_schema_mismatch_is_critical_without_hiding_postgres_reachability(
 ):
     result, _captured = _database(
         monkeypatch,
-        _Connection(metadata=(999, CONTRACT_EPOCH)),
+        _Connection(metadata=(999, CONTRACT_EPOCH, "seed-current")),
     )
 
     assert result["postgres"]["status"] == "ok"
     assert result["schema"]["status"] == "unavailable"
     assert result["schema"]["critical"] is True
     assert result["schema"]["observations"]["schema_generation"] == 999
+
+
+def test_stale_canonical_seed_hash_is_advisory_degradation(monkeypatch):
+    result, _captured = _database(
+        monkeypatch,
+        _Connection(metadata=(2, CONTRACT_EPOCH, "seed-from-old-build")),
+    )
+
+    seeds = result["canonical_seeds"]
+    assert seeds["status"] == "degraded"
+    assert seeds["critical"] is False
+    assert seeds["observations"] == {"matches_build": False}
+    assert "init-db" in seeds["summary"]
 
 
 def test_ready_tasks_without_live_workers_are_degraded(monkeypatch):
@@ -330,6 +355,7 @@ def test_snapshot_internal_failure_still_returns_decodable_degraded_health(
     assert set(result["components"]) == {
         "postgres",
         "schema",
+        "canonical_seeds",
         "qdrant",
         "embedding",
         "workers",
@@ -349,6 +375,7 @@ def test_collect_marks_advisory_outage_degraded_but_stays_ready(monkeypatch):
         for name in (
             "postgres",
             "schema",
+            "canonical_seeds",
             "workers",
             "scheduler",
             "module_locks",

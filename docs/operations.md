@@ -74,7 +74,10 @@ Top-level `status: degraded` includes advisory failures and does not itself mean
 the API is incompatible or wholly unavailable. Postgres/schema and Qdrant are
 critical. The embedder, worker capacity, scheduler lateness, and frozen Module
 locks are advisory because lexical search or unaffected Sources may still be
-useful. The snapshot is cached for ten seconds and its summaries are redacted.
+useful. `readiness.components.canonical_seeds.status: degraded` means the
+database seed hash does not match the running build; run the current image's
+`windex init-db` before starting workers. The snapshot is cached for ten seconds
+and its summaries are redacted.
 
 For authenticated detail:
 
@@ -89,7 +92,8 @@ curl -fsS "$B/admin/v1/sources/ccnews/status" -H "$AUTH" | jq .
 
 `module-health.status: degraded` means at least one enabled Source is pinned to
 a Pipeline revision whose frozen Module implementation is unavailable in this
-build. It is not repaired by restarting a worker.
+build. It is not repaired by restarting a worker. The same per-Source detail is
+included as `module_status` in `GET /admin/v1/sources/{name}/status`.
 
 ## Metrics and logs
 

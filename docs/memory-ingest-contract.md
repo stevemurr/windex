@@ -57,6 +57,11 @@ Idempotency-Key: <stable unique key, 8-128 characters>
   send the inclusive message indexes as exactly two non-negative integers,
   `[start, end]`, with `start <= end`. The same array is returned as
   `message_range` in search hits and document detail.
+- **Memory fields are canonical, not an extension object.** The memory Source
+  accepts `conversation_id`, `chunk_index`, and optional `message_range`.
+  Other `fields` keys are ignored and are not returned as search `extra`.
+  This differs deliberately from custom push Sources, which preserve
+  non-underscore `fields` keys in the search hit's `extra` object.
 - **Use a new idempotency key for each conversation revision.** Reuse a key only
   when retrying the identical payload — a repeated
   `(source, Idempotency-Key)` returns the existing run and ingests nothing.

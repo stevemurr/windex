@@ -2596,6 +2596,12 @@
             "title": "Include In All",
             "type": "boolean"
           },
+          "metadata": {
+            "additionalProperties": true,
+            "description": "Opaque client-owned JSON. The server persists and returns it but does not use it for Source execution.",
+            "title": "Metadata",
+            "type": "object"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -2717,6 +2723,11 @@
             ],
             "title": "Ingress"
           },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -2805,6 +2816,7 @@
           "title",
           "description",
           "origin",
+          "metadata",
           "pipeline_revision_id",
           "pipeline_name",
           "pipeline_version",
@@ -2914,6 +2926,18 @@
               }
             ],
             "title": "Include In All"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
           },
           "origin": {
             "anyOf": [
@@ -3037,6 +3061,17 @@
               }
             ],
             "title": "Latest Run"
+          },
+          "module_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceModuleStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Availability of the Source's frozen Module locks. Present on current servers; optional for additive epoch-2 compatibility."
           },
           "paused": {
             "title": "Paused",

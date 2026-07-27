@@ -38,6 +38,7 @@ from windex.source.store import (
     delete_operator_setting,
     list_sources,
     list_triggers,
+    patch_source,
     patch_settings,
     patch_operator_settings,
     settings_projection,
@@ -123,6 +124,44 @@ def _create_settings_source(canonical_conn) -> str:
         },
     })
     return name
+
+
+def test_source_metadata_is_opaque_persistent_and_patchable(canonical_conn):
+    suffix = uuid.uuid4().hex[:10]
+    name = f"metadata_{suffix}"
+    recipe = {
+        "tool": "http.get",
+        "paging": {"cursor": "$.next"},
+        "mapping": {"text": "$.items[*].body"},
+    }
+    created = create_source(canonical_conn, {
+        "name": name,
+        "pipeline_name": "custom",
+        "search_name": name,
+        "id_prefix": f"{name}:",
+        "collection_key": name,
+        "search_profile": "documents",
+        "state_namespace": name,
+        "origin": {"ingress": "push"},
+        "metadata": {"talkie": {"recipe": recipe}},
+        "values": {"max_docs": 500},
+    })
+
+    assert created["origin"] == {"ingress": "push"}
+    assert created["metadata"] == {"talkie": {"recipe": recipe}}
+    assert get_source(canonical_conn, name)["metadata"] == created["metadata"]
+    assert next(
+        source for source in list_sources(canonical_conn)
+        if source["name"] == name
+    )["metadata"] == created["metadata"]
+
+    patched = patch_source(
+        canonical_conn,
+        name,
+        {"metadata": {"talkie": {"recipe": {**recipe, "limit": 250}}}},
+    )
+    assert patched["metadata"]["talkie"]["recipe"]["limit"] == 250
+    assert patched["origin"] == {"ingress": "push"}
 
 
 def test_bootstrap_and_layout_are_deterministic(canonical_conn):
@@ -784,6 +823,8 @@ def test_source_status_surfaces_unavailable_module_lock(
     assert degraded["available"] is False
     assert degraded["upgrade_required"] is True
     assert degraded["unavailable_modules"] == ["push.docs"]
+    projection = status(canonical_conn, "memory")
+    assert projection["module_status"] == degraded
 
 
 def test_source_ready_tracks_builtin_digest_relock(

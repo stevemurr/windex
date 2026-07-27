@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS sources (
     title                   text NOT NULL DEFAULT '',
     description             text NOT NULL DEFAULT '',
     origin                  jsonb NOT NULL DEFAULT '{}',
+    metadata                jsonb NOT NULL DEFAULT '{}',
     pipeline_revision_id    bigint NOT NULL
         REFERENCES pipeline_revisions(id) ON DELETE RESTRICT,
     search_contract_version text NOT NULL,
@@ -87,6 +88,8 @@ CREATE TABLE IF NOT EXISTS sources (
     created_at              timestamptz NOT NULL DEFAULT now(),
     updated_at              timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE sources
+    ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS source_config (
     source_id   bigint PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,

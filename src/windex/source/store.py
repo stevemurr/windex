@@ -41,12 +41,13 @@ def values_hash(values: Mapping[str, Any]) -> str:
 
 
 _SOURCE_SELECT = """
-SELECT s.id, s.name, s.title, s.description, s.origin, s.pipeline_revision_id,
-       p.name, r.version, r.spec_hash, s.search_contract_version, s.search_name,
-       s.id_prefix, s.collection_key, s.search_profile, s.include_in_all,
-       s.state_namespace, s.enabled, s.generation, s.archived_at, s.created_at,
-       s.updated_at, c.values, c.values_hash, ctl.paused, ctl.pause_reason,
-       ctl.paused_at, r.spec, r.module_locks
+SELECT s.id, s.name, s.title, s.description, s.origin, s.metadata,
+       s.pipeline_revision_id, p.name, r.version, r.spec_hash,
+       s.search_contract_version, s.search_name, s.id_prefix, s.collection_key,
+       s.search_profile, s.include_in_all, s.state_namespace, s.enabled,
+       s.generation, s.archived_at, s.created_at, s.updated_at, c.values,
+       c.values_hash, ctl.paused, ctl.pause_reason, ctl.paused_at, r.spec,
+       r.module_locks
   FROM sources s
   JOIN pipeline_revisions r ON r.id = s.pipeline_revision_id
   JOIN pipelines p ON p.id = r.pipeline_id
@@ -62,8 +63,8 @@ def _source(
     ready: bool,
 ) -> dict[str, Any]:
     keys = (
-        "id", "name", "title", "description", "origin", "pipeline_revision_id",
-        "pipeline_name", "pipeline_version", "pipeline_hash",
+        "id", "name", "title", "description", "origin", "metadata",
+        "pipeline_revision_id", "pipeline_name", "pipeline_version", "pipeline_hash",
         "search_contract_version", "search_name", "id_prefix", "collection_key",
         "search_profile", "include_in_all", "state_namespace", "enabled",
         "generation", "archived_at", "created_at", "updated_at", "values",
@@ -195,17 +196,18 @@ def create_source(
         with conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO sources
-                       (name, title, description, origin, pipeline_revision_id,
-                        search_contract_version, search_name, id_prefix,
-                        collection_key, search_profile, include_in_all,
-                        state_namespace, enabled)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       (name, title, description, origin, metadata,
+                        pipeline_revision_id, search_contract_version,
+                        search_name, id_prefix, collection_key, search_profile,
+                        include_in_all, state_namespace, enabled)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     body["name"], body.get("title", ""), body.get("description", ""),
-                    Jsonb(dict(body.get("origin") or {})), revision["id"],
-                    SEARCH_SOURCE_CONTRACT, body["search_name"], body["id_prefix"],
-                    body["collection_key"], body["search_profile"],
+                    Jsonb(dict(body.get("origin") or {})),
+                    Jsonb(dict(body.get("metadata") or {})), revision["id"],
+                    SEARCH_SOURCE_CONTRACT, body["search_name"],
+                    body["id_prefix"], body["collection_key"], body["search_profile"],
                     bool(body.get("include_in_all", True)), body["state_namespace"],
                     bool(body.get("enabled", True)),
                 ),
@@ -237,7 +239,10 @@ def patch_source(
     if forbidden:
         raise SourceConflictError(
             f"immutable Source fields: {', '.join(sorted(forbidden))}")
-    allowed = {"title", "description", "origin", "enabled", "include_in_all"}
+    allowed = {
+        "title", "description", "origin", "metadata", "enabled",
+        "include_in_all",
+    }
     unknown = set(changes) - allowed
     if unknown:
         raise ValueError(f"unknown Source fields: {', '.join(sorted(unknown))}")
@@ -245,7 +250,11 @@ def patch_source(
     args: list[Any] = []
     for key, value in changes.items():
         assignments.append(f"{key} = %s")
-        args.append(Jsonb(dict(value)) if key == "origin" else value)
+        args.append(
+            Jsonb(dict(value))
+            if key in {"origin", "metadata"}
+            else value
+        )
     if not assignments:
         current = get_source(conn, name)
         if current is None:
@@ -1194,6 +1203,9 @@ def status(conn: psycopg.Connection, name: str) -> dict[str, Any]:
 
     latest = selected.get("latest")
     latest_run = run_projection(latest)
+    module_status = next(
+        iter(module_statuses(conn, name=name))
+    )
     return {
         "source": name,
         "enabled": source["enabled"],
@@ -1209,6 +1221,7 @@ def status(conn: psycopg.Connection, name: str) -> dict[str, Any]:
         "last_success": success.isoformat() if success else None,
         "last_failure": failure.isoformat() if failure else None,
         "recent_error": latest[7] if latest and latest[1] == "failed" else None,
+        "module_status": module_status,
     }
 
 
@@ -1216,15 +1229,19 @@ def module_statuses(
     conn: psycopg.Connection,
     *,
     enabled_only: bool = False,
+    name: str | None = None,
 ) -> list[dict[str, Any]]:
     """Describe whether each Source's frozen revision is runnable here."""
     from windex.pipeline import registry
 
-    where = (
-        "WHERE s.enabled AND s.archived_at IS NULL"
-        if enabled_only else
-        ""
-    )
+    clauses: list[str] = []
+    args: list[Any] = []
+    if enabled_only:
+        clauses.append("s.enabled AND s.archived_at IS NULL")
+    if name is not None:
+        clauses.append("s.name = %s")
+        args.append(name)
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -1236,7 +1253,8 @@ def module_statuses(
               JOIN pipeline_revisions r ON r.id = s.pipeline_revision_id
               {where}
              ORDER BY s.name
-            """
+            """,
+            args,
         )
         rows = cur.fetchall()
     unavailable_sets = registry.unavailable_modules_many(

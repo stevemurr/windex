@@ -46,8 +46,16 @@ def test_canonical_schema_contains_no_legacy_control_plane(canonical_conn):
             """SELECT tablename FROM pg_tables
                 WHERE schemaname = current_schema()""")
         tables = {row[0] for row in cur.fetchall()}
+        cur.execute(
+            """SELECT column_name
+                 FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'sources'"""
+        )
+        source_columns = {row[0] for row in cur.fetchall()}
     canonical_conn.rollback()
     assert {"pipelines", "pipeline_revisions", "sources", "operational_events"} <= tables
+    assert "metadata" in source_columns
     assert not {
         "recipes", "recipe_revisions", "recipe_config",
         "custom_sources", "schedule", "triggers", "run_events",

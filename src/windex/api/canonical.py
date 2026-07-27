@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import orjson
 from fastapi import (
@@ -20,7 +20,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -42,6 +42,21 @@ data_router = APIRouter(prefix="/v1")
 
 class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+_MAX_SOURCE_METADATA_BYTES = 64 * 1024
+
+
+def _bounded_source_metadata(value: dict[str, Any]) -> dict[str, Any]:
+    if len(orjson.dumps(value)) > _MAX_SOURCE_METADATA_BYTES:
+        raise ValueError("Source metadata must not exceed 65536 encoded bytes")
+    return value
+
+
+SourceMetadata = Annotated[
+    dict[str, Any],
+    AfterValidator(_bounded_source_metadata),
+]
 
 
 class ValidationIssueModel(Strict):
@@ -179,6 +194,13 @@ class SourceCreate(Strict):
     title: str = ""
     description: str = ""
     origin: dict[str, Any] = Field(default_factory=dict)
+    metadata: SourceMetadata = Field(
+        default_factory=dict,
+        description=(
+            "Opaque client-owned JSON. The server persists and returns it but "
+            "does not use it for Source execution."
+        ),
+    )
     pipeline_name: str
     pipeline_version: int | None = None
     search_name: str
@@ -195,6 +217,7 @@ class SourcePatch(Strict):
     title: str | None = None
     description: str | None = None
     origin: dict[str, Any] | None = None
+    metadata: SourceMetadata | None = None
     enabled: bool | None = None
     include_in_all: bool | None = None
 
@@ -349,6 +372,7 @@ class SourceModel(Strict):
     title: str
     description: str
     origin: dict[str, Any]
+    metadata: dict[str, Any]
     pipeline_revision_id: int
     pipeline_name: str
     pipeline_version: int
@@ -542,6 +566,13 @@ class SourceStatusResponse(Strict):
     last_success: str | None
     last_failure: str | None
     recent_error: str | None
+    module_status: SourceModuleStatus | None = Field(
+        default=None,
+        description=(
+            "Availability of the Source's frozen Module locks. Present on "
+            "current servers; optional for additive epoch-2 compatibility."
+        ),
+    )
 
 
 class ResetPreviewResponse(Strict):
@@ -1231,10 +1262,7 @@ def source_status(name: str) -> dict[str, Any]:
 def source_module_status(name: str) -> dict[str, Any]:
     try:
         with db.pooled(get_settings().pg_dsn) as conn:
-            return next(
-                item for item in source_store.module_statuses(conn)
-                if item["source"] == name
-            )
+            return next(iter(source_store.module_statuses(conn, name=name)))
     except StopIteration:
         raise HTTPException(404, "Source not found")
     except Exception as exc:

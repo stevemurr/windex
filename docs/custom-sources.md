@@ -38,6 +38,11 @@ source_body='{
   "title": "Team documents",
   "description": "Private notes pushed by the team agent",
   "origin": {"ingress": "push", "producer": "team-agent"},
+  "metadata": {
+    "team-agent": {
+      "refresh": {"tool": "http.get", "cursor": "$.next"}
+    }
+  },
   "pipeline_name": "custom",
   "search_name": "team_docs",
   "id_prefix": "team_docs:",
@@ -66,7 +71,7 @@ Inspect the active ingest contract:
 
 ```sh
 curl -fsS "$B/admin/v1/sources/team_docs" -H "$AUTH" | jq \
-  '{pipeline_name,pipeline_version,ready,ingress,values}'
+  '{pipeline_name,pipeline_version,ready,ingress,metadata,values}'
 ```
 
 The current template defaults to 500 documents per request and permits the
@@ -75,6 +80,18 @@ text limit and one million characters per document. The current `push.docs`
 Module default is stricter—16,000 characters per document—so clients should
 honor the pinned revision's Module configuration, not only the outer HTTP
 schema.
+
+## Client-owned Source metadata
+
+`Source.metadata` is an opaque JSON object for client-owned persistent state.
+The server stores and returns it but never reads it to select ingress, compile a
+Pipeline, or execute a Run. It can be supplied to Source creation and replaced
+with `PATCH /admin/v1/sources/{name}`. The encoded object is limited to 64 KiB.
+
+Clients should own one namespaced top-level key and keep their data beneath it;
+for example, Talkie stores refresh programs under
+`metadata.talkie.recipe`. Do not put client state in `origin`: `origin` is
+server-interpreted provenance and its keys may affect Source behavior.
 
 ## Delta ingest
 
@@ -221,7 +238,8 @@ After deploying a change to `push.docs`, `ledger.stage`, or another locked
 Module:
 
 1. run the new image's `windex init-db`;
-2. inspect `GET /admin/v1/sources/team_docs/module-status`;
+2. inspect `GET /admin/v1/sources/team_docs/status` (or the dedicated
+   `module-status` projection);
 3. preview the reported `latest_pipeline_version`;
 4. submit the preview's exact `candidate` and `confirmation_token`; and
 5. start new workers only after affected Sources are upgraded.
@@ -236,6 +254,7 @@ Custom-source producers need only these stable surfaces:
 | Purpose | Route |
 |---|---|
 | inspect Source and advertised ingress | `GET /admin/v1/sources/{name}` |
+| persist client-owned Source metadata | `POST /admin/v1/sources`; `PATCH /admin/v1/sources/{name}` |
 | queue delta documents/tombstones | `POST /v1/sources/{name}/ingest` |
 | poll accepted work | `GET /admin/v1/runs/{run_id}` |
 | query | `GET /v1/search?source={search_name}&q=...` |
