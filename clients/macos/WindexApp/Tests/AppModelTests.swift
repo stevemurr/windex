@@ -1175,6 +1175,831 @@ struct AppModelTests {
         #expect(session.sources.state == .loaded)
     }
 
+    @Test("broken Pipeline revisions and layouts do not poison later Pipelines")
+    func pipelineRefreshIsolatesRevisionAndLayoutFailures() async throws {
+        let host = "pipeline-isolation.windex.test"
+        var responses: [String: StubbedControlResponse] = [
+            "/admin/v1/pipelines": .json(
+                200,
+                Self.pipelineListJSON([
+                    ("decode", "Decode", 2),
+                    ("headless", "Headless", 5),
+                    ("identity", "Identity", 4),
+                    ("layout", "Layout", 2),
+                    ("omega", "Omega", 3),
+                ])
+            ),
+            "/admin/v1/pipelines/decode/revisions": .json(
+                200,
+                Self.pipelineRevisionsJSON([
+                    Self.pipelineRevisionJSON(
+                        name: "decode",
+                        version: 1,
+                        flows: ["discover"],
+                        validSpec: false
+                    ),
+                    Self.pipelineRevisionJSON(
+                        name: "decode",
+                        version: 2,
+                        flows: ["discover"]
+                    ),
+                ])
+            ),
+            "/admin/v1/pipelines/decode/revisions/2/layout?flow=discover": .json(
+                200,
+                Self.pipelineLayoutJSON(
+                    flow: "discover",
+                    etag: "decode-layout-v2",
+                    x: 20
+                )
+            ),
+            "/admin/v1/pipelines/headless/revisions": .json(
+                200,
+                Self.pipelineRevisionsJSON(
+                    name: "headless",
+                    version: 4,
+                    flows: ["discover"]
+                )
+            ),
+            "/admin/v1/pipelines/headless/revisions/4/layout?flow=discover": .json(
+                200,
+                Self.pipelineLayoutJSON(
+                    flow: "discover",
+                    etag: "headless-layout-v4",
+                    x: 40
+                )
+            ),
+            "/admin/v1/pipelines/identity/revisions": .json(
+                200,
+                Self.pipelineRevisionsJSON([
+                    Self.pipelineRevisionJSON(
+                        name: "identity",
+                        version: 4,
+                        flows: ["discover"],
+                        responsePipelineName: "omega"
+                    ),
+                ])
+            ),
+            "/admin/v1/pipelines/layout/revisions": .json(
+                200,
+                Self.pipelineRevisionsJSON(
+                    name: "layout",
+                    version: 2,
+                    flows: ["discover", "load"]
+                )
+            ),
+            "/admin/v1/pipelines/layout/revisions/2/layout?flow=discover": .json(
+                200,
+                Self.pipelineLayoutJSON(
+                    flow: "discover",
+                    etag: "layout-discover-v2",
+                    x: 20
+                )
+            ),
+            "/admin/v1/pipelines/layout/revisions/2/layout?flow=load": .json(
+                503,
+                #"{"detail":"load layout temporarily unavailable"}"#
+            ),
+            "/admin/v1/pipelines/omega/revisions": .json(
+                200,
+                Self.pipelineRevisionsJSON(
+                    name: "omega",
+                    version: 3,
+                    flows: ["discover"]
+                )
+            ),
+            "/admin/v1/pipelines/omega/revisions/3/layout?flow=discover": .json(
+                200,
+                Self.pipelineLayoutJSON(
+                    flow: "discover",
+                    etag: "omega-layout-v3",
+                    x: 30
+                )
+            ),
+        ]
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: responses
+        )
+        defer { ControlReconciliationURLProtocol.reset(host: host) }
+        let session = try Self.controlSession(host: host)
+
+        await session.refreshAll()
+
+        #expect(session.pipelines.state == .loaded)
+        #expect(session.pipelines.pipelines.map(\.name)
+            == ["decode", "headless", "identity", "layout", "omega"])
+        #expect(session.pipelines.revisions["decode"]?
+            .map(\.reference.version) == [2])
+        #expect(session.pipelines.layout(
+            pipeline: "decode",
+            version: 2,
+            flow: "discover"
+        )?.etag == "decode-layout-v2")
+        #expect(session.pipelines.revisions["identity"]?.isEmpty == true)
+        #expect(session.pipelines.revisions["headless"]?
+            .map(\.reference.version) == [4])
+        #expect(session.pipelines.revisions["layout"]?
+            .map(\.reference.version) == [2])
+        #expect(session.pipelines.layout(
+            pipeline: "layout",
+            version: 2,
+            flow: "discover"
+        ) == nil)
+        #expect(session.pipelines.layout(
+            pipeline: "layout",
+            version: 2,
+            flow: "load"
+        ) == nil)
+        #expect(session.pipelines.revisions["omega"]?
+            .map(\.reference.version) == [3])
+        #expect(session.pipelines.layout(
+            pipeline: "omega",
+            version: 3,
+            flow: "discover"
+        )?.etag == "omega-layout-v3")
+
+        let decodeDiagnostic = try #require(
+            session.pipelines.diagnostic(for: "decode")
+        )
+        #expect(Set(decodeDiagnostic.failures.keys) == [.revision(1)])
+        #expect(!decodeDiagnostic.usingLastKnownGood)
+        let headDiagnostic = try #require(
+            session.pipelines.diagnostic(for: "headless")
+        )
+        #expect(Set(headDiagnostic.failures.keys) == [.revisions])
+        #expect(headDiagnostic.message.contains("omitted head v5"))
+        #expect(session.pipelines.snapshot(for: "headless")?.isComplete == false)
+        let identityDiagnostic = try #require(
+            session.pipelines.diagnostic(for: "identity")
+        )
+        #expect(Set(identityDiagnostic.failures.keys) == [.revision(4)])
+        #expect(identityDiagnostic.message.contains("did not match requested"))
+        let layoutDiagnostic = try #require(
+            session.pipelines.diagnostic(for: "layout")
+        )
+        #expect(Set(layoutDiagnostic.failures.keys) == [
+            .layout(version: 2, flow: "discover"),
+            .layout(version: 2, flow: "load"),
+        ])
+        #expect(!layoutDiagnostic.usingLastKnownGood)
+        #expect(session.pipelines.snapshot(for: "layout")?.isComplete == false)
+        #expect(session.pipelines.diagnostic(for: "omega") == nil)
+        #expect(layoutDiagnostic.message.contains("v2/load"))
+
+        let paths = ControlReconciliationURLProtocol.requests(host: host)
+            .map(\.path)
+        #expect(paths.contains("/admin/v1/pipelines/omega/revisions"))
+        #expect(!paths.contains(
+            "/admin/v1/pipelines/omega/revisions/4/layout"
+        ))
+        #expect(paths.filter {
+            $0 == "/admin/v1/pipelines/layout/revisions/2/layout"
+        }.count == 2)
+
+        // Loading only the originally failed Flow must not clear diagnostics
+        // while its successfully fetched-but-withheld sibling is still absent.
+        var oneFlowResponses = responses
+        oneFlowResponses[
+            "/admin/v1/pipelines/layout/revisions/2/layout?flow=load"
+        ] = .json(
+            200,
+            Self.pipelineLayoutJSON(
+                flow: "load",
+                etag: "layout-load-v2",
+                x: 40
+            )
+        )
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: oneFlowResponses
+        )
+        await session.loadLayout(
+            pipeline: "layout",
+            version: 2,
+            flow: "load"
+        )
+        #expect(session.pipelines.layout(
+            pipeline: "layout",
+            version: 2,
+            flow: "load"
+        )?.etag == "layout-load-v2")
+        #expect(session.pipelines.layout(
+            pipeline: "layout",
+            version: 2,
+            flow: "discover"
+        ) == nil)
+        let oneFlowDiagnostic = try #require(
+            session.pipelines.diagnostic(for: "layout")
+        )
+        #expect(Set(oneFlowDiagnostic.failures.keys) == [
+            .layout(version: 2, flow: "discover"),
+        ])
+
+        // Repeating the same partial failure must not promote the incomplete
+        // zero-layout revision to last-known-good.
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: responses
+        )
+        await session.refreshAll()
+        let repeatedDiagnostic = try #require(
+            session.pipelines.diagnostic(for: "layout")
+        )
+        #expect(Set(repeatedDiagnostic.failures.keys) == [
+            .layout(version: 2, flow: "discover"),
+            .layout(version: 2, flow: "load"),
+        ])
+        #expect(!repeatedDiagnostic.usingLastKnownGood)
+        #expect(session.pipelines.snapshot(for: "layout")?.isComplete == false)
+
+        // An outer revision-list failure preserves every prior scoped failure
+        // and still refuses to label the incomplete snapshot as LKG.
+        var listFailureResponses = responses
+        listFailureResponses["/admin/v1/pipelines/layout/revisions"] = .json(
+            503,
+            #"{"detail":"revision list temporarily unavailable"}"#
+        )
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: listFailureResponses
+        )
+        await session.refreshAll()
+        let listDiagnostic = try #require(
+            session.pipelines.diagnostic(for: "layout")
+        )
+        #expect(Set(listDiagnostic.failures.keys) == [
+            .revisions,
+            .layout(version: 2, flow: "discover"),
+            .layout(version: 2, flow: "load"),
+        ])
+        #expect(!listDiagnostic.usingLastKnownGood)
+        #expect(session.pipelines.snapshot(for: "layout")?.isComplete == false)
+
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: oneFlowResponses
+        )
+        await session.loadLayout(
+            pipeline: "layout",
+            version: 2,
+            flow: "load"
+        )
+        await session.loadLayout(
+            pipeline: "layout",
+            version: 2,
+            flow: "discover"
+        )
+        #expect(session.pipelines.snapshot(for: "layout")?.isComplete == true)
+        let directRecoveryDiagnostic = try #require(
+            session.pipelines.diagnostic(for: "layout")
+        )
+        #expect(Set(directRecoveryDiagnostic.failures.keys) == [.revisions])
+
+        // The physically complete recovered snapshot is now valid LKG even
+        // though the revision-list request itself remains degraded.
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: listFailureResponses
+        )
+        await session.refreshAll()
+        let recoveredLKGDiagnostic = try #require(
+            session.pipelines.diagnostic(for: "layout")
+        )
+        #expect(Set(recoveredLKGDiagnostic.failures.keys) == [.revisions])
+        #expect(recoveredLKGDiagnostic.usingLastKnownGood)
+        #expect(session.pipelines.snapshot(for: "layout")?.isComplete == true)
+
+        responses[
+            "/admin/v1/pipelines/layout/revisions/2/layout?flow=load"
+        ] = .json(
+            200,
+            Self.pipelineLayoutJSON(
+                flow: "load",
+                etag: "layout-load-v2",
+                x: 40
+            )
+        )
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: responses
+        )
+        await session.refreshAll()
+
+        #expect(session.pipelines.diagnostic(for: "layout") == nil)
+        #expect(session.pipelines.snapshot(for: "layout")?.isComplete == true)
+        #expect(session.pipelines.layout(
+            pipeline: "layout",
+            version: 2,
+            flow: "discover"
+        )?.etag == "layout-discover-v2")
+        #expect(session.pipelines.layout(
+            pipeline: "layout",
+            version: 2,
+            flow: "load"
+        )?.etag == "layout-load-v2")
+        #expect(session.pipelines.diagnostic(for: "decode") != nil)
+        #expect(session.pipelines.diagnostic(for: "identity") != nil)
+        #expect(session.pipelines.revisions["omega"]?
+            .map(\.reference.version) == [3])
+    }
+
+    @Test("a failed Pipeline revision list retains and recovers its exact snapshot")
+    func pipelineRefreshRetainsAndRecoversCoherentSnapshot() async throws {
+        let host = "pipeline-recovery.windex.test"
+        let failedResponses: [String: StubbedControlResponse] = [
+            "/admin/v1/pipelines": .json(
+                200,
+                Self.pipelineListJSON([
+                    ("alpha", "Alpha new", 2),
+                    ("omega", "Omega", 3),
+                ])
+            ),
+            "/admin/v1/pipelines/alpha/revisions": .json(
+                503,
+                #"{"detail":"revision list temporarily unavailable"}"#
+            ),
+            "/admin/v1/pipelines/omega/revisions": .json(
+                200,
+                Self.pipelineRevisionsJSON(
+                    name: "omega",
+                    version: 3,
+                    flows: ["discover"]
+                )
+            ),
+            "/admin/v1/pipelines/omega/revisions/3/layout?flow=discover": .json(
+                200,
+                Self.pipelineLayoutJSON(
+                    flow: "discover",
+                    etag: "omega-layout-v3",
+                    x: 30
+                )
+            ),
+        ]
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: failedResponses
+        )
+        defer { ControlReconciliationURLProtocol.reset(host: host) }
+        let session = try Self.controlSession(host: host)
+        let oldRevision = PipelineRevision(
+            reference: .init(
+                pipeline: "alpha",
+                version: 1,
+                specHash: "alpha-hash-1"
+            ),
+            spec: .init(
+                title: "Alpha old",
+                flows: [.init(name: "discover")]
+            ),
+            registryVersion: 1
+        )
+        let oldLayout = PipelineFlowLayout(
+            pipeline: "alpha",
+            version: 1,
+            flow: "discover",
+            positions: ["node": .init(x: 1, y: 1)],
+            etag: "alpha-layout-v1"
+        )
+        session.pipelines.replaceSnapshots(
+            [
+                .init(
+                    summary: .init(
+                        name: "alpha",
+                        title: "Alpha old",
+                        headVersion: 1,
+                        headHash: "alpha-hash-1",
+                        deploymentCount: 0
+                    ),
+                    revisions: [oldRevision],
+                    layouts: [oldLayout]
+                ),
+            ],
+            diagnostics: [:]
+        )
+
+        await session.refreshAll()
+
+        let retained = try #require(
+            session.pipelines.pipelines.first { $0.name == "alpha" }
+        )
+        #expect(retained.title == "Alpha old")
+        #expect(retained.headVersion == 1)
+        #expect(session.pipelines.revisions["alpha"]?
+            .map(\.reference.version) == [1])
+        #expect(session.pipelines.layout(
+            pipeline: "alpha",
+            version: 1,
+            flow: "discover"
+        )?.etag == "alpha-layout-v1")
+        #expect(session.pipelines.revisions["omega"]?
+            .map(\.reference.version) == [3])
+        let retainedDiagnostic = try #require(
+            session.pipelines.diagnostic(for: "alpha")
+        )
+        #expect(Set(retainedDiagnostic.failures.keys) == [.revisions])
+        #expect(retainedDiagnostic.usingLastKnownGood)
+
+        let recoveredResponses: [String: StubbedControlResponse] = [
+            "/admin/v1/pipelines": .json(
+                200,
+                Self.pipelineListJSON([
+                    ("alpha", "Alpha new", 2),
+                    ("omega", "Omega", 3),
+                ])
+            ),
+            "/admin/v1/pipelines/alpha/revisions": .json(
+                200,
+                Self.pipelineRevisionsJSON(
+                    name: "alpha",
+                    version: 2,
+                    flows: ["discover"]
+                )
+            ),
+            "/admin/v1/pipelines/alpha/revisions/2/layout?flow=discover": .json(
+                200,
+                Self.pipelineLayoutJSON(
+                    flow: "discover",
+                    etag: "alpha-layout-v2",
+                    x: 20
+                )
+            ),
+            "/admin/v1/pipelines/omega/revisions": .json(
+                200,
+                Self.pipelineRevisionsJSON(
+                    name: "omega",
+                    version: 3,
+                    flows: ["discover"]
+                )
+            ),
+            "/admin/v1/pipelines/omega/revisions/3/layout?flow=discover": .json(
+                200,
+                Self.pipelineLayoutJSON(
+                    flow: "discover",
+                    etag: "omega-layout-v3",
+                    x: 30
+                )
+            ),
+        ]
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: recoveredResponses
+        )
+
+        await session.refreshAll()
+
+        let recovered = try #require(
+            session.pipelines.pipelines.first { $0.name == "alpha" }
+        )
+        #expect(recovered.title == "Alpha new")
+        #expect(recovered.headVersion == 2)
+        #expect(session.pipelines.revisions["alpha"]?
+            .map(\.reference.version) == [2])
+        #expect(session.pipelines.layout(
+            pipeline: "alpha",
+            version: 1,
+            flow: "discover"
+        ) == nil)
+        #expect(session.pipelines.layout(
+            pipeline: "alpha",
+            version: 2,
+            flow: "discover"
+        )?.etag == "alpha-layout-v2")
+        #expect(session.pipelines.diagnostic(for: "alpha") == nil)
+        #expect(session.pipelines.state == .loaded)
+    }
+
+    @Test("targeted Pipeline failures retain exact LKG and do not stop later targets")
+    func targetedPipelineRefreshIsolatesAndRecovers() async throws {
+        let host = "pipeline-targeted-isolation.windex.test"
+        var responses: [String: StubbedControlResponse] = [
+            "/admin/v1/pipelines/broken": .json(
+                200,
+                Self.pipelineModelJSON(
+                    name: "broken",
+                    title: "Broken",
+                    version: 2
+                )
+            ),
+            "/admin/v1/pipelines/broken/revisions/2": .json(
+                200,
+                Self.pipelineRevisionJSON(
+                    name: "broken",
+                    version: 2,
+                    flows: ["discover", "load"]
+                )
+            ),
+            "/admin/v1/pipelines/broken/revisions/2/layout?flow=discover": .json(
+                200,
+                Self.pipelineLayoutJSON(
+                    flow: "discover",
+                    etag: "broken-discover-new",
+                    x: 20
+                )
+            ),
+            "/admin/v1/pipelines/broken/revisions/2/layout?flow=load": .json(
+                503,
+                #"{"detail":"load layout temporarily unavailable"}"#
+            ),
+            "/admin/v1/pipelines/omega": .json(
+                200,
+                Self.pipelineModelJSON(
+                    name: "omega",
+                    title: "Omega",
+                    version: 3
+                )
+            ),
+            "/admin/v1/pipelines/omega/revisions/3": .json(
+                200,
+                Self.pipelineRevisionJSON(
+                    name: "omega",
+                    version: 3,
+                    flows: ["discover"]
+                )
+            ),
+            "/admin/v1/pipelines/omega/revisions/3/layout?flow=discover": .json(
+                200,
+                Self.pipelineLayoutJSON(
+                    flow: "discover",
+                    etag: "omega-discover-v3",
+                    x: 30
+                )
+            ),
+        ]
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: responses
+        )
+        defer { ControlReconciliationURLProtocol.reset(host: host) }
+        let session = try Self.controlSession(host: host)
+        let oldRevision = PipelineRevision(
+            reference: .init(
+                pipeline: "broken",
+                version: 2,
+                specHash: "broken-hash-2"
+            ),
+            spec: .init(
+                title: "Broken",
+                flows: [
+                    .init(name: "discover"),
+                    .init(name: "load"),
+                ]
+            ),
+            registryVersion: 1
+        )
+        session.pipelines.replaceSnapshots(
+            [
+                .init(
+                    summary: .init(
+                        name: "broken",
+                        title: "Broken",
+                        headVersion: 2,
+                        headHash: "broken-hash-2"
+                    ),
+                    revisions: [oldRevision],
+                    layouts: [
+                        .init(
+                            pipeline: "broken",
+                            version: 2,
+                            flow: "discover",
+                            etag: "broken-discover-old"
+                        ),
+                        .init(
+                            pipeline: "broken",
+                            version: 2,
+                            flow: "load",
+                            etag: "broken-load-old"
+                        ),
+                        .init(
+                            pipeline: "broken",
+                            version: 2,
+                            flow: "obsolete",
+                            etag: "broken-obsolete"
+                        ),
+                    ]
+                ),
+            ],
+            diagnostics: [:]
+        )
+
+        let targets: [(Int64, String, Int)] = [
+            (1, "broken", 2),
+            (2, "omega", 3),
+        ]
+        for (sequence, pipeline, version) in targets {
+            session.scheduleReconciliation(for: .init(
+                sequence: sequence,
+                timestamp: .now,
+                level: .info,
+                component: "pipeline",
+                pipelineName: pipeline,
+                pipelineVersion: version,
+                event: "pipeline.revision_published",
+                message: ""
+            ))
+        }
+        await session.waitForScheduledReconciliation()
+
+        #expect(session.pipelines.state == .loaded)
+        #expect(session.pipelines.layout(
+            pipeline: "broken",
+            version: 2,
+            flow: "discover"
+        )?.etag == "broken-discover-old")
+        #expect(session.pipelines.layout(
+            pipeline: "broken",
+            version: 2,
+            flow: "load"
+        )?.etag == "broken-load-old")
+        #expect(session.pipelines.layout(
+            pipeline: "broken",
+            version: 2,
+            flow: "obsolete"
+        )?.etag == "broken-obsolete")
+        let diagnostic = try #require(
+            session.pipelines.diagnostic(for: "broken")
+        )
+        #expect(Set(diagnostic.failures.keys) == [
+            .layout(version: 2, flow: "load"),
+        ])
+        #expect(diagnostic.usingLastKnownGood)
+        #expect(session.pipelines.revisions["omega"]?
+            .map(\.reference.version) == [3])
+        #expect(session.pipelines.layout(
+            pipeline: "omega",
+            version: 3,
+            flow: "discover"
+        )?.etag == "omega-discover-v3")
+        #expect(session.pipelines.snapshot(for: "omega")?.isComplete == false)
+
+        responses[
+            "/admin/v1/pipelines/broken/revisions/2/layout?flow=load"
+        ] = .json(
+            200,
+            Self.pipelineLayoutJSON(
+                flow: "load",
+                etag: "broken-load-new",
+                x: 40
+            )
+        )
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: responses
+        )
+        session.scheduleReconciliation(for: .init(
+            sequence: 3,
+            timestamp: .now,
+            level: .info,
+            component: "pipeline",
+            pipelineName: "broken",
+            pipelineVersion: 2,
+            event: "pipeline.layout_updated",
+            message: ""
+        ))
+        await session.waitForScheduledReconciliation()
+
+        #expect(session.pipelines.diagnostic(for: "broken") == nil)
+        #expect(session.pipelines.layout(
+            pipeline: "broken",
+            version: 2,
+            flow: "discover"
+        )?.etag == "broken-discover-new")
+        #expect(session.pipelines.layout(
+            pipeline: "broken",
+            version: 2,
+            flow: "load"
+        )?.etag == "broken-load-new")
+        #expect(session.pipelines.layout(
+            pipeline: "broken",
+            version: 2,
+            flow: "obsolete"
+        ) == nil)
+        #expect(session.pipelines.revisions["omega"]?
+            .map(\.reference.version) == [3])
+
+        // An exact targeted fetch does not prove complete revision-list
+        // membership. A later list failure retains the exact data but must not
+        // label the aggregate snapshot as complete LKG.
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: [
+                "/admin/v1/pipelines": .json(
+                    200,
+                    Self.pipelineListJSON([
+                        ("omega", "Omega", 3),
+                    ])
+                ),
+                "/admin/v1/pipelines/omega/revisions": .json(
+                    503,
+                    #"{"detail":"revision list temporarily unavailable"}"#
+                ),
+            ]
+        )
+        await session.refreshAll()
+
+        let omegaDiagnostic = try #require(
+            session.pipelines.diagnostic(for: "omega")
+        )
+        #expect(Set(omegaDiagnostic.failures.keys) == [.revisions])
+        #expect(!omegaDiagnostic.usingLastKnownGood)
+        #expect(session.pipelines.snapshot(for: "omega")?.isComplete == false)
+        #expect(session.pipelines.revisions["omega"]?
+            .map(\.reference.version) == [3])
+        #expect(session.pipelines.layout(
+            pipeline: "omega",
+            version: 3,
+            flow: "discover"
+        )?.etag == "omega-discover-v3")
+    }
+
+    @Test("a stopped session ignores a late direct Pipeline layout response")
+    func directPipelineLayoutHonorsLifecycleEpoch() async throws {
+        let host = "pipeline-layout-lifecycle.windex.test"
+        let path = "/admin/v1/pipelines/life/revisions/1/layout"
+        let responses: [String: StubbedControlResponse] = [
+            "\(path)?flow=discover": .json(
+                200,
+                Self.pipelineLayoutJSON(
+                    flow: "discover",
+                    etag: "life-layout-v1",
+                    x: 10
+                )
+            ),
+        ]
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            blocking: [path: 1],
+            responses: responses
+        )
+        defer { ControlReconciliationURLProtocol.reset(host: host) }
+        let session = try Self.controlSession(host: host)
+        let revision = PipelineRevision(
+            reference: .init(
+                pipeline: "life",
+                version: 1,
+                specHash: "life-hash-1"
+            ),
+            spec: .init(
+                title: "Life",
+                flows: [.init(name: "discover")]
+            ),
+            registryVersion: 1
+        )
+        session.pipelines.replaceSnapshots(
+            [
+                .init(
+                    summary: .init(
+                        name: "life",
+                        title: "Life",
+                        headVersion: 1,
+                        headHash: "life-hash-1"
+                    ),
+                    revisions: [revision],
+                    layouts: []
+                ),
+            ],
+            diagnostics: [:]
+        )
+
+        let stale = Task {
+            await session.loadLayout(
+                pipeline: "life",
+                version: 1,
+                flow: "discover"
+            )
+        }
+        #expect(await ControlReconciliationURLProtocol.waitForRequest(
+            host: host,
+            path: path
+        ))
+        session.stop()
+        ControlReconciliationURLProtocol.release(host: host, path: path)
+        await stale.value
+
+        #expect(session.pipelines.layout(
+            pipeline: "life",
+            version: 1,
+            flow: "discover"
+        ) == nil)
+        #expect(session.pipelines.diagnostic(for: "life") == nil)
+
+        ControlReconciliationURLProtocol.configure(
+            host: host,
+            responses: responses
+        )
+        await session.loadLayout(
+            pipeline: "life",
+            version: 1,
+            flow: "discover"
+        )
+        #expect(session.pipelines.layout(
+            pipeline: "life",
+            version: 1,
+            flow: "discover"
+        )?.etag == "life-layout-v1")
+        #expect(session.pipelines.snapshot(for: "life")?.isComplete == true)
+    }
+
     @Test("an invalidation arriving during a pass is drained by a second pass")
     func reconciliationDrainsEventsArrivingDuringPass() async throws {
         let host = "reconciliation-rerun.windex.test"
@@ -1404,6 +2229,145 @@ struct AppModelTests {
             event: "task.leased",
             message: ""
         )
+    }
+
+    private static func pipelineListJSON(
+        _ pipelines: [(name: String, title: String, version: Int)]
+    ) -> String {
+        let values = pipelines.enumerated().map { offset, pipeline in
+            pipelineModelJSON(
+                name: pipeline.name,
+                title: pipeline.title,
+                version: pipeline.version,
+                id: offset + 1
+            )
+        }.joined(separator: ",")
+        return #"{"pipelines":[\#(values)]}"#
+    }
+
+    private static func pipelineModelJSON(
+        name: String,
+        title: String,
+        version: Int,
+        id: Int = 1,
+        responseName: String? = nil
+    ) -> String {
+        """
+        {
+          "builtin": true,
+          "created_at": "2026-07-25T00:00:00Z",
+          "description": "",
+          "head_revision_id": \(version),
+          "id": \(id),
+          "name": "\(responseName ?? name)",
+          "spec_hash": "\(name)-hash-\(version)",
+          "title": "\(title)",
+          "updated_at": "2026-07-26T10:00:00Z",
+          "version": \(version)
+        }
+        """
+    }
+
+    private static func pipelineRevisionsJSON(
+        name: String,
+        version: Int,
+        flows: [String],
+        validSpec: Bool = true
+    ) -> String {
+        pipelineRevisionsJSON([
+            pipelineRevisionJSON(
+                name: name,
+                version: version,
+                flows: flows,
+                validSpec: validSpec
+            ),
+        ])
+    }
+
+    private static func pipelineRevisionsJSON(
+        _ revisions: [String]
+    ) -> String {
+        #"{"revisions":[\#(revisions.joined(separator: ","))]}"#
+    }
+
+    private static func pipelineRevisionJSON(
+        name: String,
+        version: Int,
+        flows: [String],
+        validSpec: Bool = true,
+        responsePipelineName: String? = nil
+    ) -> String {
+        let flowValue: String
+        if validSpec {
+            flowValue = flows.map { flow in
+                """
+                "\(flow)": {
+                  "inputs": [],
+                  "outputs": [],
+                  "nodes": {},
+                  "edges": []
+                }
+                """
+            }.joined(separator: ",")
+        } else {
+            flowValue = ""
+        }
+        let spec = validSpec
+            ? """
+              {
+                "schema": "windex.pipeline/1",
+                "parameters": [],
+                "state": {},
+                "flows": {\(flowValue)},
+                "refresh": []
+              }
+              """
+            : """
+              {
+                "schema": "windex.pipeline/1",
+                "parameters": [],
+                "state": {},
+                "flows": [],
+                "refresh": []
+              }
+              """
+        return """
+        {
+          "author": "test",
+          "capability": {"capable": false, "issues": []},
+          "created_at": "2026-07-26T10:00:00Z",
+          "id": \(version),
+          "module_locks": {},
+          "note": "",
+          "parent_revision_id": null,
+          "pipeline_id": 1,
+          "pipeline_name": "\(responsePipelineName ?? name)",
+          "registry_digest": "registry",
+          "registry_version": 1,
+          "spec": \(spec),
+          "spec_hash": "\(name)-hash-\(version)",
+          "version": \(version)
+        }
+        """
+    }
+
+    private static func pipelineLayoutJSON(
+        flow: String,
+        etag: String,
+        x: Int
+    ) -> String {
+        """
+        {
+          "etag": "\(etag)",
+          "flow": "\(flow)",
+          "layout": {
+            "nodes": {"node": {"x": \(x), "y": 0}},
+            "groups": [],
+            "annotations": []
+          },
+          "updated_at": "2026-07-26T10:00:00Z"
+        }
+        """
     }
 
     private static let transformModule = PipelineModuleDescriptor(
@@ -1863,6 +2827,7 @@ private final class ControlReconciliationURLProtocol:
 
     override func startLoading() {
         let path = request.url?.path ?? ""
+        let responseKey = request.url?.query.map { "\(path)?\($0)" } ?? path
         let configured = Self.lock.withLock {
             () -> (DispatchSemaphore?, StubbedControlResponse?) in
             let host = request.url?.host ?? ""
@@ -1878,7 +2843,11 @@ private final class ControlReconciliationURLProtocol:
             let gate = values?.indices.contains(ordinal) == true
                 ? values?[ordinal]
                 : nil
-            return (gate, Self.responses[host]?[path])
+            return (
+                gate,
+                Self.responses[host]?[responseKey]
+                    ?? Self.responses[host]?[path]
+            )
         }
         configured.0?.wait()
         let defaultBody = Self.responseBody(path: path)

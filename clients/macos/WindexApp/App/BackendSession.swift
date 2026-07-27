@@ -33,6 +33,72 @@ struct SourceModuleUnavailableError: LocalizedError, Equatable, Sendable {
     }
 }
 
+private struct PipelineLayoutFlowMismatch: LocalizedError, Sendable {
+    let requested: String
+    let received: String
+
+    var errorDescription: String? {
+        "Layout response for \(requested) identified Flow \(received)."
+    }
+}
+
+private struct PipelineRevisionIdentityMismatch: LocalizedError, Sendable {
+    let expectedPipeline: String
+    let expectedVersion: Int
+    let receivedPipeline: String
+    let receivedVersion: Int
+
+    var errorDescription: String? {
+        "Revision response identity \(receivedPipeline) v\(receivedVersion) "
+            + "did not match requested \(expectedPipeline) v\(expectedVersion)."
+    }
+}
+
+private struct DuplicatePipelineRevision: LocalizedError, Sendable {
+    let pipeline: String
+    let version: Int
+
+    var errorDescription: String? {
+        "Revision list for \(pipeline) contained duplicate v\(version) entries."
+    }
+}
+
+private struct PipelineSummaryIdentityMismatch: LocalizedError, Sendable {
+    let expected: String
+    let received: String
+
+    var errorDescription: String? {
+        "Pipeline response identity \(received) did not match requested \(expected)."
+    }
+}
+
+private struct DuplicatePipelineSummary: LocalizedError, Sendable {
+    let pipeline: String
+
+    var errorDescription: String? {
+        "Pipeline catalogue contained duplicate \(pipeline) summaries."
+    }
+}
+
+private struct PipelineHeadRevisionMissing: LocalizedError, Sendable {
+    let pipeline: String
+    let version: Int
+
+    var errorDescription: String? {
+        "Revision list for \(pipeline) omitted head v\(version)."
+    }
+}
+
+private struct UnknownPipelineLayoutScope: LocalizedError, Sendable {
+    let pipeline: String
+    let version: Int
+    let flow: String
+
+    var errorDescription: String? {
+        "Cannot load layout for unknown \(pipeline) v\(version)/\(flow)."
+    }
+}
+
 /// A Source refresh is assembled from several independently served
 /// projections. Keep their failures attached to the affected Source instead of
 /// collapsing the complete Source catalogue into a failed state.
@@ -63,6 +129,77 @@ struct SourceLoadDiagnostic: Equatable, Sendable {
             disposition = "The remaining Source data is still available."
         } else {
             disposition = "The Source will appear after a complete snapshot loads."
+        }
+        return "\(details) \(disposition) Retry the refresh."
+    }
+}
+
+/// Pipeline data is assembled from an independently served revision list and
+/// one layout per Flow. Keep failures attached to their exact scope so one bad
+/// revision cannot make every later Pipeline disappear.
+struct PipelineLoadDiagnostic: Equatable, Sendable {
+    enum Scope: Hashable, Sendable {
+        case summary
+        case revisions
+        case revision(Int)
+        case layout(version: Int, flow: String)
+
+        var title: String {
+            switch self {
+            case .summary:
+                "Summary"
+            case .revisions:
+                "Revisions"
+            case .revision(let version):
+                "Revision v\(version)"
+            case .layout(let version, let flow):
+                "Layout v\(version)/\(flow)"
+            }
+        }
+
+        func belongs(to version: Int) -> Bool {
+            switch self {
+            case .revision(let candidate):
+                candidate == version
+            case .layout(let candidate, _):
+                candidate == version
+            case .summary, .revisions:
+                false
+            }
+        }
+
+        var sortKey: String {
+            switch self {
+            case .summary:
+                "0"
+            case .revisions:
+                "1"
+            case .revision(let version):
+                "2:\(String(format: "%010d", version))"
+            case .layout(let version, let flow):
+                "3:\(String(format: "%010d", version)):\(flow)"
+            }
+        }
+    }
+
+    let pipeline: String
+    let failures: [Scope: String]
+    let usingLastKnownGood: Bool
+    let snapshotAvailable: Bool
+
+    var message: String {
+        let details = failures.sorted {
+            $0.key.sortKey < $1.key.sortKey
+        }.map { scope, failure in
+            "\(scope.title): \(failure)"
+        }.joined(separator: " ")
+        let disposition: String
+        if usingLastKnownGood {
+            disposition = "Showing the last complete data for the affected scope."
+        } else if snapshotAvailable {
+            disposition = "The remaining Pipeline data is still available."
+        } else {
+            disposition = "The Pipeline will be usable after a complete snapshot loads."
         }
         return "\(details) \(disposition) Retry the refresh."
     }
@@ -113,10 +250,54 @@ final class RegistryStore {
 @MainActor
 @Observable
 final class PipelineStore {
+    struct Snapshot {
+        let summary: PipelineSummary
+        let revisions: [PipelineRevision]
+        let layouts: [PipelineFlowLayout]
+        /// Nil means no revision list has ever established its membership.
+        /// A concrete set lets completeness be recomputed after targeted or
+        /// per-Flow recovery instead of becoming permanently sticky-false.
+        let expectedVersions: Set<Int>?
+
+        init(
+            summary: PipelineSummary,
+            revisions: [PipelineRevision],
+            layouts: [PipelineFlowLayout],
+            expectedVersions: Set<Int>? = nil,
+            revisionListKnown: Bool = true
+        ) {
+            self.summary = summary
+            self.revisions = revisions
+            self.layouts = layouts
+            self.expectedVersions = revisionListKnown
+                ? expectedVersions ?? Set(revisions.map(\.reference.version))
+                : nil
+        }
+
+        var isComplete: Bool {
+            guard let expectedVersions else { return false }
+            let represented = Set(revisions.map(\.reference.version))
+            return represented == expectedVersions
+                && revisions.allSatisfy(hasCompleteLayouts)
+        }
+
+        func hasCompleteLayouts(for revision: PipelineRevision) -> Bool {
+            let expected = Set(revision.spec.flows.map(\.name))
+            let available = Set(layouts.lazy.filter {
+                $0.pipeline == revision.reference.pipeline
+                    && $0.version == revision.reference.version
+            }.map(\.flow))
+            return expected.isSubset(of: available)
+        }
+    }
+
     private(set) var pipelines: [PipelineSummary] = []
     private(set) var revisions: [String: [PipelineRevision]] = [:]
     private(set) var layouts: [String: PipelineFlowLayout] = [:]
+    private(set) var loadDiagnostics: [String: PipelineLoadDiagnostic] = [:]
     private(set) var state: StoreLoadState = .idle
+    private var expectedRevisionVersions: [String: Set<Int>] = [:]
+    private var knownRevisionLists: Set<String> = []
 
     func loading() { state = .loading }
     func fail(_ error: Error) { state = .failed(error.localizedDescription) }
@@ -125,6 +306,62 @@ final class PipelineStore {
             $0.displayTitle.localizedStandardCompare($1.displayTitle) == .orderedAscending
         }
         state = .loaded
+    }
+    /// Atomically install complete per-Pipeline snapshots. Callers stage
+    /// revisions and all Flow layouts first, preventing a new revision from
+    /// being paired with a partial layout refresh.
+    func replaceSnapshots(
+        _ values: [Snapshot],
+        diagnostics: [String: PipelineLoadDiagnostic]
+    ) {
+        pipelines = values.map(\.summary).sorted {
+            $0.displayTitle.localizedStandardCompare($1.displayTitle)
+                == .orderedAscending
+        }
+        revisions = Dictionary(uniqueKeysWithValues: values.map { snapshot in
+            (
+                snapshot.summary.name,
+                snapshot.revisions.sorted {
+                    $0.reference.version > $1.reference.version
+                }
+            )
+        })
+        layouts = Dictionary(
+            uniqueKeysWithValues: values.flatMap(\.layouts).map { layout in
+                (
+                    Self.layoutKey(
+                        pipeline: layout.pipeline,
+                        version: layout.version,
+                        flow: layout.flow
+                    ),
+                    layout
+                )
+            }
+        )
+        loadDiagnostics = diagnostics
+        knownRevisionLists = Set(values.compactMap {
+            $0.expectedVersions == nil ? nil : $0.summary.name
+        })
+        expectedRevisionVersions = Dictionary(
+            uniqueKeysWithValues: values.compactMap { snapshot in
+                snapshot.expectedVersions.map {
+                    (snapshot.summary.name, $0)
+                }
+            }
+        )
+        state = .loaded
+    }
+    func snapshot(for pipeline: String) -> Snapshot? {
+        guard let summary = pipelines.first(where: { $0.name == pipeline }) else {
+            return nil
+        }
+        return Snapshot(
+            summary: summary,
+            revisions: revisions[pipeline] ?? [],
+            layouts: layouts.values.filter { $0.pipeline == pipeline },
+            expectedVersions: expectedRevisionVersions[pipeline],
+            revisionListKnown: knownRevisionLists.contains(pipeline)
+        )
     }
     func apply(_ pipeline: PipelineSummary) {
         if let index = pipelines.firstIndex(where: { $0.name == pipeline.name }) {
@@ -156,6 +393,10 @@ final class PipelineStore {
     }
     func replaceRevisions(_ values: [PipelineRevision], for pipeline: String) {
         revisions[pipeline] = values.sorted { $0.reference.version > $1.reference.version }
+        knownRevisionLists.insert(pipeline)
+        expectedRevisionVersions[pipeline] = Set(
+            values.map(\.reference.version)
+        )
     }
     func apply(_ revision: PipelineRevision) {
         var values = revisions[revision.reference.pipeline] ?? []
@@ -169,6 +410,31 @@ final class PipelineStore {
         revisions[revision.reference.pipeline] = values.sorted {
             $0.reference.version > $1.reference.version
         }
+        expectRevision(
+            revision.reference.version,
+            for: revision.reference.pipeline
+        )
+    }
+    /// Apply one targeted immutable revision and its complete layout set.
+    /// Existing historical revisions remain untouched.
+    func applySnapshot(
+        summary: PipelineSummary,
+        revision: PipelineRevision?,
+        layouts nextLayouts: [PipelineFlowLayout]
+    ) {
+        apply(summary)
+        guard let revision else {
+            return
+        }
+        apply(revision)
+        let pipeline = revision.reference.pipeline
+        let version = revision.reference.version
+        layouts = layouts.filter { _, layout in
+            layout.pipeline != pipeline || layout.version != version
+        }
+        for layout in nextLayouts {
+            apply(layout)
+        }
     }
     func apply(_ layout: PipelineFlowLayout) {
         layouts[Self.layoutKey(pipeline: layout.pipeline, version: layout.version,
@@ -176,6 +442,86 @@ final class PipelineStore {
     }
     func layout(pipeline: String, version: Int, flow: String) -> PipelineFlowLayout? {
         layouts[Self.layoutKey(pipeline: pipeline, version: version, flow: flow)]
+    }
+    func revision(pipeline: String, version: Int) -> PipelineRevision? {
+        revisions[pipeline]?.first {
+            $0.reference.version == version
+        }
+    }
+    func expectRevision(_ version: Int, for pipeline: String) {
+        expectedRevisionVersions[pipeline, default: []].insert(version)
+    }
+    func hasCompleteLayouts(for revision: PipelineRevision) -> Bool {
+        snapshot(for: revision.reference.pipeline)?
+            .hasCompleteLayouts(for: revision) == true
+    }
+    func diagnostic(for pipeline: String) -> PipelineLoadDiagnostic? {
+        loadDiagnostics[pipeline]
+    }
+    func recordFailure(
+        for pipeline: String,
+        scope: PipelineLoadDiagnostic.Scope,
+        error: Error,
+        usingLastKnownGood: Bool,
+        snapshotAvailable: Bool
+    ) {
+        var failures = loadDiagnostics[pipeline]?.failures ?? [:]
+        failures[scope] = error.localizedDescription
+        loadDiagnostics[pipeline] = .init(
+            pipeline: pipeline,
+            failures: failures,
+            usingLastKnownGood: loadDiagnostics[pipeline]?.usingLastKnownGood == true
+                || usingLastKnownGood,
+            snapshotAvailable: loadDiagnostics[pipeline]?.snapshotAvailable == true
+                || snapshotAvailable
+        )
+        state = .loaded
+    }
+    func replaceRevisionFailures(
+        for pipeline: String,
+        version: Int,
+        failures nextFailures: [PipelineLoadDiagnostic.Scope: String],
+        usingLastKnownGood: Bool,
+        snapshotAvailable: Bool
+    ) {
+        let current = loadDiagnostics[pipeline]
+        var failures = current?.failures.filter {
+            !$0.key.belongs(to: version)
+        } ?? [:]
+        let retainedFailure = !failures.isEmpty
+        failures.merge(nextFailures) { _, next in next }
+        guard !failures.isEmpty else {
+            loadDiagnostics.removeValue(forKey: pipeline)
+            state = .loaded
+            return
+        }
+        loadDiagnostics[pipeline] = .init(
+            pipeline: pipeline,
+            failures: failures,
+            usingLastKnownGood: usingLastKnownGood
+                || (retainedFailure && current?.usingLastKnownGood == true),
+            snapshotAvailable: snapshotAvailable
+                || (retainedFailure && current?.snapshotAvailable == true)
+        )
+        state = .loaded
+    }
+    func resolveFailure(
+        for pipeline: String,
+        scope: PipelineLoadDiagnostic.Scope
+    ) {
+        guard let diagnostic = loadDiagnostics[pipeline] else { return }
+        var failures = diagnostic.failures
+        failures.removeValue(forKey: scope)
+        guard !failures.isEmpty else {
+            loadDiagnostics.removeValue(forKey: pipeline)
+            return
+        }
+        loadDiagnostics[pipeline] = .init(
+            pipeline: pipeline,
+            failures: failures,
+            usingLastKnownGood: diagnostic.usingLastKnownGood,
+            snapshotAvailable: diagnostic.snapshotAvailable
+        )
     }
     private static func layoutKey(pipeline: String, version: Int, flow: String) -> String {
         "\(pipeline)@\(version):\(flow)"
@@ -658,6 +1004,12 @@ private struct SourceProjectionAttempt {
     let failures: [SourceLoadDiagnostic.Projection: String]
 }
 
+private struct PipelineSnapshotAttempt {
+    let snapshot: PipelineStore.Snapshot
+    let failures: [PipelineLoadDiagnostic.Scope: String]
+    let usingLastKnownGood: Bool
+}
+
 /// Connection-scoped owner of the authoritative epoch-2 projections.
 @MainActor
 @Observable
@@ -765,38 +1117,297 @@ final class BackendSession {
             let deploymentCounts = Dictionary(grouping: sources.sources,
                                               by: { $0.pipeline.pipeline })
                 .mapValues(\.count)
-            let summaries = response.pipelines.map {
-                $0.summary(deploymentCount: deploymentCounts[$0.name] ?? 0)
-            }
-            pipelines.replace(summaries)
-            for summary in summaries {
-                let response = try await client.pipelineRevisions(summary.name)
-                guard reconciliationIsCurrent(epoch) else { return }
-                let revisions = try response.revisions.map {
-                    try $0.revision(title: summary.title, description: summary.description)
+            let groupedWires = Dictionary(
+                grouping: response.pipelines,
+                by: \.name
+            )
+            let summaries = groupedWires.values.compactMap { wires in
+                wires.first.map {
+                    $0.summary(
+                        deploymentCount: deploymentCounts[$0.name] ?? 0
+                    )
                 }
-                pipelines.replaceRevisions(revisions, for: summary.name)
-                for revision in revisions {
-                    for flow in revision.spec.flows {
-                        if let wire = try? await client.pipelineLayout(
-                            summary.name,
-                            version: revision.reference.version,
-                            flow: flow.name
-                        ),
-                           let layout = try? wire.flowLayout(
-                            pipeline: summary.name,
-                            version: revision.reference.version
-                           ),
-                           reconciliationIsCurrent(epoch) {
-                            pipelines.apply(layout)
-                        }
+            }
+            let previous = Dictionary(
+                uniqueKeysWithValues: summaries.compactMap { summary in
+                    pipelines.snapshot(for: summary.name).map {
+                        (summary.name, $0)
                     }
                 }
+            )
+            let previousDiagnostics = pipelines.loadDiagnostics
+            var snapshots: [PipelineStore.Snapshot] = []
+            var diagnostics: [String: PipelineLoadDiagnostic] = [:]
+            for summary in summaries {
+                if groupedWires[summary.name, default: []].count > 1 {
+                    let retained = previous[summary.name]
+                    let error = DuplicatePipelineSummary(
+                        pipeline: summary.name
+                    )
+                    var failures =
+                        previousDiagnostics[summary.name]?.failures ?? [:]
+                    failures[.summary] = error.localizedDescription
+                    let snapshot = retained ?? .init(
+                        summary: summary,
+                        revisions: [],
+                        layouts: [],
+                        revisionListKnown: false
+                    )
+                    snapshots.append(snapshot)
+                    diagnostics[summary.name] = .init(
+                        pipeline: summary.name,
+                        failures: failures,
+                        usingLastKnownGood: retained?.isComplete == true,
+                        snapshotAvailable: !snapshot.revisions.isEmpty
+                    )
+                    continue
+                }
+                guard let attempt = await loadPipelineSnapshot(
+                    summary,
+                    previous: previous[summary.name],
+                    previousDiagnostic: previousDiagnostics[summary.name],
+                    epoch: epoch
+                ) else {
+                    return
+                }
+                snapshots.append(attempt.snapshot)
+                if !attempt.failures.isEmpty {
+                    diagnostics[summary.name] = .init(
+                        pipeline: summary.name,
+                        failures: attempt.failures,
+                        usingLastKnownGood: attempt.usingLastKnownGood,
+                        snapshotAvailable: !attempt.snapshot.revisions.isEmpty
+                    )
+                }
             }
+            guard reconciliationIsCurrent(epoch) else { return }
+            pipelines.replaceSnapshots(snapshots, diagnostics: diagnostics)
         } catch {
             guard reconciliationIsCurrent(epoch) else { return }
             pipelines.fail(error)
         }
+    }
+
+    /// Assemble one Pipeline without mutating the shared store. Each revision
+    /// and its complete Flow-layout set are staged together; a failure retains
+    /// the exact previous revision projection when one exists.
+    private func loadPipelineSnapshot(
+        _ summary: PipelineSummary,
+        previous: PipelineStore.Snapshot?,
+        previousDiagnostic: PipelineLoadDiagnostic?,
+        epoch: UInt64
+    ) async -> PipelineSnapshotAttempt? {
+        let response: PipelineRevisionsWire
+        do {
+            response = try await client.pipelineRevisions(summary.name)
+        } catch {
+            guard reconciliationIsCurrent(epoch) else { return nil }
+            var failures = previousDiagnostic?.failures.filter {
+                $0.key != .summary
+            } ?? [:]
+            failures[.revisions] = error.localizedDescription
+            return .init(
+                snapshot: previous ?? .init(
+                    summary: summary,
+                    revisions: [],
+                    layouts: [],
+                    revisionListKnown: false
+                ),
+                failures: failures,
+                usingLastKnownGood: previous?.isComplete == true
+            )
+        }
+        guard reconciliationIsCurrent(epoch) else { return nil }
+
+        let previousRevisions = Dictionary(
+            uniqueKeysWithValues: (previous?.revisions ?? []).map {
+                ($0.reference.version, $0)
+            }
+        )
+        var revisions: [PipelineRevision] = []
+        var layouts: [PipelineFlowLayout] = []
+        var failures: [PipelineLoadDiagnostic.Scope: String] = [:]
+        var usingLastKnownGood = false
+        let versionCounts = Dictionary(
+            grouping: response.revisions,
+            by: \.version
+        ).mapValues(\.count)
+        var handledDuplicateVersions: Set<Int> = []
+
+        for wire in response.revisions {
+            let version = wire.version
+            if versionCounts[version, default: 0] > 1 {
+                guard handledDuplicateVersions.insert(version).inserted else {
+                    continue
+                }
+                let error = DuplicatePipelineRevision(
+                    pipeline: summary.name,
+                    version: version
+                )
+                failures[.revision(version)] = error.localizedDescription
+                if let retained = previousRevisions[version],
+                   previous?.hasCompleteLayouts(for: retained) == true {
+                    revisions.append(retained)
+                    layouts.append(contentsOf: previous?.layouts.filter {
+                        $0.version == version
+                    } ?? [])
+                    usingLastKnownGood = true
+                }
+                continue
+            }
+            let revision: PipelineRevision
+            do {
+                revision = try wire.revision(
+                    title: summary.title,
+                    description: summary.description
+                )
+                guard revision.reference.pipeline == summary.name,
+                      revision.reference.version == version else {
+                    throw PipelineRevisionIdentityMismatch(
+                        expectedPipeline: summary.name,
+                        expectedVersion: version,
+                        receivedPipeline: revision.reference.pipeline,
+                        receivedVersion: revision.reference.version
+                    )
+                }
+            } catch {
+                failures[.revision(version)] = error.localizedDescription
+                if let retained = previousRevisions[version],
+                   previous?.hasCompleteLayouts(for: retained) == true {
+                    revisions.append(retained)
+                    layouts.append(contentsOf: previous?.layouts.filter {
+                        $0.version == version
+                    } ?? [])
+                    usingLastKnownGood = true
+                }
+                continue
+            }
+
+            guard let layoutAttempt = await loadPipelineLayouts(
+                revision,
+                pipeline: summary.name,
+                version: version,
+                epoch: epoch
+            ) else {
+                return nil
+            }
+            if layoutAttempt.failures.isEmpty {
+                revisions.append(revision)
+                layouts.append(contentsOf: layoutAttempt.layouts)
+            } else if let retained = previousRevisions[version],
+                      previous?.hasCompleteLayouts(for: retained) == true {
+                failures.merge(layoutAttempt.failures) { _, next in next }
+                // Do not mix successfully refreshed Flow layouts with stale
+                // siblings. Retain the complete exact-revision projection.
+                revisions.append(retained)
+                layouts.append(contentsOf: previous?.layouts.filter {
+                    $0.version == version
+                } ?? [])
+                usingLastKnownGood = true
+            } else {
+                // The semantic revision remains useful (and immutable), but no
+                // partial layout set is published into the shared cache.
+                revisions.append(revision)
+                failures.merge(
+                    completeLayoutFailures(
+                        for: revision,
+                        actual: layoutAttempt.failures
+                    )
+                ) { _, next in next }
+            }
+        }
+
+        var expectedVersions = Set(response.revisions.map(\.version))
+        if summary.headVersion > 0,
+           !expectedVersions.contains(summary.headVersion) {
+            expectedVersions.insert(summary.headVersion)
+            let error = PipelineHeadRevisionMissing(
+                pipeline: summary.name,
+                version: summary.headVersion
+            )
+            failures[.revisions] = error.localizedDescription
+            if let retained = previousRevisions[summary.headVersion],
+               previous?.hasCompleteLayouts(for: retained) == true {
+                revisions.append(retained)
+                layouts.append(contentsOf: previous?.layouts.filter {
+                    $0.version == summary.headVersion
+                } ?? [])
+                usingLastKnownGood = true
+            }
+        }
+
+        return .init(
+            snapshot: .init(
+                summary: summary,
+                revisions: revisions,
+                layouts: layouts,
+                expectedVersions: expectedVersions
+            ),
+            failures: failures,
+            usingLastKnownGood: usingLastKnownGood
+        )
+    }
+
+    private func loadPipelineLayouts(
+        _ revision: PipelineRevision,
+        pipeline: String,
+        version: Int,
+        epoch: UInt64
+    ) async -> (
+        layouts: [PipelineFlowLayout],
+        failures: [PipelineLoadDiagnostic.Scope: String]
+    )? {
+        var layouts: [PipelineFlowLayout] = []
+        var failures: [PipelineLoadDiagnostic.Scope: String] = [:]
+        for flow in revision.spec.flows {
+            do {
+                let wire = try await client.pipelineLayout(
+                    pipeline,
+                    version: version,
+                    flow: flow.name
+                )
+                guard reconciliationIsCurrent(epoch) else { return nil }
+                let layout = try wire.flowLayout(
+                    pipeline: pipeline,
+                    version: version
+                )
+                guard layout.flow == flow.name else {
+                    throw PipelineLayoutFlowMismatch(
+                        requested: flow.name,
+                        received: layout.flow
+                    )
+                }
+                layouts.append(layout)
+            } catch {
+                guard reconciliationIsCurrent(epoch) else { return nil }
+                failures[.layout(
+                    version: version,
+                    flow: flow.name
+                )] = error.localizedDescription
+            }
+        }
+        return (layouts, failures)
+    }
+
+    /// When a staged layout set is discarded, every absent Flow remains
+    /// diagnosable. A later one-Flow load therefore cannot make an incomplete
+    /// revision look healthy.
+    private func completeLayoutFailures(
+        for revision: PipelineRevision,
+        actual: [PipelineLoadDiagnostic.Scope: String]
+    ) -> [PipelineLoadDiagnostic.Scope: String] {
+        var failures = actual
+        for flow in revision.spec.flows {
+            let scope = PipelineLoadDiagnostic.Scope.layout(
+                version: revision.reference.version,
+                flow: flow.name
+            )
+            if failures[scope] == nil {
+                failures[scope] =
+                    "Withheld because another Flow layout failed to refresh."
+            }
+        }
+        return failures
     }
 
     /// Refresh one Pipeline head and, when the event identifies it, one exact
@@ -805,44 +1416,126 @@ final class BackendSession {
         _ target: ControlReconciliationPlan.PipelineTarget,
         epoch: UInt64
     ) async {
+        let previous = pipelines.snapshot(for: target.name)
+        let wire: PipelineWire
         do {
-            let wire = try await client.pipeline(target.name)
+            wire = try await client.pipeline(target.name)
             guard reconciliationIsCurrent(epoch) else { return }
-            let deploymentCount = sources.sources.lazy.filter {
-                $0.pipeline.pipeline == target.name
-            }.count
-            let summary = wire.summary(deploymentCount: deploymentCount)
-            pipelines.apply(summary)
+            guard wire.name == target.name else {
+                throw PipelineSummaryIdentityMismatch(
+                    expected: target.name,
+                    received: wire.name
+                )
+            }
+        } catch {
+            guard reconciliationIsCurrent(epoch) else { return }
+            pipelines.recordFailure(
+                for: target.name,
+                scope: .summary,
+                error: error,
+                usingLastKnownGood: previous?.isComplete == true,
+                snapshotAvailable: previous?.revisions.isEmpty == false
+            )
+            return
+        }
+        pipelines.resolveFailure(for: target.name, scope: .summary)
 
-            guard let version = target.version ?? wire.version else { return }
+        let deploymentCount = sources.sources.lazy.filter {
+            $0.pipeline.pipeline == target.name
+        }.count
+        let summary = wire.summary(deploymentCount: deploymentCount)
+        guard let version = target.version ?? wire.version else {
+            pipelines.applySnapshot(
+                summary: summary,
+                revision: nil,
+                layouts: []
+            )
+            return
+        }
+
+        let retainedRevision = previous?.revisions.first {
+            $0.reference.version == version
+        }
+        let retainedIsComplete = retainedRevision.map {
+            previous?.hasCompleteLayouts(for: $0) == true
+        } ?? false
+        let revision: PipelineRevision
+        do {
             let revisionWire = try await client.pipelineRevision(
                 target.name,
                 version: version
             )
             guard reconciliationIsCurrent(epoch) else { return }
-            let revision = try revisionWire.revision(
+            revision = try revisionWire.revision(
                 title: summary.title,
                 description: summary.description
             )
-            pipelines.apply(revision)
-            for flow in revision.spec.flows {
-                if let layoutWire = try? await client.pipelineLayout(
-                    target.name,
-                    version: version,
-                    flow: flow.name
-                ),
-                   let layout = try? layoutWire.flowLayout(
-                    pipeline: target.name,
-                    version: version
-                   ),
-                   reconciliationIsCurrent(epoch) {
-                    pipelines.apply(layout)
-                }
+            guard revision.reference.pipeline == target.name,
+                  revision.reference.version == version else {
+                throw PipelineRevisionIdentityMismatch(
+                    expectedPipeline: target.name,
+                    expectedVersion: version,
+                    receivedPipeline: revision.reference.pipeline,
+                    receivedVersion: revision.reference.version
+                )
             }
         } catch {
             guard reconciliationIsCurrent(epoch) else { return }
-            pipelines.fail(error)
+            if previous == nil {
+                pipelines.applySnapshot(
+                    summary: summary,
+                    revision: nil,
+                    layouts: []
+                )
+            }
+            pipelines.expectRevision(version, for: target.name)
+            pipelines.replaceRevisionFailures(
+                for: target.name,
+                version: version,
+                failures: [.revision(version): error.localizedDescription],
+                usingLastKnownGood: retainedIsComplete,
+                snapshotAvailable: previous?.revisions.isEmpty == false
+            )
+            return
         }
+
+        guard let layoutAttempt = await loadPipelineLayouts(
+            revision,
+            pipeline: target.name,
+            version: version,
+            epoch: epoch
+        ) else {
+            return
+        }
+        let nextFailures: [PipelineLoadDiagnostic.Scope: String]
+        if layoutAttempt.failures.isEmpty {
+            pipelines.applySnapshot(
+                summary: summary,
+                revision: revision,
+                layouts: layoutAttempt.layouts
+            )
+            nextFailures = [:]
+        } else if retainedIsComplete {
+            nextFailures = layoutAttempt.failures
+        } else {
+            pipelines.applySnapshot(
+                summary: summary,
+                revision: revision,
+                layouts: []
+            )
+            nextFailures = completeLayoutFailures(
+                for: revision,
+                actual: layoutAttempt.failures
+            )
+        }
+        pipelines.replaceRevisionFailures(
+            for: target.name,
+            version: version,
+            failures: nextFailures,
+            usingLastKnownGood: retainedIsComplete,
+            snapshotAvailable: retainedRevision != nil
+                || previous?.revisions.isEmpty == false
+        )
     }
 
     private func loadRuns(epoch: UInt64) async {
@@ -1643,13 +2336,62 @@ final class BackendSession {
     }
 
     func loadLayout(pipeline: String, version: Int, flow: String) async {
-        guard let wire = try? await client.pipelineLayout(
-            pipeline,
-            version: version,
-            flow: flow
-        ), let layout = try? wire.flowLayout(pipeline: pipeline, version: version)
-        else { return }
-        pipelines.apply(layout)
+        let epoch = lifecycleEpoch
+        guard reconciliationIsCurrent(epoch) else { return }
+        guard let revision = pipelines.revision(
+            pipeline: pipeline,
+            version: version
+        ), revision.spec.flows.contains(where: { $0.name == flow }) else {
+            pipelines.recordFailure(
+                for: pipeline,
+                scope: .layout(version: version, flow: flow),
+                error: UnknownPipelineLayoutScope(
+                    pipeline: pipeline,
+                    version: version,
+                    flow: flow
+                ),
+                usingLastKnownGood: false,
+                snapshotAvailable: pipelines.snapshot(for: pipeline) != nil
+            )
+            return
+        }
+        do {
+            let wire = try await client.pipelineLayout(
+                pipeline,
+                version: version,
+                flow: flow
+            )
+            guard reconciliationIsCurrent(epoch) else { return }
+            let layout = try wire.flowLayout(
+                pipeline: pipeline,
+                version: version
+            )
+            guard layout.flow == flow else {
+                throw PipelineLayoutFlowMismatch(
+                    requested: flow,
+                    received: layout.flow
+                )
+            }
+            guard reconciliationIsCurrent(epoch) else { return }
+            pipelines.apply(layout)
+            pipelines.resolveFailure(
+                for: pipeline,
+                scope: .layout(version: version, flow: flow)
+            )
+        } catch {
+            guard reconciliationIsCurrent(epoch) else { return }
+            pipelines.recordFailure(
+                for: pipeline,
+                scope: .layout(version: version, flow: flow),
+                error: error,
+                usingLastKnownGood: pipelines.layout(
+                    pipeline: pipeline,
+                    version: version,
+                    flow: flow
+                ) != nil,
+                snapshotAvailable: pipelines.snapshot(for: pipeline) != nil
+            )
+        }
     }
 
     func saveSourceSettings(_ name: String, values: [String: JSONValue]) async throws {

@@ -941,6 +941,13 @@ struct PipelinesView: View {
     @State private var isArchiving = false
     @Environment(\.windexTheme) private var theme
 
+    private var loadDiagnostics: [PipelineLoadDiagnostic] {
+        session.pipelines.loadDiagnostics.values.sorted {
+            $0.pipeline.localizedStandardCompare($1.pipeline)
+                == .orderedAscending
+        }
+    }
+
     var body: some View {
         HSplitView {
             catalogue
@@ -1049,6 +1056,32 @@ struct PipelinesView: View {
             }
             .padding(.md)
             Hairline()
+
+            if !loadDiagnostics.isEmpty {
+                VStack(alignment: .leading, spacing: .xs) {
+                    HStack {
+                        Text(
+                            "\(loadDiagnostics.count) Pipeline"
+                                + (loadDiagnostics.count == 1 ? "" : "s")
+                                + " need attention"
+                        )
+                        .windexStyle(Typography.label)
+                        Spacer(minLength: 0)
+                        Button("Retry") {
+                            Task { await session.refreshAll() }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    ForEach(loadDiagnostics, id: \.pipeline) { diagnostic in
+                        Text("\(diagnostic.pipeline): \(diagnostic.message)")
+                            .windexStyle(Typography.dataSM)
+                            .foregroundStyle(theme.palette.rust)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.sm)
+                Hairline()
+            }
 
             if let draft = model.draft, model.selectedCatalogueName == nil {
                 PipelineDraftRow(draft: draft)
